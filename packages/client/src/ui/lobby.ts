@@ -1,16 +1,17 @@
 import {
-  TEAM_SIZE, matchCapacity, type FriendView, type MatchFoundView, type Mode, type PartyView,
+  SKIN_COUNT, TEAM_SIZE, matchCapacity, type FriendView, type MatchFoundView, type Mode, type PartyView,
   type QueueView, type ServerMsg, type UserView,
 } from '@dropzone/shared';
 import type { Net } from '../net';
 import { LobbyScene } from '../lobby/scene';
 import { SKINS } from '../lobby/character';
 import { fmtTime, h, toast } from './dom';
+import { settingsPanel } from '../settings';
 
 const MODE_LABEL: Record<Mode, string> = { solo: 'SOLO', duo: 'DUOS', trio: 'TRIOS', squad: 'SQUADS' };
 const PRESENCE_LABEL = { lobby: 'In Lobby', queue: 'Matchmaking', in_match: 'In Match', offline: 'Offline' } as const;
 
-export function lobbyScreen(net: Net, you: UserView, onSignOut: () => void, onMatch: (m: MatchFoundView) => void) {
+export function lobbyScreen(net: Net, you: UserView, onSignOut: () => void, onMatch: (m: MatchFoundView) => void, playAgain = false) {
   let party: PartyView | null = null;
   let queue: QueueView = { state: 'idle' };
   let friends: FriendView[] = [];
@@ -63,7 +64,7 @@ export function lobbyScreen(net: Net, you: UserView, onSignOut: () => void, onMa
     h('nav.tabs',
       h('button', { class: tab === 'play' ? 'on' : '', onclick: () => setTab('play') }, 'PLAY'),
       h('button', { class: tab === 'locker' ? 'on' : '', onclick: () => setTab('locker') }, 'LOCKER'),
-      h('button.soon', { title: 'Coming in Phase 6', onclick: () => toast('Settings arrive in Phase 6') }, 'SETTINGS'),
+      h('button', { onclick: () => { if (!document.querySelector('.settings-overlay')) root.append(settingsPanel(() => document.querySelector('.settings-overlay')?.remove())); } }, 'SETTINGS'),
     ),
     h('div.spacer'),
     status,
@@ -177,7 +178,7 @@ export function lobbyScreen(net: Net, you: UserView, onSignOut: () => void, onMa
     return h('div.locker',
       h('div.panel-title', 'OUTFIT'),
       h('div.skin-name', SKINS[current].name),
-      h('div.skins', ...SKINS.map((s, i) => h('button.skin', {
+      h('div.skins', ...SKINS.slice(0, SKIN_COUNT).map((s, i) => h('button.skin', {
         class: i === current ? 'on' : '',
         title: s.name,
         style: { background: `linear-gradient(160deg, ${s.hoodie} 0 55%, ${s.beanie} 55% 75%, ${s.pants} 75%)` },
@@ -214,6 +215,11 @@ export function lobbyScreen(net: Net, you: UserView, onSignOut: () => void, onMa
     switch (m.t) {
       case 'party': {
         party = m.party;
+        // "play again" from the results screen: queue straight back up (or ready up if someone else leads)
+        if (playAgain) {
+          playAgain = false;
+          setTimeout(() => net.send(party!.leaderId === you.id ? { t: 'queue_start' } : { t: 'ready', ready: true }), 300);
+        }
         scene.setMembers(party.members.map((x) => ({ ...x, leader: x.id === party!.leaderId, you: x.id === you.id })));
         for (const x of party.members) if (x.ready && !prevReady.has(x.id)) scene.celebrate(x.id);
         prevReady = new Set(party.members.filter((x) => x.ready).map((x) => x.id));

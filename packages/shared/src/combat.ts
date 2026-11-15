@@ -1,5 +1,5 @@
 import { hash2 } from './noise.js';
-import { BRIDGE_Y, SOLID_CELL, boxTop, roadEdgeDist, solidKey, terrainAt, type World } from './world.js';
+import { BRIDGE_Y, SOLID_CELL, boxTop, isOpenDoor, roadEdgeDist, solidKey, terrainAt, type World } from './world.js';
 import { SK, type Solid } from './structures.js';
 
 /**
@@ -95,6 +95,7 @@ export function raycastWorld(w: World, o: Vec3, d: Vec3, maxT: number, stopAtWat
     if (list) for (const s of list) {
       if (seen.has(s)) continue;
       seen.add(s);
+      if (isOpenDoor(w, s)) continue;
       const t = raySolid(o, d, s, best.t);
       if (t < best.t) best = { t, kind: 'building', solid: s };
     }

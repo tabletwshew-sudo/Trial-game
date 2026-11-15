@@ -40,7 +40,7 @@ export interface MatchFoundView {
 
 // ---------- in-match ----------
 export type GamePhase = 'warmup' | 'bus' | 'play';
-export interface RosterEntry { idx: number; name: string; team: number; skin: number; bot: boolean }
+export interface RosterEntry { idx: number; name: string; team: number; skin: number; bot: boolean; npc?: 'boss' | 'guard' }
 export interface RouteView { x0: number; z0: number; x1: number; z1: number; t0: number; t1: number; doorsAt: number; ejectAt: number }
 export interface MarkerView { idx: number; x: number; z: number }
 /** Chests (0), ammo boxes (1) and supply drops (2). Supply drops fall from y0 at t0 (server ms) at SUPPLY_FALL m/s. */
@@ -51,7 +51,7 @@ export const CHEST_KIND = { Chest: 0, Ammo: 1, Supply: 2 } as const;
 /** A pickup lying on the ground. */
 export interface LootView { id: number; item: number; r: number; n: number; x: number; y: number; z: number }
 
-export type FeedCause = 'gun' | 'blast' | 'fall' | 'bleed' | 'car' | 'water' | 'left';
+export type FeedCause = 'gun' | 'blast' | 'fall' | 'bleed' | 'car' | 'water' | 'left' | 'storm';
 type V3 = [number, number, number];
 /** Things that happened this tick, batched into one message per player. */
 export type GameEvent =
@@ -67,9 +67,13 @@ export type GameEvent =
   | { e: 'revived'; i: number; by: number }
   | { e: 'car_boom'; id: number; p: V3 }
   | { e: 'opened'; id: number; by: number }
-  | { e: 'supply'; id: number; x: number; z: number };
+  | { e: 'supply'; id: number; x: number; z: number }
+  | { e: 'recalled'; i: number; by: number }
+  | { e: 'vault'; id: number; by: number }
+  | { e: 'storm_hurt'; d: number };
 
-export interface GameResult { place: number; kills: number; killer: string | null; win: boolean; teams: number }
+export interface MatchStats { damage: number; taken: number; revives: number; chests: number; distance: number; survivedS: number; healed: number }
+export interface GameResult { place: number; kills: number; killer: string | null; win: boolean; teams: number; stats: MatchStats; squad: { name: string; kills: number; you: boolean }[] }
 
 export interface GameInit {
   matchId: string;
@@ -91,7 +95,12 @@ export interface GameInit {
   teamsAlive: number;
   /** Eliminations per player index. */
   kills: number[];
+  storm: StormPlanView | null;
+  vaultsOpen: number[];
+  /** Server time each recall beacon is usable again. */
+  beacons: number[];
 }
+export interface StormPlanView { t0: number; circles: { x: number; z: number; r: number }[] }
 
 // ---------- client -> server ----------
 export type ClientMsg =
@@ -114,7 +123,8 @@ export type ClientMsg =
   | { t: 'leave_match' }
   | { t: 'sync' }
   | { t: 'game_join' }
-  | { t: 'game_marker'; x?: number; z?: number };
+  | { t: 'game_marker'; x?: number; z?: number }
+  | { t: 'spec_next'; dir: number };
 
 // ---------- server -> client ----------
 export type ServerMsg =
@@ -137,6 +147,13 @@ export type ServerMsg =
   | { t: 'result'; result: GameResult }
   /** Who you're watching after you've been eliminated (-1 = nobody). */
   | { t: 'spec'; idx: number }
+  | { t: 'storm'; plan: StormPlanView }
+  /** Recall cards you're carrying (player indexes). */
+  | { t: 'cards'; cards: number[] }
+  | { t: 'beacons'; ready: number[] }
+  | { t: 'vaults'; open: number[] }
+  /** Boss health bar: shown while you're near a boss. */
+  | { t: 'boss'; idx: number; name: string; hp: number } 
   | { t: 'toast'; kind: 'info' | 'error' | 'success'; message: string }
   | { t: 'error'; message: string };
 

@@ -75,15 +75,19 @@ export const CHEST_RARITY_WEIGHTS: Record<Rarity, number> = {
 export interface StormPhase { waitS: number; shrinkS: number; radiusFrac: number; dps: number }
 /** radiusFrac is the target radius as a fraction of the island's half-size. */
 export const STORM_PHASES: StormPhase[] = [
-  { waitS: 90, shrinkS: 60, radiusFrac: 0.62, dps: 1 },
+  { waitS: 75, shrinkS: 60, radiusFrac: 0.62, dps: 1 },
   { waitS: 60, shrinkS: 50, radiusFrac: 0.42, dps: 1 },
   { waitS: 50, shrinkS: 45, radiusFrac: 0.28, dps: 2 },
   { waitS: 45, shrinkS: 40, radiusFrac: 0.18, dps: 4 },
   { waitS: 40, shrinkS: 35, radiusFrac: 0.11, dps: 6 },
-  { waitS: 30, shrinkS: 30, radiusFrac: 0.06, dps: 8 },
-  { waitS: 20, shrinkS: 30, radiusFrac: 0.03, dps: 10 },
-  { waitS: 15, shrinkS: 25, radiusFrac: 0.012, dps: 10 },
-  { waitS: 10, shrinkS: 25, radiusFrac: 0, dps: 10 },
+  { waitS: 30, shrinkS: 30, radiusFrac: 0.065, dps: 8 },
+  // the last circles keep moving: short waits, steady drift
+  { waitS: 15, shrinkS: 35, radiusFrac: 0.035, dps: 10 },
+  { waitS: 10, shrinkS: 30, radiusFrac: 0.015, dps: 10 },
+  { waitS: 5, shrinkS: 30, radiusFrac: 0, dps: 12 },
 ];
 
 export const MAP = { size: 2400, seed: 1337 } as const;
+
+/** Recall: carry a teammate's card to a beacon within this many seconds. */
+export const RECALL = { cardLifeS: 90, holdS: 4, cooldownS: 90, dropHeight: 140 } as const;

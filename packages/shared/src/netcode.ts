@@ -29,7 +29,7 @@ export function decodeInputs(v: DataView): { firstSeq: number; cmds: InputCmd[];
     const o = INPUT_HEAD + i * CMD_BYTES;
     const yaw = v.getFloat32(o + 3, true), pitch = v.getFloat32(o + 7, true), slot = v.getUint8(o + 2);
     if (!Number.isFinite(yaw) || !Number.isFinite(pitch) || Math.abs(yaw) > 1e4 || slot > 5) return null;
-    cmds.push({ keys: v.getUint16(o, true) & 0x7ff, yaw, pitch: Math.max(-1.55, Math.min(1.55, pitch)), slot });
+    cmds.push({ keys: v.getUint16(o, true) & 0xfff, yaw, pitch: Math.max(-1.55, Math.min(1.55, pitch)), slot });
   }
   return { firstSeq: v.getUint32(1, true), cmds, viewTime };
 }
@@ -37,6 +37,8 @@ export function decodeInputs(v: DataView): { firstSeq: number; cmds: InputCmd[];
 // ------------------------------------------------------------------ other players
 /** Entity flags. */
 export const EF = { GROUNDED: 1, ADS: 2, CROUCH: 4, USING: 8, RELOADING: 16, SPRINT: 32 } as const;
+/** Emote id lives in the top two flag bits. */
+export const EF_EMOTE_SHIFT = 6;
 export interface EntSnap { idx: number; x: number; y: number; z: number; yaw: number; pitch: number; mode: number; flags: number; item: number; rarity: number }
 export const ENT_BYTES = 13;
 
@@ -65,7 +67,7 @@ function encodeVeh(e: VehSnap, v: DataView, o: number) {
 
 // ------------------------------------------------------------------ snapshot
 export interface Snapshot { tick: number; time: number; ack: number; self: PlayerState | null; ents: EntSnap[]; vehs: VehSnap[] }
-const SELF_BYTES = 97;
+const SELF_BYTES = 98;
 
 function writeSelf(v: DataView, o: number, s: PlayerState) {
   for (const f of [s.x, s.y, s.z, s.vx, s.vy, s.vz]) { v.setFloat32(o, f, true); o += 4; }
@@ -78,6 +80,7 @@ function writeSelf(v: DataView, o: number, s: PlayerState) {
   for (const sl of s.inv) { v.setUint8(o++, sl.id); v.setUint8(o++, sl.r); v.setUint8(o++, sl.n); v.setUint8(o++, sl.mag); }
   for (const a of s.ammo) { v.setUint16(o, a, true); o += 2; }
   v.setFloat32(o, s.yaw, true); o += 4; v.setFloat32(o, s.pitch, true); o += 4;
+  v.setUint8(o++, s.emote);
   return o;
 }
 function readSelf(v: DataView, o: number): PlayerState {
@@ -89,8 +92,8 @@ function readSelf(v: DataView, o: number): PlayerState {
   const veh = v.getInt8(o++), seat = u8(), vh = f(), vs = f();
   const inv = [0, 1, 2, 3, 4].map(() => ({ ...emptySlot(), id: u8(), r: u8(), n: u8(), mag: u8() }));
   const ammo = [0, 1, 2, 3, 4].map(() => u16());
-  const yaw = f(), pitch = f();
-  return { x, y, z, vx, vy, vz, yaw, pitch, mode, grounded, keys, hp, shield, knock, slot, inv, ammo, cd, burst, reload, use, bloom, shots, seed, act, veh, seat, vh, vs };
+  const yaw = f(), pitch = f(), emote = u8();
+  return { emote, x, y, z, vx, vy, vz, yaw, pitch, mode, grounded, keys, hp, shield, knock, slot, inv, ammo, cd, burst, reload, use, bloom, shots, seed, act, veh, seat, vh, vs };
 }
 
 /**

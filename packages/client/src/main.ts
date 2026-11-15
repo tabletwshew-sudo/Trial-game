@@ -28,12 +28,12 @@ function enterLobby(user: UserView) {
   net.connect();
 }
 
-function showLobby(user: UserView) {
+function showLobby(user: UserView, playAgain = false) {
   const n = net!;
   const lobby = lobbyScreen(n, user, async () => { await auth.logout(); showLogin(); }, (match) => {
-    const game = gameScreen(n, user, match, () => showLobby(user));
+    const game = gameScreen(n, user, match, (again) => showLobby(user, !!again));
     show(game.el, game.destroy);
-  });
+  }, playAgain);
   show(lobby.el, lobby.destroy);
 }
 

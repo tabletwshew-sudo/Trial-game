@@ -319,6 +319,7 @@ function buildScatter(w: World, group: THREE.Group, q: Quality): ScatterChunk[] 
 // ---------------------------------------------------------------- entry
 export interface IslandView {
   group: THREE.Group;
+  props: import('./props3d').PropsView;
   water: ReturnType<typeof makeWater>;
   /** Per-vertex colours of the main field (re-used to paint the map). */
   mainColors: Float32Array;
@@ -339,7 +340,7 @@ export function buildIsland(w: World, q: Quality, fogColor: THREE.Color, fogNear
   group.add(water.mesh);
   let t = 0;
   return {
-    group, water, mainColors,
+    group, water, mainColors, props,
     update(dt, cam) {
       t += dt;
       wind.value = t;

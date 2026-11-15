@@ -20,6 +20,8 @@ export interface Solid {
   face?: number;
   /** Interior wall (no exterior face). */
   inner?: boolean;
+  /** Vault door: solid until that vault is opened in this match. */
+  vault?: number;
 }
 
 export type BuildingType = 'house' | 'hall' | 'shop' | 'tower' | 'solid';

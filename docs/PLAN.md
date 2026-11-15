@@ -106,7 +106,7 @@ tests/      e2e (Playwright)
   fishing spots. Seeded spawn tables in `shared/loot`
 * Chest: one weapon + ammo + a consumable/heal (+ chance of a 2nd item)
 
-### Phase 6 — Bosses, end screens, settings, extras
+### Phase 6 — Bosses, end screens, settings, extras ✅
 * Original boss NPCs at 2 POIs (guard squads, a boss with a medallion/keycard-style
   reward), vault doors
 * Storm: 9 phases, damage ramping up per phase, a moving final circle

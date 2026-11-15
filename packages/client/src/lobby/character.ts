@@ -18,6 +18,9 @@ export const SKINS: Skin[] = [
   { name: 'Glacier',     hoodie: '#e9f4ff', trim: '#4cc9f0', pants: '#3a506b', beanie: '#4cc9f0', skinTone: '#ffe0c7', hair: '#e8d27a' },
   { name: 'Citrus',      hoodie: '#ffd166', trim: '#ef476f', pants: '#264653', beanie: '#06d6a0', skinTone: '#a86b47', hair: '#2b1a10' },
   { name: 'Midnight',    hoodie: '#22223b', trim: '#f72585', pants: '#141420', beanie: '#4361ee', skinTone: '#d9a07a', hair: '#0e0e0e' },
+  // boss and guard outfits (not selectable in the locker)
+  { name: 'Boss',        hoodie: '#1c1c28', trim: '#ffb703', pants: '#101018', beanie: '#e63946', skinTone: '#b07850', hair: '#000000' },
+  { name: 'Guard',       hoodie: '#5c677d', trim: '#e63946', pants: '#33415c', beanie: '#33415c', skinTone: '#e0ac85', hair: '#2b1a10' },
 ];
 
 const gliderMat = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: softRamp, side: THREE.DoubleSide });
@@ -42,7 +45,7 @@ function bake(group: THREE.Group) {
 }
 
 export type PoseMode = 'idle' | 'run' | 'air' | 'fall' | 'glide' | 'swim' | 'knocked' | 'drive' | 'sit';
-export interface Pose { mode: PoseMode; speed: number; dive: number; hold?: 'none' | 'gun' | 'item'; pitch: number; sprint?: boolean; crouch?: boolean; using?: boolean }
+export interface Pose { mode: PoseMode; speed: number; dive: number; hold?: 'none' | 'gun' | 'item'; pitch: number; sprint?: boolean; crouch?: boolean; using?: boolean; emote?: number }
 const damp = (a: number, b: number, k: number) => a + (b - a) * k;
 
 export class Character {
@@ -273,8 +276,24 @@ export class Character {
     } else if (canAim && p.sprint) { aRx = -0.9; aRy = 0; aLx = -0.75; aLy = 0.5; aRz = 0.15; }
     if (p.using) { aRx = -2.3 + Math.sin(t * 8) * 0.08; aRz = -0.25; aRy = 0.3; headX = 0.25; }
     if (p.crouch && (p.mode === 'idle' || p.mode === 'run')) { by -= 0.32; legL -= 0.55; legR -= 0.55; rx += 0.18; }
+    // emotes (only while standing still)
+    let spin = 0;
+    if (p.emote && p.mode === 'idle') {
+      const e = t * 2 * Math.PI;
+      if (p.emote === 1) { // bounce + wave
+        by = Math.abs(Math.sin(e * 0.9)) * 0.18; aRx = 0; aRz = 2.6 + Math.sin(e * 1.8) * 0.4; aLz = -2.6 - Math.sin(e * 1.8 + 1.5) * 0.4; aLx = 0;
+        legL = Math.sin(e * 0.9) * 0.25; legR = -legL; headX = Math.sin(e * 0.9) * 0.15;
+      } else if (p.emote === 2) { // spinning groove
+        spin = t * 4.2; by = Math.abs(Math.sin(e)) * 0.08; aLz = -1.4; aRz = 1.4; aLx = Math.sin(e) * 0.5; aRx = -aLx;
+        legL = Math.sin(e) * 0.45; legR = -legL; rx = 0.1;
+      } else { // cheer: fists pumping, little jumps
+        const pump = Math.sin(e * 1.4);
+        by = Math.max(0, pump) * 0.25; aRx = -2.9 + pump * 0.35; aLx = -2.9 - pump * 0.35; aLz = -0.25; aRz = 0.25; headX = -0.3; legL = legR = -Math.max(0, pump) * 0.4;
+      }
+    }
 
     const B = this.body;
+    B.rotation.y = spin ? spin : damp(B.rotation.y % (Math.PI * 2), 0, k);
     B.rotation.x = damp(B.rotation.x, rx, k);
     B.rotation.z = 0; B.position.x = 0;
     // keep the body's centre in place when it tips over (the pivot is at the feet)
@@ -287,7 +306,7 @@ export class Character {
     this.armL.rotation.set(damp(this.armL.rotation.x, aLx, kArm), damp(this.armL.rotation.y, aLy, kArm), damp(this.armL.rotation.z, aLz, kArm));
     this.armR.rotation.set(damp(this.armR.rotation.x, aRx, kArm), damp(this.armR.rotation.y, aRy, kArm), damp(this.armR.rotation.z, aRz, kArm));
     this.head.rotation.set(damp(this.head.rotation.x, headX, k), damp(this.head.rotation.y, 0, k), 0);
-    this.held.visible = p.mode !== 'fall' && p.mode !== 'glide' && p.mode !== 'swim' && p.mode !== 'knocked' && p.mode !== 'drive';
+    this.held.visible = !p.emote && p.mode !== 'fall' && p.mode !== 'glide' && p.mode !== 'swim' && p.mode !== 'knocked' && p.mode !== 'drive';
     // glider pops open / folds away
     this.gliderOpen = damp(this.gliderOpen, p.mode === 'glide' ? 1 : 0, 1 - Math.exp(-dt * 10));
     this.glider.visible = this.gliderOpen > 0.03;

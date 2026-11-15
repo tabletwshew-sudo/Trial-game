@@ -1,9 +1,10 @@
-import { MAP, PM, SPAWN_ISLAND, busPos, type GamePhase, type RosterEntry, type RouteView, type World } from '@dropzone/shared';
+import { MAP, PM, SPAWN_ISLAND, busPos, type GamePhase, type RosterEntry, type RouteView, type StormState, type World } from '@dropzone/shared';
+import { teamColors } from '../settings';
 import { SKINS } from '../lobby/character';
 import { fmtTime, h } from '../ui/dom';
 
 const HALF = MAP.size / 2;
-const TEAM_COLORS = ['#ffd23f', '#3ee6ff', '#ff5fa2', '#4ade80'];
+const TEAM_COLORS = teamColors();
 
 /** Paint the top-down map once: terrain colours, water, hill shading, roads and buildings. */
 export function paintMap(w: World, colors: Float32Array): HTMLCanvasElement {
@@ -64,6 +65,10 @@ export interface HudView {
   fps: number;
   /** Supply drops that haven't been opened. */
   drops?: { x: number; z: number }[];
+  storm?: StormState | null;
+  /** Recall beacons and whether each is ready right now. */
+  beacons?: { x: number; z: number; ready: boolean }[];
+  kills?: number;
 }
 
 export class Hud {
@@ -82,6 +87,10 @@ export class Hud {
   private place = h('div.place');
   private flash = h('div.flash');
   private fpsEl = h('div.fps');
+  private stormEl = h('div.storm-info');
+  private stormArrow = h('div.storm-arrow', h('span.arr', '➤'), h('b'), h('small', 'TO SAFE ZONE'));
+  private stormTint = h('div.storm-tint');
+  private killsEl = h('b', '0');
   private tagEls = new Map<string, HTMLElement>();
   private teamRows = new Map<number, { row: HTMLElement; status: HTMLElement }>();
   private lastPoi = -1; private placeTimer = 0;
@@ -89,7 +98,7 @@ export class Hud {
   private teamIdx: number[];
 
   constructor(private w: World, colors: Float32Array, private roster: RosterEntry[], private selfIdx: number,
-    private cb: { onLeave: () => void; onResume: () => void; onMarker: (x?: number, z?: number) => void; onCloseMap: () => void }) {
+    private cb: { onLeave: () => void; onResume: () => void; onSettings: () => void; onMarker: (x?: number, z?: number) => void; onCloseMap: () => void }) {
     this.mapTex = paintMap(w, colors);
     const myTeam = roster[selfIdx].team;
     this.teamIdx = roster.filter((r) => r.team === myTeam).map((r) => r.idx);
@@ -121,14 +130,17 @@ export class Hud {
         h('div.pause-title', 'PAUSED'),
         h('button.btn.btn-primary.wide', { onclick: () => this.cb.onResume() }, 'RESUME'),
         h('div.controls',
-          ...[['W A S D', 'Move'], ['Mouse', 'Look'], ['Shift', 'Sprint'], ['Space', 'Jump / Drop / Glider'], ['M', 'Map'], ['Middle click', 'Ping'], ['Esc', 'Menu']]
+          ...[['W A S D', 'Move'], ['Mouse', 'Look / fire / aim'], ['Shift', 'Sprint'], ['Space', 'Jump / drop / glider'], ['E', 'Interact'], ['R', 'Reload'], ['B', 'Emote'], ['M', 'Map'], ['Middle click', 'Ping'], ['Esc', 'Menu']]
             .map(([k, v]) => h('div', h('kbd', k), h('span', v)))),
+        h('button.btn.btn-ghost.wide', { onclick: () => this.cb.onSettings() }, 'SETTINGS'),
         h('button.btn.btn-ghost.wide', { onclick: () => this.cb.onLeave() }, 'LEAVE MATCH')));
 
     this.el = h('div.hud',
       this.tagsEl,
       h('div.hud-top', this.compass, this.banner, this.bannerSub),
-      h('div.hud-right', this.mini, h('div.alive', h('span', '👥'), this.aliveEl, h('small', 'LEFT'))),
+      this.stormTint,
+      h('div.hud-right', this.mini, h('div.hud-counts', h('div.alive', h('span', '👥'), this.aliveEl, h('small', 'LEFT')), h('div.alive', h('span', '⦿'), this.killsEl, h('small', 'ELIMS'))), this.stormEl),
+      this.stormArrow,
       this.teamEl, this.alt, this.hint, this.place, this.clickHint, h('div.crosshair'), this.fpsEl,
       this.flash, this.mapWrap, this.menu);
   }
@@ -140,6 +152,24 @@ export class Hud {
   private px(v: number, size: number) { return ((v + HALF) / MAP.size) * size; }
 
   private drawOverlays(c: CanvasRenderingContext2D, v: HudView, toX: (x: number) => number, toY: (z: number) => number, scale: number) {
+    const st = v.storm;
+    if (st) {
+      const k = Math.abs(toX(1) - toX(0));
+      // shade everything outside the safe circle
+      c.save();
+      c.fillStyle = 'rgba(122, 52, 214, 0.42)';
+      c.beginPath(); c.rect(0, 0, c.canvas.width, c.canvas.height); c.arc(toX(st.x), toY(st.z), Math.max(0, st.r * k), 0, Math.PI * 2, true); c.fill();
+      c.strokeStyle = '#d7b4ff'; c.lineWidth = 2.5 * scale;
+      c.beginPath(); c.arc(toX(st.x), toY(st.z), Math.max(0, st.r * k), 0, Math.PI * 2); c.stroke();
+      // next circle
+      if (!st.done) { c.strokeStyle = '#ffffff'; c.setLineDash([6 * scale, 5 * scale]); c.beginPath(); c.arc(toX(st.next.x), toY(st.next.z), Math.max(0, st.next.r * k), 0, Math.PI * 2); c.stroke(); c.setLineDash([]); }
+      c.restore();
+    }
+    for (const b of v.beacons ?? []) {
+      const x = toX(b.x), y = toY(b.z), s = 6 * scale;
+      c.fillStyle = b.ready ? '#4ade80' : '#8a8a99'; c.strokeStyle = '#14123a'; c.lineWidth = 2 * scale;
+      c.beginPath(); c.moveTo(x, y - s * 1.4); c.lineTo(x + s, y); c.lineTo(x, y + s * 1.4); c.lineTo(x - s, y); c.closePath(); c.fill(); c.stroke();
+    }
     if (v.route && v.phase === 'bus') {
       const r = v.route, b = busPos(r, v.serverNow);
       c.setLineDash([10 * scale, 8 * scale]); c.lineWidth = 3 * scale; c.strokeStyle = 'rgba(255,255,255,.9)';
@@ -241,6 +271,25 @@ export class Hud {
     if (air) this.alt.replaceChildren(h('b', `${Math.max(0, Math.round(s.height))}`), h('small', 'M ABOVE GROUND'), h('i', `${Math.round(Math.hypot(s.vy, s.speed))} m/s`));
 
     this.aliveEl.textContent = String(v.alive);
+    this.killsEl.textContent = String(v.kills ?? 0);
+    // storm timer + where to go
+    const st = v.storm;
+    this.stormEl.classList.toggle('show', !!st && !st.done);
+    if (st && this.frame % 6 === 0) {
+      const left = Math.max(0, (st.until - v.serverNow) / 1000);
+      this.stormEl.replaceChildren(h('span', st.shrinking ? '⚡' : '⏱'), h('b', fmtTime(left)), h('small', st.shrinking ? 'STORM CLOSING' : st.phase === 0 && !st.shrinking ? 'STORM FORMS' : 'STORM SHRINKS IN'), h('i', `${st.dps}/s`));
+    }
+    const outside = !!st && Math.hypot(s.x - st.x, s.z - st.z) > st.r && s.mode !== PM.Bus;
+    const outNext = !!st && !st.done && Math.hypot(s.x - st.next.x, s.z - st.next.z) > st.next.r;
+    this.stormTint.classList.toggle('show', outside);
+    this.stormArrow.classList.toggle('show', (outside || outNext) && s.mode !== PM.Bus);
+    if (st && (outside || outNext)) {
+      const tx = outside ? st.x : st.next.x, tz = outside ? st.z : st.next.z, tr = outside ? st.r : st.next.r;
+      const ang = Math.atan2(-(tx - s.x), -(tz - s.z)) - s.yaw;
+      (this.stormArrow.querySelector('.arr') as HTMLElement).style.transform = `rotate(${-ang - Math.PI / 2}rad)`;
+      (this.stormArrow.querySelector('b') as HTMLElement).textContent = `${Math.max(0, Math.round(Math.hypot(tx - s.x, tz - s.z) - tr))} m`;
+      this.stormArrow.classList.toggle('danger', outside);
+    }
     this.clickHint.classList.toggle('show', !v.locked && !this.mapOpen && !this.menuOpen);
 
     // location name pops up when you walk into a named place
@@ -270,6 +319,16 @@ export class Hud {
       el.style.transform = `translate(${sx.toFixed(1)}px, ${sy.toFixed(1)}px) translate(-50%, -100%)`;
       const dEl = el.querySelector('i'); if (dEl && this.frame % 6 === 0) dEl.textContent = far ? `${Math.round(dist)} m` : '';
     };
+    // teammates standing together: stack their tags instead of drawing them on top of each other
+    const placed: { x: number; y: number }[] = [];
+    for (const t of [...v.tags].sort((a, b) => a.dist - b.dist)) {
+      for (let k = 0; k < 4; k++) {
+        const hit = placed.find((q) => Math.abs(q.x - t.sx) < 110 && Math.abs(q.y - t.sy) < 30);
+        if (!hit) break;
+        t.sy = hit.y - 30;
+      }
+      placed.push({ x: t.sx, y: t.sy });
+    }
     for (const t of v.tags) {
       const col = TEAM_COLORS[this.teamIdx.indexOf(t.idx) % 4];
       tag(`p${t.idx}`, t.sx, t.sy, t.show, () => h('div.wtag', h('span', { style: { color: col } }, '▼'), h('b', this.roster[t.idx].name), h('i')), t.dist, t.dist > 20);

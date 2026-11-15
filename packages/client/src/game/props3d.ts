@@ -119,13 +119,41 @@ function templates(): Record<string, (v: number) => Template> {
       return { solid: pieces };
     },
     dish: () => ({ solid: [{ geo: CY(0.15, 0.15, 1.4, 8), color: METAL, matrix: mat4(0, 0.7, 0) }, { geo: new THREE.SphereGeometry(1.0, 14, 8, 0, Math.PI * 2, 0, Math.PI / 3), color: '#f1faee', matrix: mat4(0, 1.6, -0.2, -0.9, 0, 0) }] }),
+    beacon: () => ({
+      solid: [
+        { geo: CY(1.2, 1.05, 0.5, 6), color: '#3d405b', matrix: mat4(0, 0.25, 0) }, { geo: CY(0.95, 0.95, 0.12, 6), color: '#4ade80', matrix: mat4(0, 0.56, 0) },
+        { geo: CY(0.12, 0.08, 4.2, 6), color: '#c0c4cc', matrix: mat4(0, 2.6, 0) },
+        { geo: new THREE.TorusGeometry(0.55, 0.06, 6, 16).rotateX(Math.PI / 2), color: '#c0c4cc', matrix: mat4(0, 3.2, 0) },
+        { geo: B(0.5, 0.7, 0.3), color: '#2b2d42', matrix: mat4(0, 1.0, 0.85) }, { geo: B(0.36, 0.3, 0.02), color: '#3ee6ff', matrix: mat4(0, 1.12, 1.01) },
+      ],
+    }),
+    vault: () => ({
+      solid: [
+        { geo: B(7, 0.2, 6), color: '#9a958c', matrix: mat4(0, 0.1, 0) },
+        { geo: B(7, 3.6, 0.45), color: '#8d8f94', matrix: mat4(0, 1.8, -2.78) },
+        { geo: B(0.45, 3.6, 6), color: '#8d8f94', matrix: mat4(-3.28, 1.8, 0) }, { geo: B(0.45, 3.6, 6), color: '#8d8f94', matrix: mat4(3.28, 1.8, 0) },
+        { geo: B(2.6, 3.6, 0.45), color: '#8d8f94', matrix: mat4(-2.2, 1.8, 2.78) }, { geo: B(2.6, 3.6, 0.45), color: '#8d8f94', matrix: mat4(2.2, 1.8, 2.78) },
+        { geo: B(1.8, 1.2, 0.45), color: '#8d8f94', matrix: mat4(0, 3.0, 2.78) },
+        { geo: B(7.4, 0.4, 6.4), color: '#6c6f75', matrix: mat4(0, 3.8, 0) },
+        // hazard stripes framing the door
+        ...[-1, 1].flatMap((sd) => [0, 1, 2, 3, 4].map((k) => ({ geo: B(0.22, 0.36, 0.05), color: k % 2 ? '#ffd23f' : '#14123a', matrix: mat4(sd * 1.05, 0.25 + k * 0.48, 3.02, 0, 0, 0.4) }))),
+        { geo: B(2.3, 0.3, 0.06), color: '#ffd23f', matrix: mat4(0, 2.55, 3.02) },
+        { geo: B(5.6, 0.12, 0.12), color: '#fff2c4', matrix: mat4(0, 3.45, -2.4) },
+      ],
+    }),
     pole: () => ({ solid: [{ geo: CY(0.16, 0.12, 7.5, 7), color: '#7f5539', matrix: mat4(0, 3.75, 0) }, { geo: B(2.2, 0.12, 0.12), color: '#7f5539', matrix: mat4(0, 7.1, 0) }, ...[-0.9, 0, 0.9].map((x) => ({ geo: CY(0.05, 0.05, 0.18, 6), color: '#e9ecef', matrix: mat4(x, 7.25, 0) }))] }),
   };
 }
 
-const ANIMATED = new Set(['windmill', 'fire', 'chimney', 'mast', 'lighthouse', 'boat', 'dock', 'sign', 'pole']);
+const ANIMATED = new Set(['beacon', 'vault', 'windmill', 'fire', 'chimney', 'mast', 'lighthouse', 'boat', 'dock', 'sign', 'pole']);
 
-export interface PropsView { update(dt: number, t: number, cam: THREE.Vector3): void }
+export interface PropsView {
+  update(dt: number, t: number, cam: THREE.Vector3): void;
+  /** Beacon lights: green when ready, grey while cooling down. */
+  setBeacons(ready: boolean[]): void;
+  /** Hide the doors of vaults that have been opened. */
+  setVaults(open: Set<number>): void;
+}
 
 export function buildProps(w: World, scene: THREE.Group): PropsView {
   const T = templates();
@@ -177,6 +205,28 @@ export function buildProps(w: World, scene: THREE.Group): PropsView {
     add(g, p);
     spinners.push({ o: hub, axis: 'z', speed: 0.6 });
   }
+  // beacon crystals and vault doors change during the match
+  const beaconLights = (byType.get('beacon') ?? []).map((p) => {
+    const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.45, 0), new THREE.MeshBasicMaterial({ color: '#4ade80' }));
+    gem.position.set(p.x, p.y + 4.9, p.z);
+    scene.add(gem);
+    spinners.push({ o: gem, axis: 'y', speed: 1.4 });
+    return gem;
+  });
+  const vaultDoors = new Map<number, THREE.Object3D>();
+  for (const p of byType.get('vault') ?? []) {
+    const door = new THREE.Group();
+    door.add(mesh([
+      { geo: B(1.8, 2.4, 0.3), color: '#a8adb5', matrix: mat4(0, 1.2, 2.7) },
+      { geo: CY(0.75, 0.75, 0.2, 16).rotateX(Math.PI / 2), color: '#c9ced6', matrix: mat4(0, 1.25, 2.92) },
+      { geo: CY(0.25, 0.25, 0.25, 10).rotateX(Math.PI / 2), color: '#5c6370', matrix: mat4(0, 1.25, 3.0) },
+      ...[0, 1, 2].map((k) => ({ geo: B(1.2, 0.08, 0.06), color: '#5c6370', matrix: mat4(0, 1.25, 3.06, 0, 0, (k * Math.PI) / 3) })),
+    ]));
+    door.position.set(p.x, p.y, p.z); door.rotation.y = p.rot;
+    scene.add(door);
+    vaultDoors.set(p.n ?? 0, door);
+  }
+
   for (const p of byType.get('fire') ?? []) {
     const f = new THREE.Group();
     f.add(mesh([{ geo: new THREE.ConeGeometry(0.42, 1.1, 7), color: '#ff7b00', matrix: mat4(0, 0.6, 0) }, { geo: new THREE.ConeGeometry(0.26, 0.8, 7), color: '#ffd23f', matrix: mat4(0.05, 0.55, 0.05) }], true));
@@ -285,6 +335,8 @@ export function buildProps(w: World, scene: THREE.Group): PropsView {
   let smokeT = 0;
 
   return {
+    setBeacons(ready) { beaconLights.forEach((g, i) => { (g.material as THREE.MeshBasicMaterial).color.set(ready[i] === false ? '#8a8a99' : '#4ade80'); }); },
+    setVaults(open) { for (const [id, d] of vaultDoors) d.visible = !open.has(id); },
     update(dt, t, cam) {
       for (const s of spinners) s.o.rotation[s.axis] += s.speed * dt;
       for (const f of flames) { const k = 0.85 + Math.sin(t * 13 + f.position.x) * 0.1 + Math.sin(t * 7.3) * 0.08; f.scale.set(1, k, 1); f.rotation.y += dt * 2; }

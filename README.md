@@ -26,6 +26,8 @@ Dev mode with hot reload: `npm run dev` (client on :5173, server on :8080).
 | E | Pick up / get in or out of a car / hold to revive |
 | 1–5, mouse wheel | Choose a slot |
 | Ctrl or C | Crouch |
+| B | Emote (press again for the next one) |
+| ← → / left-right click | Switch who you're spectating |
 | M | Map (click to place a squad marker) |
 | Middle click | Mark the spot you're looking at |
 | Esc | Menu / leave match |

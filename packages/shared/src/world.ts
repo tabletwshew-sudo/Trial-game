@@ -118,7 +118,16 @@ export interface World {
   outdoorChests: Spot[];
   /** Trees, rocks, bushes: per type, flat [x, y, z, scale, rot01, tint01]. */
   scatter: Float32Array[];
+  /** Recall beacons, and boss vaults (bunker with a locked door and chests inside). */
+  beacons: { x: number; y: number; z: number }[];
+  vaults: Vault[];
+  /** Per match: vault doors that have been opened (use Object.create(world) to give each match its own). */
+  openVaults?: Set<number>;
 }
+
+export interface Vault { id: number; x: number; z: number; y: number; face: number; door: { x: number; z: number }; post: { x: number; z: number }; chests: Spot[]; poi: number }
+
+const isOpenDoor = (w: World, o: Solid) => o.vault !== undefined && !!w.openVaults?.has(o.vault);
 
 export const SOLID_CELL = 16;
 export const solidKey = (cx: number, cz: number) => (cx + 1024) * 2048 + (cz + 1024);
@@ -420,6 +429,7 @@ export function boxTop(b: Box, x: number, z: number) {
 }
 
 /** Top of a solid at (x, z): gable roofs slope, everything else is flat. */
+export { isOpenDoor };
 export function solidTop(o: Solid, x: number, z: number) {
   return o.k === SK.Roof && o.b ? boxTop(o.b, x, z) : o.y1;
 }
@@ -430,7 +440,7 @@ export function surfaceAt(w: World, x: number, z: number, y: number) {
   if (s < BRIDGE_Y && BRIDGE_Y <= y + STEP_UP && roadEdgeDist(w, x, z) < 0.2) s = BRIDGE_Y;
   const list = w.solidGrid.get(solidKey(Math.floor(x / SOLID_CELL), Math.floor(z / SOLID_CELL)));
   if (list) for (const o of list) {
-    if (x < o.x0 || x > o.x1 || z < o.z0 || z > o.z1) continue;
+    if (x < o.x0 || x > o.x1 || z < o.z0 || z > o.z1 || isOpenDoor(w, o)) continue;
     const top = solidTop(o, x, z);
     if (top <= y + STEP_UP && top > s) s = top;
   }
@@ -449,7 +459,7 @@ export function collideBoxes(w: World, s: { x: number; y: number; z: number; vx:
   for (let pass = 0; pass < 2; pass++) {
     for (const o of list) {
       if (s.x <= o.x0 - r || s.x >= o.x1 + r || s.z <= o.z0 - r || s.z >= o.z1 + r) continue;
-      if (o.y0 >= s.y + height) continue; // above your head
+      if (o.y0 >= s.y + height || isOpenDoor(w, o)) continue; // above your head, or an opened vault door
       const cx = clamp(s.x, o.x0, o.x1), cz = clamp(s.z, o.z0, o.z1);
       const top = solidTop(o, cx, cz);
       if (s.y >= top - STEP_UP) continue; // you can step onto it (or you're on it)
@@ -600,12 +610,12 @@ export function getWorld(seed: number = MAP.seed): World {
     main: genMain(seed, pois, river),
     spawn: genSpawn(seed),
     boxes: [], boxGrid: new Map(), roadGrid: buildRoadGrid(roads),
-    layouts: [], solids: [], solidGrid: new Map(), props: [], caves: [], outdoorChests: [], scatter: [],
+    layouts: [], solids: [], solidGrid: new Map(), props: [], caves: [], outdoorChests: [], scatter: [], beacons: [], vaults: [],
   };
   genBoxes(w);
   for (const b of w.boxes) w.layouts.push(genLayout(w, b, w.solids));
   const extra = genProps(w, w.solids);
-  w.props = extra.props; w.caves = extra.caves;
+  w.props = extra.props; w.caves = extra.caves; w.beacons = extra.beacons; w.vaults = extra.vaults;
   w.outdoorChests = [...extra.extraChests, ...extra.caves.map((c) => c.chest)];
   w.scatter = genScatter(w, extra.excl);
   addScatterSolids(w);

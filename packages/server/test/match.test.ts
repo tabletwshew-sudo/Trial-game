@@ -26,8 +26,9 @@ describe('match instance', () => {
     const c2 = new FakeClient();
     inst.join('h0', c, now); inst.join('h1', c2, now);
     const init = c.msgs.find((m) => m.t === 'game_init');
-    expect(init && init.t === 'game_init' && init.init.players.length).toBe(80);
-    expect(inst.players.every((p) => Math.hypot(p.s.x - SPAWN_ISLAND.x, p.s.z - SPAWN_ISLAND.z) < 70)).toBe(true);
+    expect(init && init.t === 'game_init' && init.init.players.filter((x) => !x.npc).length).toBe(80);
+    expect(init && init.t === 'game_init' && init.init.players.filter((x) => x.npc === 'boss').length).toBe(2);
+    expect(inst.players.filter((p) => !p.npc).every((p) => Math.hypot(p.s.x - SPAWN_ISLAND.x, p.s.z - SPAWN_ISLAND.z) < 70)).toBe(true);
 
     const tick = (keys = 0, yaw = 0, pitch = 0) => { now += 1000 / 30; c.send(inst, 'h0', keys, yaw, pitch); inst.step(now); };
 
@@ -37,13 +38,13 @@ describe('match instance', () => {
     for (let i = 0; i < 60; i++) tick(K.F | K.SPRINT);
     expect(me.s.z).toBeLessThan(z0 - 10);
     expect(c.snap!.ack).toBe(c.seq);
-    expect(c.snap!.ents.length).toBe(80);
+    expect(c.snap!.ents.length).toBe(80); // NPCs stay hidden until the dropship leaves
     expect(inst.players.filter((p) => p.bot).some((p) => Math.hypot(p.s.vx, p.s.vz) > 1)).toBe(true);
 
     // dropship
     while (inst.phase === 'warmup') tick();
     expect(inst.phase).toBe('bus');
-    expect(inst.players.every((p) => p.s.mode === PM.Bus)).toBe(true);
+    expect(inst.players.filter((p) => !p.npc).every((p) => p.s.mode === PM.Bus)).toBe(true);
     expect(c.msgs.some((m) => m.t === 'game_phase' && m.phase === 'bus' && m.route)).toBe(true);
 
     // jumping before the doors open does nothing
@@ -65,13 +66,13 @@ describe('match instance', () => {
     expect(afk.s.mode).not.toBe(PM.Bus);
     for (let i = 0; i < 30 * 45; i++) tick(0);
 
-    const landed = inst.players.filter((p) => p.s.mode !== PM.Bus && p.s.mode !== PM.Fall && p.s.mode !== PM.Glide);
+    const landed = inst.players.filter((p) => !p.npc && p.s.mode !== PM.Bus && p.s.mode !== PM.Fall && p.s.mode !== PM.Glide);
     expect(landed.length).toBe(80); // everyone is down (some may already be fighting, knocked or out)
-    const onLand = inst.players.filter((p) => terrainAt(inst.world, p.s.x, p.s.z) > 0 || p.s.y > 0);
+    const onLand = inst.players.filter((p) => !p.npc).filter((p) => terrainAt(inst.world, p.s.x, p.s.z) > 0 || p.s.y > 0);
     expect(onLand.length).toBeGreaterThanOrEqual(72); // almost everyone hits dry land
     expect(mates.every((p) => Math.hypot(p.s.x - me.s.x, p.s.z - me.s.z) < 60)).toBe(true); // squad landed together
     // bot squads spread across several locations
-    const spots = new Set(inst.players.filter((p) => p.bot && p.team !== me.team).map((p) => `${Math.round(p.s.x / 250)},${Math.round(p.s.z / 250)}`));
+    const spots = new Set(inst.players.filter((p) => p.bot && !p.npc && p.team !== me.team).map((p) => `${Math.round(p.s.x / 250)},${Math.round(p.s.z / 250)}`));
     expect(spots.size).toBeGreaterThanOrEqual(5);
 
     // leaving ends the match once no humans remain

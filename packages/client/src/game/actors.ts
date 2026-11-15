@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { EF, PM, WATER_FLOAT_Y, weaponDef, type RosterEntry } from '@dropzone/shared';
+import { EF, EF_EMOTE_SHIFT, PM, WATER_FLOAT_Y, weaponDef, type RosterEntry } from '@dropzone/shared';
 import { Character, SKINS, type PoseMode } from '../lobby/character';
 import { softRamp } from '../lobby/toon';
 import { mat4, mergeColored } from './geo';
@@ -110,8 +110,9 @@ export class Actors {
         ch.animate(dt, t, {
           mode: this.poseOf(s), speed: s.speed, dive: s.dive, pitch: s.pitch,
           hold: !s.item ? 'none' : weaponDef(s.item) ? 'gun' : 'item',
-          sprint: (s.flags & EF.SPRINT) !== 0, crouch: (s.flags & EF.CROUCH) !== 0, using: (s.flags & EF.USING) !== 0,
+          sprint: (s.flags & EF.SPRINT) !== 0, crouch: (s.flags & EF.CROUCH) !== 0, using: (s.flags & EF.USING) !== 0, emote: (s.flags >> EF_EMOTE_SHIFT) & 3,
         });
+        ch.root.scale.setScalar(this.roster[i].npc === 'boss' ? 1.25 : 1);
       }
       if (ch || !s.visible || tooClose) {
         this.lodBody.setMatrixAt(i, hide); this.lodRest.setMatrixAt(i, hide); this.lodGlider.setMatrixAt(i, hide);

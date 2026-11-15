@@ -108,6 +108,14 @@ function itemPieces(id: number, rarity: number): Piece[] {
       { geo: new THREE.CylinderGeometry(0.045, 0.06, 0.02, 12), color: '#c0c0c0', matrix: mat4(0, 0.21, 0) },
     ];
   }
+  if (id === ITEM.card || id === ITEM.keycard) {
+    const gold = id === ITEM.keycard;
+    return [
+      { geo: B(0.32, 0.46, 0.03), color: gold ? '#ffcf3f' : '#b388ff', matrix: mat4(0, 0.35, 0) },
+      { geo: B(0.24, 0.3, 0.035), color: gold ? '#14123a' : '#ffffff', matrix: mat4(0, 0.37, 0) },
+      { geo: B(0.12, 0.12, 0.04), color: gold ? '#ffcf3f' : '#b388ff', matrix: mat4(0, 0.39, 0) },
+    ];
+  }
   if (id === ITEM.apple) return [
     { geo: new THREE.SphereGeometry(0.11, 10, 8), color: '#e63946', matrix: mat4(0, 0.1, 0, 0, 0, 0, 1, 0.9, 1) },
     { geo: new THREE.CylinderGeometry(0.01, 0.012, 0.06, 5), color: '#5b3b24', matrix: mat4(0, 0.21, 0) },

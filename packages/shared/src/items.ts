@@ -80,7 +80,9 @@ export interface AmmoDef { kind: 'ammo'; name: string; ammo: number; rarity: Rar
 /** Eaten on the spot when picked up. */
 export interface ForageDef { kind: 'forage'; name: string; heal: number; shield: number; rarity: Rarity }
 
-export type ItemDef = WeaponDef | ConsumableDef | ThrowableDef | AmmoDef | ForageDef;
+/** Special items: a teammate's recall card (picked up into a pocket, not a slot) and the vault keycard (takes a slot). */
+export interface SpecialDef { kind: 'card' | 'keycard'; name: string; rarity: Rarity }
+export type ItemDef = WeaponDef | ConsumableDef | ThrowableDef | AmmoDef | ForageDef | SpecialDef;
 
 const ALL: Rarity[] = ['common', 'uncommon', 'rare', 'epic', 'legendary'];
 const W = (d: Omit<WeaponDef, 'kind'>): WeaponDef => ({ kind: 'weapon', ...d });
@@ -109,11 +111,13 @@ export const ITEMS: (ItemDef | null)[] = [
   { kind: 'ammo', name: AMMO_NAMES[4], ammo: AMMO.rockets, rarity: 'common' },
   { kind: 'forage', name: 'Apple', heal: 5, shield: 0, rarity: 'common' },
   { kind: 'forage', name: 'Glow Cap', heal: 0, shield: 5, rarity: 'rare' },
+  { kind: 'card', name: 'Recall Card', rarity: 'epic' },
+  { kind: 'keycard', name: 'Vault Keycard', rarity: 'legendary' },
 ];
 
 export const ITEM = {
   pistol: 1, smg: 2, ar: 3, burst: 4, pump: 5, autoshotgun: 6, dmr: 7, sniper: 8, rocket: 9, grenade: 10,
-  bandage: 11, medpack: 12, shieldSip: 13, shieldJug: 14, fizz: 15, ammoLight: 16, ammoMedium: 17, ammoHeavy: 18, ammoShells: 19, ammoRockets: 20, apple: 21, glowcap: 22,
+  bandage: 11, medpack: 12, shieldSip: 13, shieldJug: 14, fizz: 15, ammoLight: 16, ammoMedium: 17, ammoHeavy: 18, ammoShells: 19, ammoRockets: 20, apple: 21, glowcap: 22, card: 23, keycard: 24,
 } as const;
 export const AMMO_ITEM = [ITEM.ammoLight, ITEM.ammoMedium, ITEM.ammoHeavy, ITEM.ammoShells, ITEM.ammoRockets];
 /** How much ammo a pickup or a reload-fresh weapon carries. */

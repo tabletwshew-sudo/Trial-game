@@ -172,3 +172,16 @@ describe('cars', () => {
     expect(s.vs).toBeGreaterThan(5); expect(s.z).toBeLessThan(SPAWN_ISLAND.z);
   });
 });
+
+describe('emotes', () => {
+  it('B starts an emote, pressing again cycles, moving cancels it', () => {
+    const s = fresh();
+    stepPlayer(s, { keys: K.EMOTE, yaw: 0, pitch: 0 }, w);
+    expect(s.emote).toBe(1);
+    stepPlayer(s, { keys: 0, yaw: 0, pitch: 0 }, w);
+    stepPlayer(s, { keys: K.EMOTE, yaw: 0, pitch: 0 }, w);
+    expect(s.emote).toBe(2);
+    stepPlayer(s, { keys: K.F, yaw: 0, pitch: 0 }, w);
+    expect(s.emote).toBe(0);
+  });
+});

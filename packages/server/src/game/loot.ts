@@ -158,7 +158,7 @@ export function rollContainer(store: LootStore, rnd: () => number, kind: number,
   else if (rnd() < 0.35) { const a = Math.floor(rnd() * 4); drop(AMMO_ITEM[a], 0, AMMO_PICKUP[a]); }
 }
 
-export interface ChestEnt extends ChestView { landY?: number }
+export interface ChestEnt extends ChestView { landY?: number; /** Vault chests roll supply-drop quality loot. */ rich?: boolean }
 
 /**
  * Loot for the island: floor loot in rooms, chests by walls, ammo boxes, outdoor chests at

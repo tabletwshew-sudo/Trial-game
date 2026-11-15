@@ -15,7 +15,7 @@ export const SIM_DT = 1 / SIM_HZ;
 
 export const K = {
   F: 1, B: 2, L: 4, R: 8, JUMP: 16, SPRINT: 32, CROUCH: 64,
-  FIRE: 128, ADS: 256, RELOAD: 512, USE: 1024,
+  FIRE: 128, ADS: 256, RELOAD: 512, USE: 1024, EMOTE: 2048,
 } as const;
 export const PM = { Walk: 0, Bus: 1, Fall: 2, Glide: 3, Drive: 4, Ride: 5, Knocked: 6, Dead: 7 } as const;
 /** Server-controlled "busy" states that freeze the player. */
@@ -55,12 +55,14 @@ export interface PlayerState {
   act: number;
   /** Vehicle you are in (-1 = none), your seat, and the car's heading/speed while you drive. */
   veh: number; seat: number; vh: number; vs: number;
+  /** Emote playing (0 = none, 1..3). Stops when you move, jump or shoot. */
+  emote: number;
 }
 
 export const newPlayerState = (): PlayerState => ({
   x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, yaw: 0, pitch: 0, mode: PM.Walk, grounded: true, keys: 0,
   hp: 100, shield: 0, knock: 0, slot: 0, inv: [emptySlot(), emptySlot(), emptySlot(), emptySlot(), emptySlot()], ammo: [0, 0, 0, 0, 0],
-  cd: 0, burst: 0, reload: 0, use: 0, bloom: 0, shots: 0, seed: 1, act: ACT.None, veh: -1, seat: 0, vh: 0, vs: 0,
+  cd: 0, burst: 0, reload: 0, use: 0, bloom: 0, shots: 0, seed: 1, act: ACT.None, veh: -1, seat: 0, vh: 0, vs: 0, emote: 0,
 });
 
 export function clonePlayerState(s: PlayerState): PlayerState {
@@ -213,6 +215,7 @@ export function stepPlayer(s: PlayerState, cmd: InputCmd, w: World, ev?: SimEven
   const prev = s.keys, keys = cmd.keys;
   s.keys = keys; s.yaw = cmd.yaw; s.pitch = cmd.pitch;
   if (s.mode === PM.Bus || s.mode === PM.Dead) return;
+  if (s.mode !== PM.Walk) s.emote = 0;
 
   const jumpEdge = (keys & K.JUMP) !== 0 && (prev & K.JUMP) === 0;
   const f = (keys & K.F ? 1 : 0) - (keys & K.B ? 1 : 0), r = (keys & K.R ? 1 : 0) - (keys & K.L ? 1 : 0);
@@ -272,6 +275,9 @@ export function stepPlayer(s: PlayerState, cmd: InputCmd, w: World, ev?: SimEven
       }
     }
     if (!knocked) stepCombat(s, cmd, prev, ev);
+    // emotes: B cycles through three; any movement, jump, shot or aim cancels
+    if ((keys & K.EMOTE) && !(prev & K.EMOTE) && s.grounded && !knocked && !swimming && s.act === ACT.None) s.emote = (s.emote % 3) + 1;
+    if (s.emote && (f !== 0 || r !== 0 || (keys & (K.FIRE | K.ADS | K.JUMP)) || !s.grounded || knocked || swimming)) s.emote = 0;
   } else {
     const height = s.y - surfaceAt(w, s.x, s.z, Infinity);
     if (s.mode === PM.Fall) { if (height < DROP.gliderAutoDeployHeight || jumpEdge) s.mode = PM.Glide; }
@@ -316,7 +322,7 @@ export function applyDamage(s: PlayerState, dmg: number, ignoreShield = false): 
 /** Add an item to the inventory. Returns how many were taken (0 = no room). */
 export function addToInventory(s: PlayerState, id: number, r: number, n: number, mag: number): number {
   const def = ITEMS[id];
-  if (!def || def.kind === 'forage') return 0;
+  if (!def || def.kind === 'forage' || def.kind === 'card') return 0;
   if (def.kind === 'ammo') {
     const room = AMMO_MAX[def.ammo] - s.ammo[def.ammo];
     const take = Math.min(room, n);

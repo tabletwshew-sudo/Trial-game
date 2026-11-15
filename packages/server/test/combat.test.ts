@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ACT, ITEM, K, PM, aimOrigin, decodeSnapshot, encodeInputs, surfaceAt, weaponDef, type InputCmd, type ServerMsg, type Snapshot } from '@dropzone/shared';
+import { ACT, ITEM, K, PM, aimOrigin, decodeSnapshot, encodeInputs, makeStormPlan, raycastWorld, surfaceAt, weaponDef, type InputCmd, type ServerMsg, type Snapshot } from '@dropzone/shared';
 import { MatchInstance, type Sock } from '../src/game/match';
 import type { Match } from '../src/hub';
 
@@ -37,8 +37,11 @@ function inPlay(teamSizes: number[], humanTeams: number[], mode: Match['mode'] =
   const step = (ms = 1000 / 30) => { now += ms; inst.step(now); };
   while (inst.phase !== 'play') step(200);
   for (let i = 0; i < 300; i++) step(200); // everyone lands
+  // no storm unless a test asks for one; NPC crews stood down
+  inst.storm = null;
+  for (const p of inst.players) if (p.npc) { p.alive = false; p.s.mode = PM.Dead; }
   // park all bots far away so they don't interfere
-  inst.players.forEach((p, i) => { if (p.bot) { p.s.mode = PM.Walk; p.s.x = -900 + (i % 10) * 25; p.s.z = 600 + Math.floor(i / 10) * 25; p.s.y = surfaceAt(inst.world, p.s.x, p.s.z, 500); p.brain!.wander = null; p.brain!.idleUntil = Infinity; p.brain!.skill = 0; } });
+  inst.players.forEach((p, i) => { if (p.bot && !p.npc) { p.s.mode = PM.Walk; p.s.x = -900 + (i % 10) * 25; p.s.z = 600 + Math.floor(i / 10) * 25; p.s.y = surfaceAt(inst.world, p.s.x, p.s.z, 500); p.brain!.wander = null; p.brain!.idleUntil = Infinity; p.brain!.skill = 0; } });
   const place = (idx: number, x: number, z: number, yaw = 0) => {
     const s = inst.players[idx].s;
     s.mode = PM.Walk; s.x = x; s.z = z; s.y = surfaceAt(inst.world, x, z, 500); s.yaw = yaw; s.vx = s.vz = 0; s.grounded = true; s.hp = 100; s.shield = 0;
@@ -321,5 +324,134 @@ describe('chests, supply drops, forage', () => {
     g.inst.players[2].alive = false; g.inst.players[2].s.mode = PM.Dead; // no distractions
     for (let i = 0; i < 30 * 25 && !chest.open; i++) g.step();
     expect(chest.open).toBe(true);
+  });
+});
+
+describe('storm', () => {
+  it('outside the circle you lose health (not shield) every second', () => {
+    const g = inPlay([1, 1], [0], 'solo');
+    const a = g.inst.players[0];
+    g.inst.storm = makeStormPlan(g.inst.world, 1, g.now - 1000);
+    g.inst.storm!.circles[0] = { x: 900, z: 900, r: 20 }; // a tiny circle far away
+    g.place(a.idx, AT.x, AT.z); a.s.shield = 50;
+    for (let i = 0; i < 30 * 3.2; i++) g.step();
+    expect(a.s.shield).toBe(50);
+    expect(a.s.hp).toBeLessThanOrEqual(97);
+    expect(g.clients.get(a.id)!.events().some((e) => e.e === 'storm_hurt')).toBe(true);
+  });
+
+  it('a full 80-player match ends with one winner once the storm closes', () => {
+    let now = 90_000_000;
+    const teams = Array.from({ length: 20 }, (_, i) => ({ id: i + 1, partyIds: [], members: Array.from({ length: 4 }, (_, k) => ({ id: i === 0 && k === 0 ? 'h0' : `b${i}_${k}`, name: `P${i}${k}`, bot: !(i === 0 && k === 0), skin: 0 })) }));
+    const inst = new MatchInstance({ mode: 'squad', teams, humans: 1, bots: 79, partyIds: [], id: 'full', createdAt: 0 }, { warmupS: 2, onEnd: () => {} }, now);
+    const c = new Client(); inst.join('h0', c, now);
+    let ended = 0;
+    for (let i = 0; i < 30 * 60 * 16 && !ended; i++) {
+      now += 1000 / 30; inst.step(now);
+      if (inst.players.filter((p) => !p.npc && p.alive && !p.gone).map((p) => p.team).filter((t, k, a) => a.indexOf(t) === k).length <= 1) ended = now;
+    }
+    expect(ended).toBeGreaterThan(0);
+    const minutes = (ended - 90_000_000) / 60_000;
+    // eslint-disable-next-line no-console
+    console.log(`match finished after ${minutes.toFixed(1)} min`);
+    for (let i = 0; i < 10; i++) { now += 1000 / 30; inst.step(now); }
+    const winners = inst.players.filter((p) => !p.npc && p.alive);
+    expect(new Set(winners.map((p) => p.team)).size).toBe(1);
+    expect(winners.every((p) => p.place === 1)).toBe(true);
+    // every eliminated team got a single, unique placement
+    const places = new Map<number, number>();
+    for (const p of inst.players) if (!p.npc && !p.alive) places.set(p.team, p.place);
+    expect(new Set(places.values()).size).toBe(places.size);
+    const res = c.msgs.find((m) => m.t === 'result');
+    expect(res && res.t === 'result' && res.result.stats).toBeTruthy();
+    expect(res && res.t === 'result' && res.result.squad.length).toBe(4);
+  }, 180_000);
+});
+
+describe('bosses and vaults', () => {
+  it('bosses take reduced damage, drop a keycard, and the keycard opens the vault', () => {
+    let now = 60_000_000;
+    const inst = new MatchInstance(makeMatch([1, 1], [0], 'solo'), { warmupS: 1, onEnd: () => {} }, now);
+    const c = new Client(); inst.join('h0_0', c, now);
+    const step = () => { now += 1000 / 30; inst.step(now); };
+    while (inst.phase === 'warmup') step();
+    const boss = inst.players.find((p) => p.npc === 'boss')!;
+    expect(boss.alive).toBe(true);
+    expect(Math.hypot(boss.s.x - boss.post!.x, boss.s.z - boss.post!.z)).toBeLessThan(1);
+    expect(boss.s.shield).toBe(100);
+    const me = inst.players.find((p) => p.id === 'h0_0')!;
+    // 100 raw damage only takes 30 off the boss
+    (inst as any).damage(boss, 100, me, 'gun', ITEM.ar);
+    expect(100 + 100 - boss.s.hp - boss.s.shield).toBe(30);
+    expect(me.kills).toBe(0);
+    boss.s.hp = 1; boss.s.shield = 0;
+    (inst as any).damage(boss, 50, me, 'gun', ITEM.ar);
+    expect(boss.alive).toBe(false);
+    expect(me.kills).toBe(0); // NPCs don't count as eliminations
+    const v = inst.world.vaults.find((x) => Math.hypot(x.post.x - boss.post!.x, x.post.z - boss.post!.z) < 10)!;
+    const card = inst.loot.near(boss.s.x, boss.s.z, 5).find((it) => it.item === ITEM.keycard)!;
+    expect(card).toBeTruthy();
+    // walk up, take the card, and try the door
+    me.s.mode = PM.Walk; me.s.x = card.x; me.s.z = card.z + 1; me.s.y = surfaceAt(inst.world, me.s.x, me.s.z, 500); me.s.grounded = true;
+    for (const it of inst.loot.near(card.x, card.z, 4)) if (it.id !== card.id) inst.loot.remove(it.id);
+    c.send(inst, 'h0_0', { keys: K.USE, yaw: 0, pitch: 0 }); step();
+    expect(me.s.inv.some((sl) => sl.id === ITEM.keycard)).toBe(true);
+    // the door blocks you until it's opened
+    const inside = v.chests[1];
+    expect(raycastWorld(inst.world, { x: v.door.x, y: v.y + 1.2, z: v.door.z }, (() => { const dx = inside.x - v.door.x, dz = inside.z - v.door.z, l = Math.hypot(dx, dz); return { x: dx / l, y: 0, z: dz / l }; })(), 6).kind).toBe('building');
+    me.s.x = v.door.x; me.s.z = v.door.z; me.s.y = surfaceAt(inst.world, me.s.x, me.s.z, v.y + 2);
+    c.send(inst, 'h0_0', { keys: 0, yaw: 0, pitch: 0 }); c.send(inst, 'h0_0', { keys: K.USE, yaw: 0, pitch: 0 }); step();
+    expect(inst.world.openVaults!.has(v.id)).toBe(true);
+    expect(me.s.inv.some((sl) => sl.id === ITEM.keycard)).toBe(false);
+    expect(c.msgs.some((m) => m.t === 'vaults' && m.open.includes(v.id))).toBe(true);
+    // ...and another match on the same server still has its vault locked
+    const other = new MatchInstance(makeMatch([1, 1], [0], 'solo'), { warmupS: 1, onEnd: () => {} }, now);
+    expect(other.world.openVaults!.has(v.id)).toBe(false);
+    // the vault chests are rich
+    const vc = [...inst.chests.values()].filter((x) => x.rich);
+    expect(vc.length).toBe(inst.world.vaults.length * 3);
+  });
+});
+
+describe('recall beacons', () => {
+  it('a teammate carries your card to a beacon and you drop back in', () => {
+    const g = inPlay([2, 2, 2], [0, 0], 'duo');
+    const [a, mate] = [g.inst.players[0], g.inst.players[1]];
+    const b = g.inst.world.beacons[0];
+    g.place(a.idx, b.x + 6, b.z); g.place(mate.idx, b.x + 4, b.z);
+    for (const it of g.inst.loot.near(b.x, b.z, 12)) g.inst.loot.remove(it.id);
+    // a goes down and out (mate is still up, so a is knocked first, then finished)
+    a.s.hp = 0; a.lastHit = { by: 2, at: g.now, w: ITEM.ar, cause: 'gun' }; (g.inst as any).checkDown(a);
+    a.s.knock = 0; (g.inst as any).checkDown(a, true);
+    expect(a.alive).toBe(false);
+    const card = g.inst.loot.near(a.s.x, a.s.z, 4).find((it) => it.item === ITEM.card)!;
+    expect(card.r).toBe(a.idx);
+    const cm = g.clients.get(mate.id)!;
+    mate.s.x = card.x - 1; mate.s.z = card.z; mate.s.y = surfaceAt(g.inst.world, mate.s.x, mate.s.z, 500);
+    cm.send(g.inst, mate.id, { keys: K.USE, yaw: -Math.PI / 2, pitch: 0 }); g.step();
+    expect(mate.cards).toEqual([a.idx]);
+    // to the beacon, hold E
+    mate.s.x = b.x + 1.8; mate.s.z = b.z; mate.s.y = surfaceAt(g.inst.world, mate.s.x, mate.s.z, 500);
+    cm.send(g.inst, mate.id, { keys: 0, yaw: 0, pitch: 0 });
+    for (let i = 0; i < 30 * 4.5; i++) { cm.send(g.inst, mate.id, { keys: K.USE, yaw: 0, pitch: 0 }); g.step(); }
+    expect(a.alive).toBe(true);
+    expect(a.s.mode).toBe(PM.Fall);
+    expect(a.s.inv[0].id).toBe(ITEM.pistol);
+    expect(mate.cards.length).toBe(0);
+    expect(g.clients.get(a.id)!.events().some((e) => e.e === 'recalled' && e.i === a.idx)).toBe(true);
+  });
+});
+
+describe('spectating', () => {
+  it('eliminated players can cycle who they watch', () => {
+    const g = inPlay([1, 1, 1, 1], [0], 'solo');
+    const a = g.inst.players[0];
+    a.s.hp = 0; a.lastHit = { by: 1, at: g.now, w: ITEM.ar, cause: 'gun' }; (g.inst as any).checkDown(a);
+    g.step();
+    const first = a.spec;
+    expect(first).toBeGreaterThan(0);
+    g.inst.onSpecNext(a.id, 1); g.step();
+    expect(a.spec).not.toBe(first);
+    expect(g.inst.players[a.spec].alive).toBe(true);
   });
 });

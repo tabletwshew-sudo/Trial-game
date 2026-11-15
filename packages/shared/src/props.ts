@@ -1,6 +1,6 @@
 import { hash2, mulberry32 } from './noise.js';
 import { SK, boxSolid, type Prop, type Solid, type Spot } from './structures.js';
-import { BRIDGE_Y, roadEdgeDist, terrainAt, type Poi, type World } from './world.js';
+import { BRIDGE_Y, roadEdgeDist, terrainAt, type Poi, type Vault, type World } from './world.js';
 
 /**
  * Outdoor details: street furniture, farm fences, camp tents, harbor docks, landmarks,
@@ -17,7 +17,7 @@ export interface Exclusion { x: number; z: number; r: number }
 const BOX_CELL = 32;
 const gridKey = (cx: number, cz: number) => (cx + 512) * 1024 + (cz + 512);
 
-export function genProps(w: World, solids: Solid[]): { props: Prop[]; caves: Cave[]; excl: Exclusion[]; extraChests: Spot[] } {
+export function genProps(w: World, solids: Solid[]): { props: Prop[]; caves: Cave[]; excl: Exclusion[]; extraChests: Spot[]; beacons: { x: number; y: number; z: number }[]; vaults: Vault[] } {
   const props: Prop[] = [];
   const excl: Exclusion[] = [];
   const extraChests: Spot[] = [];
@@ -216,6 +216,58 @@ export function genProps(w: World, solids: Solid[]): { props: Prop[]; caves: Cav
     }
   }
 
+  // ---------------------------------------------------------------- recall beacons: by main roads, spread across the island
+  const beacons: { x: number; y: number; z: number }[] = [];
+  const mains = w.roads.filter((r) => !r.street);
+  for (let t = 0; t < 400 && beacons.length < 9; t++) {
+    const r = mains[Math.floor(rnd() * mains.length)];
+    const i = 2 + Math.floor(rnd() * (r.pts.length / 2 - 4));
+    const x0 = r.pts[i * 2], z0 = r.pts[i * 2 + 1];
+    const tx = r.pts[i * 2 + 2] - r.pts[i * 2 - 2], tz = r.pts[i * 2 + 3] - r.pts[i * 2 - 1], tl = Math.hypot(tx, tz) || 1;
+    const x = x0 + (-tz / tl) * 9, z = z0 + (tx / tl) * 9;
+    if (!clear(x, z, 4) || beacons.some((b) => Math.hypot(b.x - x, b.z - z) < 260)) continue;
+    if (w.pois.some((p) => Math.hypot(x - p.x, z - p.z) < p.r * 0.9)) continue;
+    put('beacon', x, z, Math.atan2(tz, tx), 1, { hx: 1.1, hz: 1.1, h: 1.0 });
+    beacons.push({ x, y: ground(x, z), z });
+  }
+
+  // ---------------------------------------------------------------- boss vaults: a concrete bunker with a locked door
+  const vaults: Vault[] = [];
+  for (const name of ['Rustworks', 'Harborlight']) {
+    const p = w.pois.find((q) => q.name === name);
+    if (!p) continue;
+    for (let t = 0; t < 200; t++) {
+      const x = Math.round(p.x + (rnd() - 0.5) * p.r * 1.3), z = Math.round(p.z + (rnd() - 0.5) * p.r * 1.3);
+      const ok = [-6, 0, 6].every((ox) => [-6, 0, 6].every((oz) => clear(x + ox, z + oz, 2) && Math.abs(ground(x + ox, z + oz) - ground(x, z)) < 1.2));
+      if (!ok) continue;
+      const g = Math.max(...[-4, 0, 4].flatMap((ox) => [-4, 0, 4].map((oz) => ground(x + ox, z + oz)))) + 0.1;
+      const face = Math.floor(rnd() * 4), id = vaults.length;
+      const W = 7, D = 6, H = 3.6, T = 0.45;
+      // local frame: door in the middle of the "front" wall facing `face`
+      const fx = [0, 1, 0, -1][face], fz = [1, 0, -1, 0][face], sx = -fz, sz = fx; // forward and sideways
+      const at = (u: number, v: number) => ({ x: x + sx * u + fx * v, z: z + sz * u + fz * v });
+      const box = (u0: number, u1: number, v0: number, v1: number, y0: number, y1: number, extra: Partial<Solid> = {}) => {
+        const a = at(u0, v0), b = at(u1, v1);
+        solids.push({ x0: Math.min(a.x, b.x), x1: Math.max(a.x, b.x), z0: Math.min(a.z, b.z), z1: Math.max(a.z, b.z), y0, y1, k: SK.Prop, ...extra });
+      };
+      box(-W / 2, W / 2, -D / 2, D / 2, g - 1, g, {});                 // floor
+      box(-W / 2, W / 2, -D / 2, -D / 2 + T, g, g + H, {});             // back wall
+      box(-W / 2, -W / 2 + T, -D / 2, D / 2, g, g + H, {});             // side walls
+      box(W / 2 - T, W / 2, -D / 2, D / 2, g, g + H, {});
+      box(-W / 2, -0.9, D / 2 - T, D / 2, g, g + H, {});               // front wall either side of the door
+      box(0.9, W / 2, D / 2 - T, D / 2, g, g + H, {});
+      box(-0.9, 0.9, D / 2 - T, D / 2, g + 2.4, g + H, {});             // lintel
+      box(-0.9, 0.9, D / 2 - T, D / 2, g, g + 2.4, { vault: id });       // the vault door itself
+      box(-W / 2 - 0.2, W / 2 + 0.2, -D / 2 - 0.2, D / 2 + 0.2, g + H, g + H + 0.4, {}); // roof slab
+      const door = at(0, D / 2 + 1.2), post = at(0, D / 2 + 7);
+      const chests: Spot[] = [-2.2, 0, 2.2].map((u) => { const c = at(u, -D / 2 + T + 0.55); return { x: c.x, y: g, z: c.z, face: (face + 0) % 4 }; });
+      props.push({ t: 'vault', x, y: g, z, rot: [0, Math.PI / 2, Math.PI, -Math.PI / 2][face], s: 1, n: id });
+      excl.push({ x, z, r: 10 });
+      vaults.push({ id, x, z, y: g, face, door, post, chests, poi: p.id });
+      break;
+    }
+  }
+
   // ---------------------------------------------------------------- caves
   const caves: Cave[] = [];
   const candidates: [number, number, number][] = [[-660, -380, 0.6], [360, 640, 2.2], [700, -300, 1.2], [-470, 560, 4.0]];
@@ -293,7 +345,7 @@ export function genProps(w: World, solids: Solid[]): { props: Prop[]; caves: Cav
     excl.push({ x: c.x, z: c.z, r: half + 8 });
     caves.push(c);
   }
-  return { props, caves, excl, extraChests };
+  return { props, caves, excl, extraChests, beacons, vaults };
 }
 
 function genHarbor(w: World, p: Poi, put: (t: string, x: number, z: number, rot: number, s?: number, solid?: { hx: number; hz: number; h: number }, extra?: Partial<Prop>) => void, solids: Solid[], props: Prop[], excl: Exclusion[], extraChests: Spot[]) {

@@ -1,10 +1,10 @@
 import {
-  ACT, AMMO_ITEM, CAR, CHEST_KIND, SUPPLY_FALL, ENT_BYTES, EF, ITEMS, K, MAP, PM, SIM_DT, SIM_HZ, SPAWN_ISLAND, TEAM_SIZE,
+  ACT, AMMO_ITEM, CAR, CHEST_KIND, SUPPLY_FALL, RECALL, ITEM, EF_EMOTE_SHIFT, makeStormPlan, stormAt, inStorm, consumableDef, ENT_BYTES, EF, ITEMS, K, MAP, PM, SIM_DT, SIM_HZ, SPAWN_ISLAND, TEAM_SIZE,
   addToInventory, applyDamage, blastDamage, busPos, decodeInputs, emptySlot, encodeEnt, encodeSnapshot, falloff, getWorld,
   makeRoute, mulberry32, newPlayerState, rayPlayer, raycastWorld, seatWorld, stepCar, stepPlayer, stepProjectile, surfaceAt, terrainAt,
   weaponDamage, weaponDef, throwableDef, collideBoxes,
   type BusRoute, type CarBody, type FeedCause, type GameEvent, type GameInit, type GamePhase, type InputCmd, type LootView,
-  type ChestView, type PlayerState, type Projectile, type ServerMsg, type ShotEvent, type SimEvents, type ThrowEvent, type Vec3, type VehSnap, type World,
+  type ChestView, type MatchStats, type StormPlan, type PlayerState, type Projectile, type ServerMsg, type ShotEvent, type SimEvents, type ThrowEvent, type Vec3, type VehSnap, type World,
 } from '@dropzone/shared';
 import type { Match } from '../hub.js';
 import { botInput, newBrain, planDrop, type BotBrain, type BotTarget, type BotWorld } from './bots.js';
@@ -34,7 +34,19 @@ interface P {
   respawnAt: number;
   spec: number;
   ev: GameEvent[];
+  /** Boss/guard NPCs: their post, and how much of incoming damage they actually take. */
+  npc?: 'boss' | 'guard';
+  post?: { x: number; z: number };
+  armor: number;
+  /** Recall cards being carried (player indexes). */
+  cards: number[];
+  stats: MatchStats;
+  aliveSince: number;
+  lastPos: { x: number; z: number } | null;
 }
+
+const NPC_NAMES = [['Warden Vex', 'Rivet', 'Sprocket'], ['Captain Hale', 'Barnacle', 'Tidewell']];
+const newStats = (): MatchStats => ({ damage: 0, taken: 0, revives: 0, chests: 0, distance: 0, survivedS: 0, healed: 0 });
 
 interface Veh extends CarBody { id: number; hp: number; seats: number[]; dead: boolean; lastHitBy: number }
 
@@ -74,11 +86,19 @@ export class MatchInstance {
   private hist: { t: number; pos: Float32Array }[] = [];
   private endAt = 0;
   private dbno: boolean;
+  storm: StormPlan | null = null;
+  private stormAcc = 0;
+  private bossAcc = 0;
+  private beaconReady: number[];
+  private cardExpiry = new Map<number, number>();
   ended = false;
 
   constructor(private match: Match, private opts: MatchOptions, now: number) {
     this.id = match.id;
-    this.world = getWorld(opts.seed ?? MAP.seed);
+    // each match gets its own view of the shared world (so vault doors open per match)
+    this.world = Object.create(getWorld(opts.seed ?? MAP.seed)) as World;
+    this.world.openVaults = new Set();
+    this.beaconReady = this.world.beacons.map(() => 0);
     this.rnd = mulberry32((now ^ 0x9e3779b9) >>> 0);
     this.lastNow = this.now = now;
     this.warmupEndsAt = now + opts.warmupS * 1000;
@@ -91,11 +111,31 @@ export class MatchInstance {
         s: newPlayerState(), queue: [], lastSeq: 0, budget: 4, starve: 0, gone: false, sock: null,
         brain: m.bot ? newBrain(mulberry32(Math.floor(this.rnd() * 2 ** 31))) : null, marker: null,
         alive: true, kills: 0, place: 0, lastHit: null, knockedBy: -1, revive: null, bleedAcc: 0, respawnAt: 0, spec: -1, ev: [],
+        armor: 1, cards: [], stats: newStats(), aliveSince: now, lastPos: null,
       };
       p.s.seed = Math.floor(this.rnd() * 2 ** 31);
       this.spawnOnWarmupIsland(p);
       this.players.push(p);
       if (!m.bot) this.byId.set(m.id, p);
+    }
+    // boss crews: they appear when the dropship leaves
+    for (const v of this.world.vaults) {
+      const names = NPC_NAMES[v.id % NPC_NAMES.length];
+      names.forEach((name, k) => {
+        const boss = k === 0;
+        const p: P = {
+          idx: idx++, id: `npc${v.id}_${k}`, name, bot: true, team: 1000 + v.id, skin: boss ? 8 : 9,
+          s: newPlayerState(), queue: [], lastSeq: 0, budget: 4, starve: 0, gone: false, sock: null,
+          brain: newBrain(mulberry32(Math.floor(this.rnd() * 2 ** 31))), marker: null,
+          alive: false, kills: 0, place: 0, lastHit: null, knockedBy: -1, revive: null, bleedAcc: 0, respawnAt: 0, spec: -1, ev: [],
+          npc: boss ? 'boss' : 'guard', post: { x: v.post.x + (k - 1) * 4, z: v.post.z + (k ? 2 : 0) }, armor: boss ? 0.3 : 0.75,
+          cards: [], stats: newStats(), aliveSince: now, lastPos: null,
+        };
+        p.brain!.skill = boss ? 0.85 : 0.55;
+        p.brain!.post = p.post;
+        p.s.mode = PM.Dead;
+        this.players.push(p);
+      });
     }
     spawnWarmupLoot(this.world, this.loot, this.rnd);
     // a few chests on the warm-up island to try out
@@ -166,8 +206,8 @@ export class MatchInstance {
   }
 
   get humans() { return this.players.filter((p) => !p.bot && !p.gone); }
-  get alive() { return this.players.filter((p) => p.alive && !p.gone).length; }
-  teamsAlive() { return new Set(this.players.filter((p) => p.alive && !p.gone).map((p) => p.team)).size; }
+  get alive() { return this.players.filter((p) => p.alive && !p.gone && !p.npc).length; }
+  teamsAlive() { return new Set(this.players.filter((p) => p.alive && !p.gone && !p.npc).map((p) => p.team)).size; }
   has(userId: string) { const p = this.byId.get(userId); return !!p && !p.gone; }
   private mates(p: P) { return this.players.filter((q) => q.team === p.team && q !== p); }
 
@@ -180,16 +220,20 @@ export class MatchInstance {
     const init: GameInit = {
       matchId: this.id, seed: this.world.seed, mode: this.match.mode, you: p.idx,
       phase: this.phase, warmupEndsAt: this.warmupEndsAt, route: this.route, serverTime: now,
-      players: this.players.map(({ idx, name, team, skin, bot }) => ({ idx, name, team, skin, bot })),
+      players: this.players.map(({ idx, name, team, skin, bot, npc }) => ({ idx, name, team, skin, bot, npc })),
       gone: this.players.filter((q) => q.gone || !q.alive).map((q) => q.idx),
       markers: this.players.filter((q) => q.team === p.team && q.marker).map((q) => ({ idx: q.idx, ...q.marker! })),
       loot: this.loot.all(),
       chests: [...this.chests.values()].map(chestView),
       alive: this.alive, teamsAlive: this.teamsAlive(),
       kills: this.players.map((q) => q.kills),
+      storm: this.storm ? { t0: this.storm.t0, circles: this.storm.circles } : null,
+      vaultsOpen: [...this.world.openVaults!],
+      beacons: this.beaconReady,
     };
     sock.json({ t: 'game_init', init });
-    if (!p.alive && p.place) sock.json({ t: 'result', result: { place: p.place, kills: p.kills, killer: null, win: false, teams: this.match.teams.length } });
+    if (!p.alive && p.place) sock.json({ t: 'result', result: this.resultFor(p, null, p.place === 1) });
+    if (p.cards.length) sock.json({ t: 'cards', cards: p.cards });
   }
 
   disconnect(userId: string) {
@@ -328,7 +372,10 @@ export class MatchInstance {
   private damage(q: P, amount: number, by: P | null, cause: FeedCause, weapon: number, head = false, at?: Vec3) {
     if (!q.alive || q.s.mode === PM.Dead || q.s.mode === PM.Bus) return;
     const knockedBefore = q.s.mode === PM.Knocked;
-    const [sh, hp] = applyDamage(q.s, amount, cause === 'fall' || cause === 'water');
+    if (q.npc) amount *= q.armor;
+    const [sh, hp] = applyDamage(q.s, amount, cause === 'fall' || cause === 'water' || cause === 'storm');
+    q.stats.taken += sh + hp;
+    if (by && by !== q && by.team !== q.team) by.stats.damage += sh + hp;
     if (sh + hp <= 0) return;
     q.lastHit = { by: by ? by.idx : -1, at: this.now, w: weapon, cause };
     if (by && by !== q) {
@@ -356,7 +403,7 @@ export class MatchInstance {
       return;
     }
     const up = this.mates(q).filter((m) => m.alive && m.s.mode !== PM.Knocked && m.s.mode !== PM.Dead);
-    if (this.dbno && up.length > 0 && q.lastHit?.cause !== 'left') {
+    if (this.dbno && !q.npc && up.length > 0 && q.lastHit?.cause !== 'left') {
       this.exitVehicle(q);
       q.s.mode = PM.Knocked; q.s.knock = 100; q.s.shield = 0; q.s.hp = 0; q.s.act = ACT.None;
       q.s.reload = 0; q.s.use = 0; q.revive = null; q.bleedAcc = 0;
@@ -378,7 +425,25 @@ export class MatchInstance {
     const killer = recent >= 0 && recent !== q.idx ? recent : q.knockedBy >= 0 ? q.knockedBy : -1;
     this.exitVehicle(q);
     this.cancelRevivesOn(q);
-    if (this.phase !== 'warmup') this.loot.dropInventory(q.s);
+    if (q.npc) {
+      // bosses and guards: drop their gear (and the boss's keycard), no placement, no elimination credit
+      this.loot.dropInventory(q.s);
+      if (q.npc === 'boss') this.loot.drop(ITEM.keycard, 0, 1, q.s.x, q.s.y, q.s.z, 9);
+      this.resetInventory(q.s);
+      q.s.mode = PM.Dead; q.alive = false; q.s.hp = 0; q.s.shield = 0;
+      this.feed(q, killer, false, cause);
+      if (q.npc === 'boss') for (const p of this.players) if (p.sock && (p.s.x - q.s.x) ** 2 + (p.s.z - q.s.z) ** 2 < 150 * 150) p.sock.json({ t: 'boss', idx: q.idx, name: q.name, hp: 0 });
+      return;
+    }
+    q.stats.survivedS = Math.round((this.now - Math.max(this.playAt || this.now, q.aliveSince)) / 1000);
+    if (this.phase !== 'warmup') {
+      this.loot.dropInventory(q.s);
+      // carried recall cards fall where you fell; and your own card drops for your squad
+      const team = this.players.filter((m) => m.team === q.team && m !== q);
+      for (const c of q.cards) this.dropCard(c, q.s.x, q.s.y, q.s.z);
+      q.cards = [];
+      if (this.dbno && team.some((m) => m.alive && m.s.mode !== PM.Knocked && m.s.mode !== PM.Dead)) this.dropCard(q.idx, q.s.x, q.s.y, q.s.z);
+    }
     this.resetInventory(q.s);
     q.s.mode = PM.Dead; q.s.act = ACT.None; q.s.hp = 0; q.s.shield = 0; q.s.knock = 0; q.s.vx = q.s.vz = 0;
     q.alive = false; q.revive = null;
@@ -392,23 +457,32 @@ export class MatchInstance {
       const place = this.teamsAlive() + 1;
       for (const m of team) {
         m.place = place;
-        if (m.sock) m.sock.json({ t: 'result', result: { place, kills: m.kills, killer: killer >= 0 ? this.players[killer].name : null, win: false, teams: this.match.teams.length } });
+        if (m.alive === false && m.stats.survivedS === 0) m.stats.survivedS = Math.round((this.now - Math.max(this.playAt || this.now, m.aliveSince)) / 1000);
+        if (m.sock) m.sock.json({ t: 'result', result: this.resultFor(m, killer >= 0 ? this.players[killer].name : null, false) });
       }
     }
     this.broadcast({ t: 'alive', alive: this.alive, teams: this.teamsAlive() });
     this.checkVictory();
   }
 
+  private resultFor(p: P, killer: string | null, win: boolean) {
+    return {
+      place: p.place || 1, kills: p.kills, killer, win, teams: this.match.teams.length, stats: { ...p.stats, distance: Math.round(p.stats.distance), damage: Math.round(p.stats.damage), taken: Math.round(p.stats.taken), healed: Math.round(p.stats.healed) },
+      squad: this.players.filter((m) => m.team === p.team).map((m) => ({ name: m.name, kills: m.kills, you: m === p })),
+    };
+  }
+
   private checkVictory() {
     if (this.phase === 'warmup' || this.endAt) return;
-    const alive = this.players.filter((p) => p.alive && !p.gone);
+    const alive = this.players.filter((p) => p.alive && !p.gone && !p.npc);
     const teams = new Set(alive.map((p) => p.team));
     if (teams.size > 1) return;
     this.endAt = this.now + 15_000;
     for (const p of this.players) {
       if (!teams.has(p.team)) continue;
       p.place = 1;
-      if (p.sock) p.sock.json({ t: 'result', result: { place: 1, kills: p.kills, killer: null, win: true, teams: this.match.teams.length } });
+      if (p.alive) p.stats.survivedS = Math.round((this.now - Math.max(this.playAt || this.now, p.aliveSince)) / 1000);
+      if (p.sock) p.sock.json({ t: 'result', result: this.resultFor(p, null, true) });
     }
   }
 
@@ -420,6 +494,7 @@ export class MatchInstance {
   private stepRevives(dt: number) {
     for (const p of this.players) {
       if (!p.revive) continue;
+      if (p.revive.target <= -1000) { this.stepRecall(p, dt); continue; }
       const q = this.players[p.revive.target];
       const ok = p.alive && p.s.mode === PM.Walk && (p.s.keys & K.USE) && q.alive && q.s.mode === PM.Knocked && Math.hypot(q.s.x - p.s.x, q.s.z - p.s.z) < 3.2;
       if (!ok) { p.revive = null; p.s.act = ACT.None; continue; }
@@ -427,6 +502,7 @@ export class MatchInstance {
       if (p.revive.t >= REVIVE_S) {
         p.revive = null; p.s.act = ACT.None;
         q.s.mode = PM.Walk; q.s.hp = 30; q.s.knock = 0; q.knockedBy = -1;
+        p.stats.revives++;
         this.broadcast({ t: 'ev', ev: [{ e: 'revived', i: q.idx, by: p.idx }] }, q.team);
       }
     }
@@ -440,8 +516,40 @@ export class MatchInstance {
     }
   }
 
+  // ------------------------------------------------------------ recall cards + beacons
+  private dropCard(idx: number, x: number, y: number, z: number) {
+    const it = this.loot.drop(ITEM.card, idx, 1, x, y, z, 5);
+    this.cardExpiry.set(it.id, this.now + RECALL.cardLifeS * 1000);
+  }
+
+  private stepRecall(p: P, dt: number) {
+    const bi = -1000 - p.revive!.target, b = this.world.beacons[bi];
+    const ok = p.alive && p.s.mode === PM.Walk && (p.s.keys & K.USE) && p.cards.length && b && Math.hypot(b.x - p.s.x, b.z - p.s.z) < 3.4 && this.now >= this.beaconReady[bi];
+    if (!ok) { p.revive = null; p.s.act = ACT.None; return; }
+    p.revive!.t += dt;
+    if (p.revive!.t < RECALL.holdS) return;
+    p.revive = null; p.s.act = ACT.None;
+    for (const idx of p.cards) {
+      const q = this.players[idx];
+      if (q.gone || q.alive || q.team !== p.team) continue;
+      const s = q.s;
+      q.alive = true; q.place = 0; q.lastHit = null; q.knockedBy = -1; q.spec = -1; q.aliveSince = this.now;
+      this.resetInventory(s);
+      addToInventory(s, ITEM.pistol, 0, 1, 16); s.ammo[0] = 36;
+      s.mode = PM.Fall; s.grounded = false; s.hp = 100; s.shield = 0; s.knock = 0; s.act = ACT.None;
+      s.x = b.x + (this.rnd() - 0.5) * 12; s.z = b.z + (this.rnd() - 0.5) * 12; s.y = b.y + RECALL.dropHeight; s.vx = s.vz = 0; s.vy = -10;
+      this.broadcast({ t: 'ev', ev: [{ e: 'recalled', i: q.idx, by: p.idx }] }, p.team);
+    }
+    p.cards = [];
+    p.sock?.json({ t: 'cards', cards: [] });
+    this.beaconReady[bi] = this.now + RECALL.cooldownS * 1000;
+    this.broadcast({ t: 'beacons', ready: this.beaconReady });
+    this.broadcast({ t: 'alive', alive: this.alive, teams: this.teamsAlive() });
+  }
+
   /** Revive progress (0..1) for HUD, if this player is reviving or being revived. */
   reviveProgress(p: P): number {
+    if (p.revive && p.revive.target <= -1000) return p.revive.t / RECALL.holdS;
     if (p.revive) return p.revive.t / REVIVE_S;
     const r = this.players.find((x) => x.revive?.target === p.idx);
     return r ? r.revive!.t / REVIVE_S : 0;
@@ -461,7 +569,22 @@ export class MatchInstance {
     // 2) get in a car (bots don't drive: their E presses are for loot and revives)
     const car = p.bot ? undefined : this.vehicles.find((v) => !v.dead && Math.hypot(v.x - s.x, v.z - s.z) < 3.8 && Math.abs(v.y - s.y) < 2.5 && v.seats.includes(-1));
     if (car) return this.enterVehicle(p, car);
-    // 3) open the chest / pick up the item you're looking at (or the nearest)
+    // 3) a vault door, if you have the keycard
+    const kc = s.inv.findIndex((sl) => sl.id === ITEM.keycard);
+    if (kc >= 0) for (const v of this.world.vaults) {
+      if (this.world.openVaults!.has(v.id) || Math.hypot(v.door.x - s.x, v.door.z - s.z) > 2.8) continue;
+      this.world.openVaults!.add(v.id);
+      s.inv[kc] = emptySlot();
+      this.broadcast({ t: 'vaults', open: [...this.world.openVaults!] });
+      this.emitNear(v.x, v.z, 200, { e: 'vault', id: v.id, by: p.idx });
+      return;
+    }
+    // 4) a recall beacon, if you're carrying cards
+    if (p.cards.length) {
+      const bi = this.world.beacons.findIndex((b) => Math.hypot(b.x - s.x, b.z - s.z) < 3.4);
+      if (bi >= 0 && this.now >= this.beaconReady[bi]) { p.revive = { target: -1000 - bi, t: 0 }; s.act = ACT.Reviving; s.vx = s.vz = 0; return; }
+    }
+    // 5) open the chest / pick up the item you're looking at (or the nearest)
     const fx = -Math.sin(s.yaw), fz = -Math.cos(s.yaw);
     const score = (x: number, z: number) => {
       const dx = x - s.x, dz = z - s.z, d = Math.hypot(dx, dz);
@@ -470,6 +593,7 @@ export class MatchInstance {
     let best: LootItem | null = null, bestScore = Infinity;
     for (const it of this.loot.near(s.x, s.z, 2.6)) {
       if (Math.abs(it.y - s.y) > 2) continue;
+      if (it.item === ITEM.card && this.players[it.r]?.team !== p.team) continue; // only teammates can carry a card
       const sc = score(it.x, it.z);
       if (sc < bestScore) { bestScore = sc; best = it; }
     }
@@ -486,8 +610,9 @@ export class MatchInstance {
 
   private openChest(p: P, c: ChestEnt) {
     c.open = true;
+    p.stats.chests++;
     this.chestOpens.push(c.id);
-    rollContainer(this.loot, this.rnd, c.k, c.x, c.y, c.z, c.face);
+    rollContainer(this.loot, this.rnd, c.rich ? CHEST_KIND.Supply : c.k, c.x, c.y, c.z, c.face);
     this.emitNear(c.x, c.z, 120, { e: 'opened', id: c.id, by: p.idx });
   }
 
@@ -519,6 +644,14 @@ export class MatchInstance {
   private pickUp(p: P, it: LootItem) {
     const s = p.s, def = ITEMS[it.item];
     if (!def) return;
+    if (def.kind === 'card') {
+      const q = this.players[it.r];
+      if (!q || q.team !== p.team || q.alive || q.gone) return;
+      if (!p.cards.includes(it.r)) p.cards.push(it.r);
+      this.loot.remove(it.id); this.cardExpiry.delete(it.id);
+      p.sock?.json({ t: 'cards', cards: p.cards });
+      return;
+    }
     if (def.kind === 'forage') {
       s.hp = Math.min(100, s.hp + def.heal);
       s.shield = Math.min(100, s.shield + def.shield);
@@ -675,12 +808,15 @@ export class MatchInstance {
     // warm-up loot goes away; the island gets its loot
     for (const it of this.loot.all()) this.loot.remove(it.id);
     for (const c of this.chests.values()) if (!c.open) { c.open = true; this.chestOpens.push(c.id); }
+    // vault chests (rich loot) sit behind the locked door
+    for (const v of this.world.vaults) for (const sp of v.chests) this.addChest({ id: this.nextChest++, k: CHEST_KIND.Chest, x: sp.x, y: sp.y, z: sp.z, face: sp.face, open: false, rich: true });
     for (const c of spawnIslandLoot(this.world, this.loot, this.rnd, () => this.nextChest++)) this.addChest(c);
     const teamTargets = new Map<number, { x: number; z: number }>();
     for (const p of this.players) {
       if (p.gone) continue;
+      if (p.npc) { this.spawnNpc(p); continue; }
       this.exitVehicle(p);
-      p.alive = true; p.revive = null; p.lastHit = null; p.knockedBy = -1; p.kills = 0;
+      p.alive = true; p.stats = newStats(); p.aliveSince = now; p.cards = []; p.revive = null; p.lastHit = null; p.knockedBy = -1; p.kills = 0;
       const s = p.s;
       this.resetInventory(s);
       s.hp = 100; s.shield = 0; s.knock = 0; s.act = ACT.None;
@@ -701,6 +837,18 @@ export class MatchInstance {
     this.broadcast({ t: 'alive', alive: this.alive, teams: this.teamsAlive() });
   }
 
+  private spawnNpc(p: P) {
+    const s = p.s, post = p.post!;
+    this.resetInventory(s);
+    s.x = post.x; s.z = post.z; s.y = surfaceAt(this.world, s.x, s.z, 500);
+    s.mode = PM.Walk; s.grounded = true; s.vx = s.vy = s.vz = 0; s.act = ACT.None;
+    s.hp = 100; s.shield = p.npc === 'boss' ? 100 : 50; s.yaw = this.rnd() * 6.28;
+    if (p.npc === 'boss') { addToInventory(s, ITEM.ar, 4, 1, 30); addToInventory(s, ITEM.pump, 4, 1, 5); }
+    else addToInventory(s, this.rnd() < 0.5 ? ITEM.smg : ITEM.ar, 2, 1, 30);
+    s.ammo = [999, 999, 999, 999, 0];
+    p.alive = true; p.lastHit = null;
+  }
+
   private eject(p: P, now: number) {
     if (p.s.mode !== PM.Bus || !this.route) return;
     const b = busPos(this.route, now);
@@ -717,6 +865,7 @@ export class MatchInstance {
     return {
       shot: (e) => this.resolveShot(p, e, view),
       thrown: (e) => this.onThrow(p, e),
+      used: (item) => { const d = consumableDef(item); if (d) p.stats.healed += d.heal + d.shield; },
       fallDamage: (dmg) => {
         p.lastHit = { by: p.lastHit && this.now - p.lastHit.at < 10_000 ? p.lastHit.by : -1, at: this.now, w: 0, cause: 'fall' };
         p.ev.push({ e: 'hurt', d: dmg, from: null });
@@ -738,6 +887,31 @@ export class MatchInstance {
     if (s.hp < hpBefore || (s.hp <= 0 && s.mode === PM.Walk)) this.checkDown(p);
   }
 
+  private stepStorm(dt: number) {
+    if (!this.storm || this.phase !== 'play') return;
+    this.stormAcc += dt;
+    if (this.stormAcc < 1) return;
+    this.stormAcc -= 1;
+    const st = stormAt(this.storm, this.now);
+    for (const q of this.players) {
+      if (!q.alive || q.npc || q.gone || q.s.mode === PM.Bus || q.s.mode === PM.Dead) continue;
+      if (!inStorm(st, q.s.x, q.s.z)) continue;
+      q.ev.push({ e: 'storm_hurt', d: st.dps });
+      q.lastHit = q.lastHit && this.now - q.lastHit.at < 5000 && q.lastHit.cause !== 'storm' ? q.lastHit : { by: -1, at: this.now, w: 0, cause: 'storm' };
+      this.damage(q, st.dps, null, 'storm', 0);
+    }
+  }
+
+  onSpecNext(userId: string, dir: number) {
+    const p = this.byId.get(userId);
+    if (!p || p.s.mode !== PM.Dead) return;
+    const cands = this.players.filter((q) => q.alive && !q.gone && !q.npc).sort((a, b) => Number(b.team === p.team) - Number(a.team === p.team) || a.idx - b.idx);
+    if (!cands.length) return;
+    const i = cands.findIndex((q) => q.idx === p.spec);
+    p.spec = cands[(((i + (dir >= 0 ? 1 : -1)) % cands.length) + cands.length) % cands.length].idx;
+    p.sock?.json({ t: 'spec', idx: p.spec });
+  }
+
   private stepBot(p: P, steps: number) {
     const b = p.brain!, s = p.s, now = this.now;
     const mate = b.follow >= 0 ? this.players[b.follow] : null;
@@ -751,8 +925,8 @@ export class MatchInstance {
       if (now >= b.jumpAt) this.eject(p, now);
       return;
     }
-    const home = this.phase === 'warmup' ? SPAWN_ISLAND : following && b.enemy < 0 ? mate!.s : b.target;
-    const roam = this.phase === 'warmup' ? 42 : following ? 14 : 32;
+    const home = p.post ?? (this.phase === 'warmup' ? SPAWN_ISLAND : following && b.enemy < 0 ? mate!.s : b.target);
+    const roam = p.post ? 6 : this.phase === 'warmup' ? 42 : following ? 14 : 32;
     const cmd = botInput(s, b, this.botWorld(p), home, roam);
     for (let i = 0; i < steps; i++) {
       this.runCmd(p, cmd, now);
@@ -765,6 +939,14 @@ export class MatchInstance {
   private botWorld(p: P): BotWorld {
     return {
       w: this.world, loot: this.loot, now: this.now, combat: this.phase !== 'warmup',
+      storm: this.storm && this.phase === 'play' ? stormAt(this.storm, this.now) : null,
+      cards: p.cards.length,
+      beaconNear: (x, z) => {
+        let best: { x: number; z: number } | null = null, bd = 700;
+        this.world.beacons.forEach((b, i) => { const d = Math.hypot(b.x - x, b.z - z); if (d < bd && this.now >= this.beaconReady[i]) { bd = d; best = b; } });
+        return best;
+      },
+      isMateCard: (r) => this.players[r]?.team === p.team && !this.players[r].alive,
       enemiesNear: (x, z, r) => {
         const out: BotTarget[] = [];
         for (const q of this.players) {
@@ -816,9 +998,11 @@ export class MatchInstance {
       const b = busPos(this.route, now);
       for (const p of this.players) if (p.s.mode === PM.Bus) { p.s.x = b.x; p.s.y = b.y; p.s.z = b.z; }
       if (now >= this.route.ejectAt) for (const p of this.players) if (!p.gone) this.eject(p, now);
-      if (now >= this.route.t1) { this.phase = 'play'; this.playAt = now; this.broadcast({ t: 'game_phase', phase: 'play', route: null, serverTime: now }); }
+      if (now >= this.route.t1) { this.phase = 'play'; this.playAt = now; this.broadcast({ t: 'game_phase', phase: 'play', route: null, serverTime: now });
+        this.storm = makeStormPlan(this.world, Math.floor(this.rnd() * 2 ** 31), now);
+        this.broadcast({ t: 'storm', plan: { t0: this.storm.t0, circles: this.storm.circles } }); }
     }
-    if (this.phase === 'warmup') for (const p of this.players) if (p.s.mode === PM.Dead && !p.gone && now >= p.respawnAt) this.spawnOnWarmupIsland(p);
+    if (this.phase === 'warmup') for (const p of this.players) if (p.s.mode === PM.Dead && !p.gone && !p.npc && now >= p.respawnAt) this.spawnOnWarmupIsland(p);
 
     this.botAcc += (elapsed * SIM_HZ) / 1000;
     const botSteps = Math.min(8, Math.floor(this.botAcc));
@@ -832,6 +1016,21 @@ export class MatchInstance {
     this.stepProjectiles(dt);
     this.stepRevives(dt);
     this.stepSupply(now);
+    this.stepStorm(dt);
+    for (const [id, until] of this.cardExpiry) if (now >= until) { this.loot.remove(id); this.cardExpiry.delete(id); }
+    for (const p of this.players) {
+      if (!p.alive || p.npc || this.phase === 'warmup') { p.lastPos = null; continue; }
+      if (p.lastPos && (p.s.mode === PM.Walk || p.s.mode === PM.Drive)) p.stats.distance += Math.min(20, Math.hypot(p.s.x - p.lastPos.x, p.s.z - p.lastPos.z));
+      p.lastPos = { x: p.s.x, z: p.s.z };
+    }
+    this.bossAcc += dt;
+    if (this.bossAcc >= 0.5) {
+      this.bossAcc = 0;
+      for (const b of this.players) {
+        if (b.npc !== 'boss' || !b.alive) continue;
+        for (const p of this.players) if (p.sock && !p.npc && (p.s.x - b.s.x) ** 2 + (p.s.z - b.s.z) ** 2 < 110 * 110) p.sock.json({ t: 'boss', idx: b.idx, name: b.name, hp: (b.s.hp + b.s.shield) / 200 });
+      }
+    }
     for (const p of this.players) if (p.alive && !p.gone) this.autoPickup(p);
     // anyone who swam off the edge of the world
     for (const p of this.players) if (p.alive && p.s.mode === PM.Walk && p.s.y < -20) { p.lastHit = { by: -1, at: now, w: 0, cause: 'water' }; applyDamage(p.s, 999, true); this.checkDown(p); }
@@ -853,11 +1052,12 @@ export class MatchInstance {
 
   private pickSpectate(p: P) {
     if (p.s.mode !== PM.Dead || this.phase === 'warmup') return -1;
+    if (p.spec >= 0 && this.players[p.spec].alive && !this.players[p.spec].npc) return p.spec;
     const mate = this.mates(p).find((q) => q.alive && !q.gone);
     if (mate) return mate.idx;
     const killer = p.lastHit?.by ?? -1;
     if (killer >= 0 && this.players[killer].alive) return killer;
-    const any = this.players.find((q) => q.alive && !q.gone);
+    const any = this.players.find((q) => q.alive && !q.gone && !q.npc);
     return any ? any.idx : -1;
   }
 
@@ -877,7 +1077,7 @@ export class MatchInstance {
       visible.push(show);
       if (!show) continue;
       const held = s.inv[s.slot];
-      const flags = (s.grounded ? EF.GROUNDED : 0) | (s.keys & K.ADS ? EF.ADS : 0) | (s.keys & K.CROUCH ? EF.CROUCH : 0) | (s.use > 0 ? EF.USING : 0) | (s.reload > 0 ? EF.RELOADING : 0) | (s.keys & K.SPRINT && Math.hypot(s.vx, s.vz) > 6 ? EF.SPRINT : 0);
+      const flags = (s.grounded ? EF.GROUNDED : 0) | (s.keys & K.ADS ? EF.ADS : 0) | (s.keys & K.CROUCH ? EF.CROUCH : 0) | (s.use > 0 ? EF.USING : 0) | (s.reload > 0 ? EF.RELOADING : 0) | (s.keys & K.SPRINT && Math.hypot(s.vx, s.vz) > 6 ? EF.SPRINT : 0) | ((s.emote & 3) << EF_EMOTE_SHIFT);
       encodeEnt({ idx: q.idx, x: s.x, y: s.y, z: s.z, yaw: s.mode === PM.Drive ? s.vh : s.yaw, pitch: s.pitch, mode: s.mode, flags, item: held?.id ?? 0, rarity: held?.r ?? 0 }, block, count * ENT_BYTES);
       count++;
     }
@@ -971,4 +1171,5 @@ export class Games {
   }
   onBinary(userId: string, view: DataView) { this.byUser.get(userId)?.onBinary(userId, view); }
   onMarker(userId: string, x?: number, z?: number) { this.byUser.get(userId)?.onMarker(userId, x, z); }
+  onSpecNext(userId: string, dir: number) { this.byUser.get(userId)?.onSpecNext(userId, dir); }
 }

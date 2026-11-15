@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import {
-  ACT, DROP, EF, ITEMS, K, PM, SIM_DT, busPos, clamp, currentSpread, decodeSnapshot, encodeInputs, getWorld, raycastWorld, seatWorld, stepPlayer, surfaceAt, terrainAt, weaponDef,
+  ACT, DROP, EF, EF_EMOTE_SHIFT, ITEM, ITEMS, K, PM, SIM_DT, busPos, clamp, currentSpread, decodeSnapshot, encodeInputs, getWorld, raycastWorld, seatWorld, stepPlayer, surfaceAt, terrainAt, weaponDef,
   type EntSnap, type GameEvent, type GameInit, type GamePhase, type InputCmd, type MatchFoundView, type PlayerState, type RouteView, type ServerMsg, type SimEvents, type UserView, type World,
 } from '@dropzone/shared';
+import { STORM_PHASES } from '@dropzone/shared';
 import type { Net } from '../net';
 import { SKINS } from '../lobby/character';
 import { h, toast } from '../ui/dom';
@@ -11,6 +12,8 @@ import { CarRenderer } from './cars';
 import { CombatHud } from './combathud';
 import { Effects } from './effects';
 import { LootRenderer } from './lootview';
+import { StormView } from './storm3d';
+import { settings, settingsPanel, onSettings } from '../settings';
 import { ChestRenderer } from './chests3d';
 import { buildDropship } from './dropship';
 import { Hud, type HudView } from './hud';
@@ -22,12 +25,13 @@ const INTERP_MS = 100;
 interface Sample { t: number; x: number; y: number; z: number; yaw: number; pitch: number; mode: number; flags: number; item: number; rarity: number }
 
 function pickQuality(): Quality {
-  let name = new URLSearchParams(location.search).get('q');
-  try { name ??= localStorage.getItem('dz.quality'); } catch { /* storage blocked */ }
-  return { ...(name === 'low' ? QUALITY.low : QUALITY.high) };
+  const name = new URLSearchParams(location.search).get('q') ?? settings.graphics;
+  if (name === 'low') return { ...QUALITY.low };
+  if (name === 'medium') return { ...QUALITY.high, shadows: false, treeRange: 650, pixelRatio: 1.25, grass: 5000 };
+  return { ...QUALITY.high };
 }
 
-export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onExit: () => void) {
+export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onExit: (playAgain?: boolean) => void) {
   const stage = h('div.stage');
   const myTeam = found.teams.find((t) => t.id === found.yourTeam);
   const loading = h('div.game-loading',
@@ -57,15 +61,18 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
   net.onBinary = (v) => running?.onSnapshot(v);
   net.send({ t: 'game_join' });
 
-  function leave(tellServer: boolean) {
+  let playAgain = false;
+  function leave(tellServer: boolean, again = playAgain) {
     if (disposed) return;
     if (tellServer) net.send({ t: 'leave_match' });
-    onExit();
+    onExit(again);
   }
 
   // ------------------------------------------------------------------ the running match
   function start(init: GameInit) {
-    const world: World = getWorld(init.seed);
+    // this match's own view of the island (vault doors open per match)
+    const world: World = Object.create(getWorld(init.seed)) as World;
+    world.openVaults = new Set(init.vaultsOpen);
     const q = pickQuality();
     const roster = init.players, selfIdx = init.you;
     const team = roster.filter((r) => r.team === roster[selfIdx].team).map((r) => r.idx);
@@ -97,6 +104,20 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
     chestR.set(init.chests);
     let aliveCount = init.alive, specIdx = -1, revive = { p: 0, at: 0 };
     const kills = [...init.kills];
+    const storm = new StormView(scene);
+    if (init.storm) storm.plan = { ...init.storm, phases: STORM_PHASES };
+    let cards: number[] = [], beaconReady = [...init.beacons];
+    const myTeam = roster[selfIdx].team;
+    island.props.setVaults(world.openVaults);
+    let settingsEl: HTMLElement | null = null;
+    const openSettings = () => {
+      if (settingsEl) return;
+      settingsEl = settingsPanel(() => { settingsEl?.remove(); settingsEl = null; });
+      root.append(settingsEl);
+    };
+    const offSettings = onSettings(() => { fpsShown(); });
+    const fpsShown = () => root.classList.toggle('show-fps', settings.showFps);
+    fpsShown();
 
     // squad map markers: a light beam in the world
     const beams = new Map<number, THREE.Mesh>();
@@ -118,13 +139,15 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
 
     const input = new Input(renderer.domElement);
     const hud = new Hud(world, island.mainColors, roster, selfIdx, {
-      onLeave: () => leave(true),
+      onLeave: () => leave(true, false),
+      onSettings: () => openSettings(),
       onResume: () => { hud.setMenu(false); input.lock(); },
       onMarker: (x, z) => net.send(x === undefined ? { t: 'game_marker' } : { t: 'game_marker', x, z }),
       onCloseMap: () => toggleMap(false),
     });
     const combat = new CombatHud(roster, selfIdx, {
-      onLeave: () => leave(true),
+      onLeave: (again) => leave(true, !!again),
+      onSpecNext: (dir) => net.send({ t: 'spec_next', dir }),
       onSpectate: () => input.lock(),
     });
     root.append(hud.el, combat.el);
@@ -135,8 +158,9 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
     }
     let lockLostAt = 0;
     input.onAction = (a) => {
-      if (a === 'map') { if (hud.menuOpen) return; toggleMap(); }
+      if (a === 'map') { if (hud.menuOpen || settingsEl) return; toggleMap(); }
       else if (a === 'menu') {
+        if (settingsEl) { settingsEl.remove(); settingsEl = null; return; }
         if (hud.mapOpen) return toggleMap(false);
         if (input.locked) return input.unlock(); // -> onLockChange opens the menu
         // Esc while locked is consumed by the browser (it just unlocks); see onLockChange
@@ -191,6 +215,11 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       else if (m.t === 'game_marker') setMarker(m.idx, m.x, m.z);
       else if (m.t === 'loot') { lootR.remove(m.del); lootR.add(m.add); }
       else if (m.t === 'chests') { chestR.add(m.add); chestR.open(m.open); }
+      else if (m.t === 'storm') storm.plan = { ...m.plan, phases: STORM_PHASES };
+      else if (m.t === 'cards') cards = m.cards;
+      else if (m.t === 'beacons') beaconReady = m.ready;
+      else if (m.t === 'vaults') { world.openVaults = new Set(m.open); island.props.setVaults(world.openVaults); }
+      else if (m.t === 'boss') combat.boss(m.name, m.hp);
       else if (m.t === 'alive') aliveCount = m.alive;
       else if (m.t === 'spec') specIdx = m.idx;
       else if (m.t === 'result') { input.unlock(); combat.showResult(m.result); }
@@ -226,6 +255,8 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
         case 'boom': fx.removeProjectile(e.id); fx.explosion(tmpA.set(...e.p), e.r); break;
         case 'car_boom': fx.explosion(tmpA.set(...e.p), 6); break;
         case 'supply': toast('Supply drop incoming! Check your map.', 'info'); break;
+        case 'recalled': toast(e.i === selfIdx ? `${roster[e.by]?.name} brought you back!` : `${roster[e.by]?.name} recalled ${roster[e.i]?.name}`, 'success'); break;
+        case 'vault': toast(`${roster[e.by]?.name ?? 'Someone'} opened a vault!`, 'info'); break;
         case 'feed':
           combat.feedLine(e.k, e.v, e.w, e.knock, e.cause);
           if (!e.knock && e.k >= 0 && e.k !== e.v) kills[e.k] = (kills[e.k] ?? 0) + 1;
@@ -305,7 +336,8 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
 
     // ---------------------------------------------------------------- render
     const selfPos = new THREE.Vector3(), camPos = new THREE.Vector3(), pivot = new THREE.Vector3(), dir = new THREE.Vector3(), proj = new THREE.Vector3();
-    let camDist = 4.3, shoulder = 0.75, fov = 70;
+    let camDist = 4.3, shoulder = 0.75, fov = settings.fov, emoteSwing = 0;
+    input.onSpec = (dir) => net.send({ t: 'spec_next', dir });
     let acc = 0, last = performance.now(), time = 0, fps = 60, slowFor = 0;
     let debugCam: { x: number; y: number; z: number; yaw: number; pitch: number } | null = null;
 
@@ -386,7 +418,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
         me.dive = clamp((-input.pitch - 0.2) / 0.9, 0, 1);
         const held = pred.inv[pred.slot];
         me.item = held.id; me.rarity = held.r;
-        me.flags = (pred.keys & K.SPRINT && me.speed > 6 ? EF.SPRINT : 0) | (pred.keys & K.CROUCH ? EF.CROUCH : 0) | (pred.use > 0 ? EF.USING : 0) | (pred.keys & K.ADS ? EF.ADS : 0);
+        me.flags = (pred.keys & K.SPRINT && me.speed > 6 ? EF.SPRINT : 0) | (pred.keys & K.CROUCH ? EF.CROUCH : 0) | (pred.use > 0 ? EF.USING : 0) | (pred.keys & K.ADS ? EF.ADS : 0) | ((pred.emote & 3) << EF_EMOTE_SHIFT);
         me.visible = true;
         if (pred.mode === PM.Drive) {
           const steer = ((input.keys & K.R) ? 1 : 0) - ((input.keys & K.L) ? 1 : 0);
@@ -406,7 +438,10 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
 
       // camera
       const watching = dead && specIdx >= 0 && st[specIdx].visible;
-      const camYaw = watching ? st[specIdx].yaw : pred?.mode === PM.Drive ? input.yaw : input.yaw;
+      // while you emote the camera swings round to show you off
+      emoteSwing += (((pred?.emote ?? 0) > 0 ? Math.PI * 0.85 : 0) - emoteSwing) * (1 - Math.exp(-dt * 3));
+      const camYaw = watching ? st[specIdx].yaw : input.yaw + emoteSwing;
+      input.spectating = dead && !combat.resultOpen;
       const camPitch = watching ? -0.2 : input.pitch;
       const cp = Math.cos(camPitch);
       dir.set(-Math.sin(camYaw) * cp, Math.sin(camPitch), -Math.cos(camYaw) * cp);
@@ -431,9 +466,10 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       camera.position.copy(camPos);
       camera.lookAt(pivot.x + dir.x * 20, pivot.y + dir.y * 20, pivot.z + dir.z * 20);
       const scoped = ads && !!heldDef?.scope && camDist < 2.6;
-      const wantFov = me.mode === PM.Fall && !inBus ? 76 + me.dive * 10 : ads && heldDef ? heldDef.adsFov : 70;
+      const baseFov = settings.fov;
+      const wantFov = me.mode === PM.Fall && !inBus ? baseFov + 6 + me.dive * 10 : ads && heldDef ? heldDef.adsFov * (baseFov / 70) : baseFov;
       if (Math.abs(wantFov - fov) > 0.05) { fov += (wantFov - fov) * kCam; camera.fov = fov; camera.updateProjectionMatrix(); }
-      input.zoom = fov / 70;
+      input.zoom = fov / baseFov;
       actors.states[selfIdx].visible &&= !scoped; // hide yourself inside a scope
 
       if (debugCam) { // free camera for screenshots and debugging
@@ -444,6 +480,8 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       }
       sky.update(dt, camPos, debugCam ? camPos : selfPos);
       island.update(dt, camPos);
+      storm.update(time, serverNow);
+      if (Math.floor(time * 2) !== Math.floor((time - dt) * 2)) island.props.setBeacons(beaconReady.map((t) => serverNow >= t));
       actors.update(dt, time, camPos);
       fx.update(dt);
       lootR.update(dt, time, camPos);
@@ -471,6 +509,8 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
         })),
         locked: input.locked, fps,
         drops: [...chestR.chests.values()].filter((c) => c.k === 2 && !c.open).map((c) => ({ x: c.x, z: c.z })),
+        storm: storm.state, kills: kills[selfIdx] ?? 0,
+        beacons: world.beacons.map((b, i) => ({ x: b.x, z: b.z, ready: serverNow >= beaconReady[i] })),
       };
       hud.update(view, dt);
       if (pred) {
@@ -480,13 +520,20 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
         else if (pred.mode === PM.Walk && pred.act === ACT.None) {
           const downed = team.find((i) => i !== selfIdx && st[i].visible && st[i].mode === PM.Knocked && Math.hypot(st[i].x - pred!.x, st[i].z - pred!.z) < 2.8);
           const car = cars.nearest(pred.x, pred.y, pred.z, 3.8);
-          const it = lootR.pickTarget(pred.x, pred.y, pred.z, input.yaw);
+          let it = lootR.pickTarget(pred.x, pred.y, pred.z, input.yaw);
+          if (it && it.item === ITEM.card && roster[it.r]?.team !== myTeam) it = null; // enemies' cards are no use to you
+          const hasKey = pred.inv.some((sl) => sl.id === ITEM.keycard);
+          const vault = world.vaults.find((v) => !world.openVaults!.has(v.id) && Math.hypot(v.door.x - pred!.x, v.door.z - pred!.z) < 2.8);
+          const bi = world.beacons.findIndex((b) => Math.hypot(b.x - pred!.x, b.z - pred!.z) < 3.4);
           const chest = chestR.pickTarget(pred.x, pred.y, pred.z, input.yaw, serverNow);
           const fx2 = -Math.sin(input.yaw), fz2 = -Math.cos(input.yaw);
           const score = (x: number, z: number) => { const dx = x - pred!.x, dz = z - pred!.z, d = Math.hypot(dx, dz); return d + (1 - (d > 0.01 ? (dx * fx2 + dz * fz2) / d : 1)) * 1.5; };
           const chestWins = chest && (!it || score(chest.x, chest.z) - 0.3 < score(it.x, it.z));
           if (downed !== undefined) prompt = `Hold to revive ${roster[downed].name}`;
           else if (car !== null) prompt = 'Get in';
+          else if (vault) { prompt = hasKey ? 'Open vault' : 'Vault locked: the boss carries the keycard'; promptRarity = 4; }
+          else if (bi >= 0 && cards.length) { prompt = serverNow >= beaconReady[bi] ? `Hold to recall ${cards.map((c) => roster[c].name).join(', ')}` : `Beacon recharging (${Math.ceil((beaconReady[bi] - serverNow) / 1000)}s)`; promptRarity = 3; }
+          else if (it && it.item === ITEM.card) { prompt = `Pick up ${roster[it.r]?.name}'s recall card`; promptRarity = 3; }
           else if (chestWins) { prompt = chest!.k === 0 ? 'Open Chest' : chest!.k === 1 ? 'Search Ammo Box' : 'Open Supply Drop'; promptRarity = chest!.k === 2 ? 3 : chest!.k === 0 ? 4 : 0; }
           else if (it) { prompt = ITEMS[it.item]?.kind === 'forage' ? `Eat ${ITEMS[it.item]!.name}` : CombatHud.label(it.item, it.r, it.n); promptRarity = ITEMS[it.item]?.kind === 'weapon' ? it.r : 0; }
         }
@@ -494,7 +541,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
         combat.update({
           s: pred, spread: heldDef ? currentSpread(pred, heldDef) : 0, fov, prompt, promptRarity,
           revive: rp, reviveLabel: pred.act === ACT.Reviving ? 'REVIVING' : 'BEING REVIVED', scoped,
-          spectating: watching ? roster[specIdx].name : null, kills: kills[selfIdx] ?? 0,
+          spectating: watching ? roster[specIdx].name : null, kills: kills[selfIdx] ?? 0, cards: cards.map((c) => roster[c]?.name ?? '?'),
         }, dt);
       }
 
@@ -514,7 +561,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       input,
       set cam(c: typeof debugCam) { debugCam = c; },
       self: selfIdx, roster, actors: actors.states,
-      get pred() { return pred; }, loot: lootR, cars, fx, world, chests: chestR,
+      get pred() { return pred; }, loot: lootR, cars, fx, world, chests: chestR, combat, storm,
       get state() { return { phase, mode: pred?.mode ?? -1, hp: pred?.hp ?? 0, shield: pred?.shield ?? 0, slot: pred?.slot ?? 0, inv: pred?.inv.map((x) => x.id) ?? [], veh: pred?.veh ?? -1, alive: aliveCount, x: selfPos.x, y: selfPos.y, z: selfPos.z, grounded: pred?.grounded ?? false, fps, pending: pending.length, visible: actors.states.filter((s) => s.visible).length, doorsOpen: !!route && performance.now() + clockOffset >= route.doorsAt, err: err.length() }; },
     };
 
@@ -523,7 +570,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       dispose() {
         renderer.setAnimationLoop(null);
         removeEventListener('resize', resize);
-        input.dispose(); actors.dispose(); lootR.clear();
+        input.dispose(); actors.dispose(); lootR.clear(); offSettings();
         scene.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh || (o as THREE.InstancedMesh).isInstancedMesh) m.geometry?.dispose(); });
         renderer.dispose(); renderer.domElement.remove();
         delete (window as any).__dz;

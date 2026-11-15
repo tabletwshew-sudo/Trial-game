@@ -21,6 +21,8 @@ const itemIcon = (id: number) => {
   return '';
 };
 
+const fmtDur = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+
 export interface CombatView {
   s: PlayerState;
   spread: number;          // radians
@@ -32,6 +34,8 @@ export interface CombatView {
   scoped: boolean;
   spectating: string | null;
   kills: number;
+  /** Names of teammates whose recall cards you carry. */
+  cards: string[];
 }
 
 export class CombatHud {
@@ -55,11 +59,15 @@ export class CombatHud {
   private resultEl = h('div.result');
   private specEl = h('div.spectating');
   private killsEl = h('div.kills', h('span', '⦿'), h('b', '0'));
+  private bossEl = h('div.boss-bar', h('b'), h('div.boss-track', h('span')));
+  private bossUntil = 0;
+  private cardsEl = h('div.cards-ui');
+  private confetti: HTMLCanvasElement | null = null;
   private lastHp = 100;
   private hitTimer = 0;
   private resultShown = false;
 
-  constructor(private roster: RosterEntry[], private selfIdx: number, private cb: { onLeave: () => void; onSpectate: () => void }) {
+  constructor(private roster: RosterEntry[], private selfIdx: number, private cb: { onLeave: (again?: boolean) => void; onSpectate: () => void; onSpecNext: (dir: number) => void }) {
     const bars = h('div.vitals',
       h('div.bar.shield', this.shFill, h('div.bar-label', h('span', '🛡'), this.shText)),
       h('div.bar.health', this.hpFill, h('div.bar-label', h('span', '✚'), this.hpText)));
@@ -75,7 +83,7 @@ export class CombatHud {
       this.vignette, this.scope, this.dirs, this.nums,
       this.cross, this.hit, this.prompt, this.ring, this.center, this.knocked,
       h('div.bottom-left', bars), h('div.bottom-right', this.ammoEl, hotbar),
-      this.feed, this.killsEl, this.specEl, this.resultEl);
+      this.feed, this.killsEl, this.specEl, this.bossEl, this.cardsEl, this.resultEl);
   }
 
   // ------------------------------------------------------------ events
@@ -118,6 +126,13 @@ export class CombatHud {
     if (mine(killer) && killer !== victim && !how) this.popCenter(knock ? 'KNOCKED' : 'ELIMINATED', name(victim), knock);
   }
 
+  boss(name: string, hp: number) {
+    (this.bossEl.querySelector('b') as HTMLElement).textContent = name.toUpperCase();
+    (this.bossEl.querySelector('.boss-track span') as HTMLElement).style.width = `${Math.max(0, Math.min(1, hp)) * 100}%`;
+    this.bossEl.classList.add('show');
+    this.bossUntil = performance.now() + (hp <= 0 ? 2500 : 1500);
+  }
+
   popCenter(title: string, sub: string, knock: boolean) {
     this.center.replaceChildren(h('div.e-title', { class: knock ? 'knock' : '' }, title), h('div.e-sub', sub));
     this.center.classList.remove('show'); void this.center.offsetWidth; this.center.classList.add('show');
@@ -125,16 +140,45 @@ export class CombatHud {
 
   showResult(r: GameResult) {
     this.resultShown = true;
+    const st = r.stats;
+    const stat = (v: string | number, label: string) => h('div', h('b', String(v)), h('small', label));
     this.resultEl.replaceChildren(
       h('div.result-card', { class: r.win ? 'win' : '' },
         h('div.r-kicker', r.win ? 'VICTORY' : 'ELIMINATED'),
         h('div.r-place', h('span', '#'), String(r.place)),
         h('div.r-sub', r.win ? 'Last squad standing!' : r.killer ? `Taken out by ${r.killer}` : `out of ${r.teams} teams`),
-        h('div.r-stats', h('div', h('b', String(r.kills)), h('small', 'ELIMINATIONS')), h('div', h('b', `${r.place}/${r.teams}`), h('small', 'PLACED'))),
+        r.squad.length > 1 ? h('div.r-squad', ...r.squad.map((m) => h('div', { class: m.you ? 'you' : '' }, h('b', m.name), h('span', `${m.kills} elim${m.kills === 1 ? '' : 's'}`)))) : null,
+        h('div.r-stats',
+          stat(r.kills, 'ELIMINATIONS'), stat(st.damage, 'DAMAGE'), stat(fmtDur(st.survivedS), 'SURVIVED'),
+          stat(st.taken, 'DAMAGE TAKEN'), stat(st.healed, 'HEALED'), stat(st.revives, 'REVIVES'),
+          stat(st.chests, 'CHESTS'), stat(`${(st.distance / 1000).toFixed(1)} km`, 'TRAVELLED'), stat(`${r.place}/${r.teams}`, 'PLACED')),
         h('div.r-actions',
           !r.win ? h('button.btn.btn-ghost', { onclick: () => { this.resultEl.classList.remove('show'); this.cb.onSpectate(); } }, 'SPECTATE') : null,
-          h('button.btn.btn-primary', { onclick: () => this.cb.onLeave() }, 'BACK TO LOBBY'))));
+          h('button.btn.btn-ghost', { onclick: () => this.cb.onLeave(false) }, 'LOBBY'),
+          h('button.btn.btn-primary', { onclick: () => this.cb.onLeave(true) }, 'PLAY AGAIN'))));
     this.resultEl.classList.add('show');
+    if (r.win) this.startConfetti();
+  }
+
+  /** A burst of confetti for the winners. */
+  private startConfetti() {
+    const cv = this.confetti ?? (this.confetti = h('canvas.confetti') as HTMLCanvasElement);
+    this.resultEl.prepend(cv);
+    cv.width = innerWidth; cv.height = innerHeight;
+    const g = cv.getContext('2d')!;
+    const cols = ['#ffd23f', '#3ee6ff', '#ff5fa2', '#4ade80', '#b388ff', '#ffffff'];
+    const bits = Array.from({ length: 220 }, () => ({ x: Math.random() * cv.width, y: -Math.random() * cv.height, vx: (Math.random() - 0.5) * 2, vy: 2 + Math.random() * 3, r: Math.random() * 6, vr: (Math.random() - 0.5) * 0.3, c: cols[Math.floor(Math.random() * cols.length)], w: 6 + Math.random() * 6 }));
+    const tick = () => {
+      if (!cv.isConnected) return;
+      g.clearRect(0, 0, cv.width, cv.height);
+      for (const b of bits) {
+        b.x += b.vx; b.y += b.vy; b.r += b.vr; b.vx += (Math.random() - 0.5) * 0.1;
+        if (b.y > cv.height + 20) { b.y = -20; b.x = Math.random() * cv.width; }
+        g.save(); g.translate(b.x, b.y); g.rotate(b.r); g.fillStyle = b.c; g.fillRect(-b.w / 2, -b.w / 4, b.w, b.w / 2); g.restore();
+      }
+      requestAnimationFrame(tick);
+    };
+    tick();
   }
   get resultOpen() { return this.resultEl.classList.contains('show'); }
 
@@ -206,7 +250,19 @@ export class CombatHud {
 
     // spectating + kills
     this.specEl.classList.toggle('show', !!v.spectating && !this.resultOpen);
-    if (v.spectating) this.specEl.textContent = `SPECTATING ${v.spectating}`;
+    if (v.spectating && this.specEl.dataset.n !== v.spectating) {
+      this.specEl.dataset.n = v.spectating;
+      this.specEl.replaceChildren(
+        h('button', { onclick: () => this.cb.onSpecNext(-1) }, '◀'),
+        h('div', h('small', 'SPECTATING'), h('b', v.spectating)),
+        h('button', { onclick: () => this.cb.onSpecNext(1) }, '▶'));
+    }
+    if (this.bossUntil && performance.now() > this.bossUntil) { this.bossEl.classList.remove('show'); this.bossUntil = 0; }
+    this.cardsEl.classList.toggle('show', v.cards.length > 0 && !dead);
+    if (v.cards.length && this.cardsEl.dataset.n !== v.cards.join()) {
+      this.cardsEl.dataset.n = v.cards.join();
+      this.cardsEl.replaceChildren(h('span.card-ico'), h('div', h('b', `${v.cards.join(', ')}`), h('small', 'Take their recall card to a beacon (green ◆ on your map)')));
+    }
     (this.killsEl.querySelector('b') as HTMLElement).textContent = String(v.kills);
     if (dead && !this.resultShown) { /* result message will arrive from the server */ }
   }

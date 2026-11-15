@@ -1,5 +1,5 @@
 import { clamp } from './noise.js';
-import { BRIDGE_Y, SOLID_CELL, roadEdgeDist, solidKey, solidTop, surfaceAt, terrainAt, type World } from './world.js';
+import { BRIDGE_Y, SOLID_CELL, isOpenDoor, roadEdgeDist, solidKey, solidTop, surfaceAt, terrainAt, type World } from './world.js';
 
 /**
  * Arcade car physics. The same function moves a parked/coasting car on the server and the
@@ -28,7 +28,7 @@ function pushOut(w: World, p: { x: number; z: number }, y: number, r: number) {
   if (!list) return 0;
   let hit = 0;
   for (const o of list) {
-    if (p.x <= o.x0 - r || p.x >= o.x1 + r || p.z <= o.z0 - r || p.z >= o.z1 + r) continue;
+    if (p.x <= o.x0 - r || p.x >= o.x1 + r || p.z <= o.z0 - r || p.z >= o.z1 + r || isOpenDoor(w, o)) continue;
     if (o.y0 >= y + 1.8 || y >= solidTop(o, clamp(p.x, o.x0, o.x1), clamp(p.z, o.z0, o.z1)) - 0.8) continue;
     const cx = clamp(p.x, o.x0, o.x1), cz = clamp(p.z, o.z0, o.z1);
     let dx = p.x - cx, dz = p.z - cz;

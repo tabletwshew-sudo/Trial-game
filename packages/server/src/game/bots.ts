@@ -1,6 +1,6 @@
 import {
   ITEMS, K, PM, SPAWN_ISLAND, aimOrigin, consumableDef, layoutAt, raycastWorld, routeParamNear, weaponDef,
-  type BusRoute, type InputCmd, type Layout, type PlayerState, type World,
+  type BusRoute, type InputCmd, type Layout, type PlayerState, type StormState, type World,
 } from '@dropzone/shared';
 import type { LootStore } from './loot.js';
 
@@ -48,6 +48,8 @@ export interface BotBrain {
   ignoreLoot: Set<number>;
   firePulse: boolean;
   stuckCheck: { x: number; z: number; at: number };
+  /** Boss/guard NPCs defend a spot instead of roaming. */
+  post?: { x: number; z: number };
 }
 
 export function newBrain(rnd: () => number): BotBrain {
@@ -85,6 +87,34 @@ export interface BotWorld {
   downedMates(): BotTarget[];
   /** Closed chests / ammo boxes / landed supply drops near a point. */
   chestsNear(x: number, z: number, r: number): { id: number; x: number; y: number; z: number; k: number }[];
+  storm: StormState | null;
+  /** Recall cards this bot carries, the nearest usable beacon, and whether a card on the ground is a teammate's. */
+  cards: number;
+  beaconNear(x: number, z: number): { x: number; z: number } | null;
+  isMateCard(r: number): boolean;
+}
+
+/** Set movement keys to walk toward (dx, dz) while looking wherever yaw points (strafe-running). */
+function moveToward(cmd: InputCmd, yaw: number, dx: number, dz: number) {
+  const len = Math.hypot(dx, dz) || 1;
+  const df = (dx * -Math.sin(yaw) + dz * -Math.cos(yaw)) / len, dr = (dx * Math.cos(yaw) + dz * -Math.sin(yaw)) / len;
+  cmd.keys &= ~(K.F | K.B | K.L | K.R);
+  if (df > 0.35) cmd.keys |= K.F; else if (df < -0.35) cmd.keys |= K.B;
+  if (dr > 0.35) cmd.keys |= K.R; else if (dr < -0.35) cmd.keys |= K.L;
+}
+
+/** Should this bot be heading for the safe zone, and where to? */
+function stormGoal(s: PlayerState, bw: BotWorld, now: number): { x: number; z: number; urgent: boolean } | null {
+  const st = bw.storm;
+  if (!st) return null;
+  const outNow = Math.hypot(s.x - st.x, s.z - st.z) > st.r - 4;
+  const dNext = Math.hypot(s.x - st.next.x, s.z - st.next.z);
+  const outNext = dNext > st.next.r * 0.8;
+  const soon = st.shrinking || st.until - now < 35_000;
+  if (!outNow && !(outNext && soon)) return null;
+  // aim for a point well inside the next circle, on our side of it
+  const k = dNext > 1 ? Math.min(1, (st.next.r * 0.5) / dNext) : 0;
+  return { x: st.next.x + (s.x - st.next.x) * k, z: st.next.z + (s.z - st.next.z) * k, urgent: outNow };
 }
 
 /**
@@ -251,6 +281,7 @@ export function botInput(s: PlayerState, b: BotBrain, bw: BotWorld, home: { x: n
   }
 
   // ------------------------------------------------ fight
+  if (b.post && b.enemy >= 0 && b.lastPos && Math.hypot(b.lastPos.x - b.post.x, b.lastPos.z - b.post.z) > 55) b.enemy = -1;
   if (b.enemy >= 0 && b.lastPos) {
     const live = bw.enemiesNear(b.lastPos.x, b.lastPos.z, 12).find((e) => e.idx === b.enemy);
     const t = live && now - b.enemySeenAt < 600 ? live : null;
@@ -293,7 +324,37 @@ export function botInput(s: PlayerState, b: BotBrain, bw: BotWorld, home: { x: n
     if (s.grounded && b.rnd() < 0.015 + b.skill * 0.02) cmd.keys |= K.JUMP;
     if (b.rnd() < 0.004) cmd.keys |= K.CROUCH;
     if (!t && dist > 4) { cmd.keys |= K.F; cmd.keys &= ~K.FIRE; } // chase the last known spot
+    // caught in the storm: keep shooting but move toward safety
+    const sg = stormGoal(s, bw, now);
+    if (sg?.urgent && dist > 12) { moveToward(cmd, cmd.yaw, sg.x - s.x, sg.z - s.z); cmd.keys |= K.SPRINT; }
+    // guards stay near their post
+    if (b.post && Math.hypot(s.x - b.post.x, s.z - b.post.z) > 18) moveToward(cmd, cmd.yaw, b.post.x - s.x, b.post.z - s.z);
     return cmd;
+  }
+  if (b.post) return wanderCmd(s, b, now, b.post, 6, cmd);
+
+  // ------------------------------------------------ rotate with the storm
+  const sg = stormGoal(s, bw, now);
+  if (sg) {
+    const to = navStep(bw.w, s, sg.x, s.y, sg.z);
+    cmd.yaw = yawTo(to.x - s.x, to.z - s.z);
+    cmd.keys |= K.F | K.SPRINT;
+    if (s.grounded && b.rnd() < 0.01) cmd.keys |= K.JUMP;
+    // still heal on the move if we can
+    const hs = healSlot(s);
+    if (hs >= 0 && s.hp < 50 && !sg.urgent) { cmd.keys &= ~K.SPRINT; if (hs !== s.slot) cmd.slot = hs + 1; else cmd.keys |= K.FIRE; }
+    return cmd;
+  }
+
+  // ------------------------------------------------ carry recall cards to a beacon
+  if (bw.cards > 0) {
+    const bc = bw.beaconNear(s.x, s.z);
+    if (bc) {
+      const to = navStep(bw.w, s, bc.x, s.y, bc.z), d = Math.hypot(bc.x - s.x, bc.z - s.z);
+      cmd.yaw = yawTo(to.x - s.x, to.z - s.z);
+      if (d > 2) cmd.keys |= K.F | (d > 8 ? K.SPRINT : 0); else cmd.keys |= K.USE;
+      return cmd;
+    }
   }
 
   // ------------------------------------------------ out of combat: heal, revive, loot, roam
@@ -318,7 +379,8 @@ export function botInput(s: PlayerState, b: BotBrain, bw: BotWorld, home: { x: n
     let best = -1, bestScore = 0;
     for (const it of bw.loot.near(s.x, s.z, 45)) {
       if (b.ignoreLoot.has(it.id) || Math.abs(it.y - s.y) > 6) continue;
-      const want = ITEMS[it.item]?.kind === 'forage' ? (s.hp < 95 || s.shield < 95 ? 2 : 0) : wantItem(s, it.item, it.r);
+      const kind = ITEMS[it.item]?.kind;
+      const want = kind === 'forage' ? (s.hp < 95 || s.shield < 95 ? 2 : 0) : kind === 'card' ? (bw.isMateCard(it.r) ? 12 : 0) : kind === 'keycard' ? 0 : wantItem(s, it.item, it.r);
       if (!want) continue;
       const score = want / (1 + Math.hypot(it.x - s.x, it.z - s.z) / 10 + Math.abs(it.y - s.y) / 3);
       if (score > bestScore) { bestScore = score; best = it.id; }
