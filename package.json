@@ -1,0 +1,20 @@
+{
+  "name": "dropzone",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": ["packages/shared", "packages/server", "packages/client"],
+  "scripts": {
+    "dev": "npm run dev -w @dropzone/server & npm run dev -w @dropzone/client",
+    "build": "npm run build -w @dropzone/client && npm run build -w @dropzone/server",
+    "start": "npm run start -w @dropzone/server",
+    "test": "vitest run",
+    "typecheck": "tsc -p packages/shared && tsc -p packages/server --noEmit && tsc -p packages/client --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "5.7.2",
+    "vitest": "2.1.8",
+    "tsx": "4.19.2",
+    "@types/node": "22.10.2"
+  }
+}
