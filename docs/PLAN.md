@@ -55,7 +55,7 @@ tests/      e2e (Playwright)
 * Monorepo scaffold, build, test runner, a running server, a client that renders
 * All gameplay constants centralised in `packages/shared/src/constants.ts`
 
-### Phase 2 — Sign-in, lobby, friends, party, queue
+### Phase 2 — Sign-in, lobby, friends, party, queue ✅
 * Sign-in: username + password (bcrypt), or **guest** (no email, which suits school use)
 * Session token (JWT in memory plus refresh in an httpOnly cookie)
 * 3D lobby scene: your character plus party members standing beside you, ready-up toggle
@@ -131,6 +131,13 @@ tests/      e2e (Playwright)
 * Deploy walk-through (Render/Railway), custom domain, scaling notes
 
 ---
+
+## Art direction (owner notes, keep for Phases 3 and 5)
+* The owner cares about **detail and looks**. Every scene should feel dense, lively and polished.
+* The island is original but has the **density and layout feel of a classic BR map**: many towns
+  close together, full buildings with enterable interiors, roads linking POIs, a river and lake,
+  a mountain, farms, an industrial area, a retail strip, coastline, caves, and lots of props.
+* Toon shading with outlines, a gradient sky, puffy clouds, wind-swayed foliage, and warm key plus cool rim light.
 
 ## 3. Bot design (Phase 2–6)
 Bots are server-side agents with a **utility-AI + behaviour tree**:

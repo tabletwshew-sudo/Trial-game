@@ -3,3 +3,5 @@ dist/
 *.log
 .env
 *.sqlite
+data/
+tests/e2e/out/

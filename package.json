@@ -3,13 +3,18 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "workspaces": ["packages/shared", "packages/server", "packages/client"],
+  "workspaces": [
+    "packages/shared",
+    "packages/server",
+    "packages/client"
+  ],
   "scripts": {
     "dev": "npm run dev -w @dropzone/server & npm run dev -w @dropzone/client",
     "build": "npm run build -w @dropzone/client && npm run build -w @dropzone/server",
     "start": "npm run start -w @dropzone/server",
     "test": "vitest run",
-    "typecheck": "tsc -p packages/shared && tsc -p packages/server --noEmit && tsc -p packages/client --noEmit"
+    "typecheck": "tsc -p packages/shared && tsc -p packages/server --noEmit && tsc -p packages/client --noEmit",
+    "e2e": "node tests/e2e/lobby.e2e.cjs"
   },
   "devDependencies": {
     "typescript": "5.7.2",

@@ -3,15 +3,14 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#14123a" />
   <title>Dropzone</title>
-  <style>
-    html, body { margin: 0; height: 100%; overflow: hidden; background: #0b1530; font-family: system-ui, sans-serif; }
-    #hud { position: fixed; left: 16px; top: 16px; color: #fff; text-shadow: 0 2px 4px #0008; font-weight: 700; }
-    #hud small { display: block; font-weight: 400; opacity: .8; }
-  </style>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Nunito:wght@600;800;900&display=swap" rel="stylesheet" />
 </head>
 <body>
-  <div id="hud">DROPZONE <small id="status">connecting…</small></div>
+  <div id="app"></div>
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>
