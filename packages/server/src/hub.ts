@@ -257,6 +257,11 @@ export class Hub {
 
     switch (msg.t) {
       case 'ping': return this.send(userId, { t: 'pong', at: msg.at, serverTime: this.now() });
+      case 'sync': {
+        this.pushFriends(userId);
+        this.send(userId, { t: 'party', party: this.partyView(party) });
+        return this.send(userId, { t: 'queue', queue: this.queueView(party) });
+      }
       case 'friend_request': return this.friendRequest(me, String(msg.name ?? '').slice(0, 32));
       case 'friend_respond': return this.friendRespond(me, String(msg.userId), !!msg.accept);
       case 'friend_remove': return this.friendRemove(me, String(msg.userId));
@@ -351,6 +356,18 @@ export class Hub {
         this.pushQueue(party);
         return this.notifyFriendsOf(userId);
       }
+    }
+  }
+
+  /** The game server finished (or abandoned) a match: send everyone back to the lobby. */
+  endMatch(matchId: string) {
+    if (!this.matches.delete(matchId)) return;
+    for (const [userId, mid] of [...this.inMatch]) {
+      if (mid !== matchId) continue;
+      this.inMatch.delete(userId);
+      const p = this.partyFor(userId);
+      if (p) { this.pushParty(p); this.pushQueue(p); }
+      this.notifyFriendsOf(userId);
     }
   }
 

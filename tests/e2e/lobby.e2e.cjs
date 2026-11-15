@@ -1,11 +1,13 @@
 const { chromium } = require('playwright');
 const S = process.argv[2] || 'tests/e2e/out', URL = process.env.E2E_URL || 'http://localhost:8099/';
 require('fs').mkdirSync(S, { recursive: true });
+let dbg = () => {};
 (async () => {
   const b = await chromium.launch({ args: ['--use-gl=swiftshader', '--enable-unsafe-swiftshader'] });
   const errs = [];
   const mk = async () => { const c = await b.newContext({ viewport: { width: 1440, height: 860 }, deviceScaleFactor: 1 }); const p = await c.newPage(); p.on('pageerror', e => errs.push(e.message)); p.on('console', m => m.type() === 'error' && !/fonts\.g/.test(m.text()) && errs.push(m.text())); return p; };
   const A = await mk(), B = await mk();
+  dbg = async () => { console.error('errs', errs); await A.screenshot({ path: `${S}/fail-A.png` }); await B.screenshot({ path: `${S}/fail-B.png` }); };
   const register = async (p, name) => {
     await p.goto(URL); await p.waitForSelector('.login-card');
     await p.click('text=New here? Create an account');
@@ -42,14 +44,27 @@ require('fs').mkdirSync(S, { recursive: true });
   // queue
   await A.click('.btn-play'); await A.waitForSelector('.btn-play.searching'); await A.waitForTimeout(700);
   await A.screenshot({ path: `${S}/07-queue.png` });
-  await A.waitForSelector('.match-overlay', { timeout: 8000 }); await B.waitForSelector('.match-overlay');
-  await A.waitForTimeout(500); await A.screenshot({ path: `${S}/08-match-found.png` });
-  const team = await A.$$eval('.mf-member', els => els.map(e => e.textContent));
-  const stats = await A.$eval('.mf-stats', e => e.textContent);
-  // back to lobby, refresh persists session
-  await A.click('button:has-text("BACK TO LOBBY")'); await A.waitForSelector('.match-overlay', { state: 'detached' });
+  // both players load into the SAME match, on the same team
+  await A.waitForSelector('.hud', { timeout: 60000 }); await B.waitForSelector('.hud', { timeout: 60000 });
+  const team = await A.$$eval('.mate b', els => els.map(e => e.textContent));
+  const stats = (await A.$eval('.alive b', e => e.textContent)) + ' players';
+  await A.waitForFunction(() => window.__dz && window.__dz.state.mode === 0 && window.__dz.state.visible > 40);
+  await B.waitForFunction(() => window.__dz && window.__dz.state.mode === 0 && window.__dz.state.visible > 40);
+  // A runs; B must see A at (nearly) the same place A thinks they are
+  await A.keyboard.down('KeyW'); await A.keyboard.down('ShiftLeft'); await A.waitForTimeout(1500);
+  await A.keyboard.up('KeyW'); await A.keyboard.up('ShiftLeft'); await A.waitForTimeout(700);
+  const a = await A.evaluate(() => ({ idx: window.__dz.self, ...window.__dz.state }));
+  const seen = await B.evaluate((idx) => { const s = window.__dz.actors[idx]; return { x: s.x, z: s.z, visible: s.visible, mates: document.querySelectorAll('.mate').length }; }, a.idx);
+  const seenGap = Math.hypot(seen.x - a.x, seen.z - a.z);
+  if (!seen.visible || seenGap > 1.5 || seen.mates !== 4) throw new Error('players out of sync: ' + JSON.stringify({ a, seen }));
+  await B.screenshot({ path: `${S}/09-b-sees-a.png` });
+  // A leaves; back in the lobby, still in the party. B keeps playing.
+  await A.keyboard.press('Escape'); await A.waitForSelector('.pause.open'); await A.click('button:has-text("LEAVE MATCH")');
+  await A.waitForSelector('.play-panel');
+  await A.waitForFunction(() => document.querySelectorAll('.slot:not(.empty)').length === 2);
+  await B.waitForFunction((idx) => !window.__dz.actors[idx].visible, a.idx);
   await A.reload(); await A.waitForSelector('.play-panel');
   const persisted = await A.$eval('.chip.me', e => e.textContent);
-  console.log(JSON.stringify({ team, stats, persisted, errs }, null, 1));
+  console.log(JSON.stringify({ team, stats, seenGap: seenGap.toFixed(2), persisted, errs }, null, 1));
   await b.close();
-})().catch(e => { console.error('FAIL', e.message); process.exit(1); });
+})().catch(async e => { console.error('FAIL', e.message.split('\n')[0]); await dbg(); process.exit(1); });

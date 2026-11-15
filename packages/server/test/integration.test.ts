@@ -7,7 +7,7 @@ let app: ReturnType<typeof createApp>;
 let base = '';
 
 beforeAll(async () => {
-  app = createApp({ port: 0, dataFile: null, clientDist: '/nonexistent', queueTimeoutS: 2, disconnectGraceMs: 0 });
+  app = createApp({ port: 0, dataFile: null, clientDist: '/nonexistent', queueTimeoutS: 2, disconnectGraceMs: 0, warmupS: 1 });
   const port = await app.listen();
   base = `http://localhost:${port}`;
 });

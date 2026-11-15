@@ -70,7 +70,7 @@ tests/      e2e (Playwright)
     teams, the other 18 squads are bots.
 * Tests: matchmaker unit tests (team merging, bot fill counts, edge cases)
 
-### Phase 3 — Pre-game island, teams, map, bus
+### Phase 3 — Pre-game island, teams, map, bus ✅
 * **Warm-up island.** Players spawn on a small separate island, respawn on death, have
   random weapons, and see a countdown (60 s)
 * Team assignment is preserved from the matchmaker: same team means the same match, shared

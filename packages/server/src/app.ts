@@ -6,6 +6,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { MIN_PASSWORD, NAME_RE, PROTOCOL_VERSION, type AuthResponse, type ClientMsg, type ServerMsg } from '@dropzone/shared';
 import { Store, type UserRecord } from './store.js';
 import { Hub } from './hub.js';
+import { Games, type Sock } from './game/match.js';
 
 export interface AppOptions {
   port: number;
@@ -13,6 +14,7 @@ export interface AppOptions {
   clientDist: string;
   queueTimeoutS: number;
   disconnectGraceMs: number;
+  warmupS: number;
 }
 
 const MIME: Record<string, string> = {
@@ -22,7 +24,9 @@ const MIME: Record<string, string> = {
 
 export function createApp(opts: AppOptions) {
   const store = new Store(opts.dataFile);
-  const hub = new Hub(store, { queueTimeoutS: opts.queueTimeoutS, disconnectGraceMs: opts.disconnectGraceMs });
+  const games: Games = new Games({ warmupS: opts.warmupS, onEnd: (id) => hub.endMatch(id) });
+  const hub: Hub = new Hub(store, { queueTimeoutS: opts.queueTimeoutS, disconnectGraceMs: opts.disconnectGraceMs, onMatch: (m) => games.create(m) });
+  games.start();
   const clientDist = resolve(opts.clientDist);
 
   // naive per-IP limiter for auth endpoints: 20 attempts / minute
@@ -96,7 +100,7 @@ export function createApp(opts: AppOptions) {
   const http = createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://x');
     try {
-      if (url.pathname === '/health') return json(res, 200, { ok: true, protocol: PROTOCOL_VERSION, online: wss.clients.size, matches: hub.matches.size });
+      if (url.pathname === '/health') return json(res, 200, { ok: true, protocol: PROTOCOL_VERSION, online: wss.clients.size, matches: games.size });
       if (url.pathname.startsWith('/api/')) return await api(req, res, url.pathname);
       return await serveStatic(res, url.pathname);
     } catch (e) {
@@ -105,16 +109,22 @@ export function createApp(opts: AppOptions) {
     }
   });
 
-  const wss = new WebSocketServer({ server: http, path: '/ws', maxPayload: 16 * 1024 });
+  const wss = new WebSocketServer({ server: http, path: '/ws', maxPayload: 4 * 1024 });
   wss.on('connection', (ws: WebSocket) => {
     let userId: string | null = null;
     let send: ((m: ServerMsg) => void) | null = null;
-    let budget = 40; // messages per second
-    const refill = setInterval(() => (budget = 40), 1000);
+    let sock: Sock | null = null;
+    let budget = 150; // messages per second (inputs arrive at 30 Hz)
+    const refill = setInterval(() => (budget = 150), 1000);
     const authTimeout = setTimeout(() => !userId && ws.close(4001, 'auth timeout'), 10_000);
 
-    ws.on('message', (raw) => {
+    ws.on('message', (raw, isBinary) => {
       if (--budget < 0) return;
+      if (isBinary) {
+        if (!userId) return;
+        const b = raw as Buffer;
+        return games.onBinary(userId, new DataView(b.buffer, b.byteOffset, b.byteLength));
+      }
       let msg: ClientMsg;
       try { msg = JSON.parse(String(raw)); } catch { return; }
       if (!userId) {
@@ -124,13 +134,21 @@ export function createApp(opts: AppOptions) {
         userId = u.id;
         clearTimeout(authTimeout);
         send = (m) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(m));
+        const json = send;
+        sock = { json, bin: (buf) => ws.readyState === ws.OPEN && ws.bufferedAmount < 256 * 1024 && ws.send(buf) };
+        games.attach(u.id, sock);
         hub.connect(u, send);
         return;
       }
+      if (!msg || typeof msg !== 'object') return;
+      if (msg.t === 'game_join') return games.join(userId);
+      if (msg.t === 'game_marker') return games.onMarker(userId, msg.x, msg.z);
+      if (msg.t === 'leave_match') games.leave(userId);
       hub.handle(userId, msg);
     });
     ws.on('close', () => {
       clearInterval(refill); clearTimeout(authTimeout);
+      if (userId && sock) games.detach(userId, sock);
       if (userId && send) hub.disconnect(userId, send);
     });
   });
@@ -138,8 +156,8 @@ export function createApp(opts: AppOptions) {
   const ticker = setInterval(() => hub.tick(), 1000);
 
   return {
-    http, hub, store,
+    http, hub, store, games,
     listen: () => new Promise<number>((ok) => http.listen(opts.port, () => ok((http.address() as any).port))),
-    close: () => new Promise<void>((ok) => { clearInterval(ticker); store.flush(); wss.close(); http.close(() => ok()); for (const c of wss.clients) c.terminate(); }),
+    close: () => new Promise<void>((ok) => { clearInterval(ticker); games.stop(); store.flush(); wss.close(); http.close(() => ok()); for (const c of wss.clients) c.terminate(); }),
   };
 }

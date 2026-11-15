@@ -207,3 +207,59 @@ input { font: inherit; }
   .friends { width: 100%; }
   .logo { font-size: 22px; }
 }
+
+/* ================================================================== in-match */
+.game .stage { position: absolute; inset: 0; background: #7fc8ff; }
+.game .stage canvas { display: block; }
+.game-loading { position: absolute; inset: 0; z-index: 30; display: grid; place-items: center; padding: 16px; background: radial-gradient(circle at 50% 40%, #2c3fd6, #0d0a2c); transition: opacity .5s; }
+.game-loading.done { opacity: 0; pointer-events: none; }
+.hud { position: absolute; inset: 0; pointer-events: none; font-family: var(--body); }
+.hud-top { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; }
+.compass { width: 360px; height: 32px; filter: drop-shadow(0 2px 2px rgba(0,0,0,.5)); }
+.banner { margin-top: 10px; font-family: var(--display); font-size: 44px; line-height: 1; letter-spacing: 1px; color: #fff; text-shadow: 0 4px 0 rgba(20,18,58,.7), 0 0 30px rgba(20,18,58,.4); transform: skew(-5deg); }
+.banner.pulse { color: var(--sun); animation: pulse .8s infinite; }
+.banner-sub { margin-top: 4px; font-weight: 900; font-size: 16px; text-shadow: 0 2px 3px rgba(0,0,0,.6); }
+.hud-right { position: absolute; top: 14px; right: 14px; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.minimap { width: 190px; height: 190px; border-radius: 16px; border: 3px solid rgba(255,255,255,.9); box-shadow: 0 8px 24px rgba(0,0,0,.35); background: #2b8fd6; }
+.alive { display: flex; align-items: baseline; gap: 6px; padding: 5px 12px; border-radius: 10px; background: var(--glass); border: 1px solid var(--line); }
+.alive b { font-family: var(--display); font-size: 22px; font-weight: 400; }
+.alive small { font-size: 10px; font-weight: 900; color: var(--muted); letter-spacing: 1px; }
+.team { position: absolute; left: 14px; top: 14px; display: flex; flex-direction: column; gap: 5px; }
+.mate { display: flex; align-items: center; gap: 8px; padding: 6px 12px 6px 6px; border-radius: 10px; background: var(--glass); border: 1px solid var(--line); min-width: 170px; }
+.mate .pip { width: 5px; height: 26px; border-radius: 3px; }
+.mate div { display: flex; flex-direction: column; line-height: 1.1; }
+.mate b { font-weight: 900; font-size: 14px; }
+.mate small { font-size: 11px; font-weight: 800; color: var(--muted); }
+.mate.gone { opacity: .45; }
+.altimeter { position: absolute; right: 22%; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; align-items: flex-end; opacity: 0; transition: opacity .25s; text-shadow: 0 2px 4px rgba(0,0,0,.6); }
+.altimeter.show { opacity: 1; }
+.altimeter b { font-family: var(--display); font-size: 46px; font-weight: 400; line-height: 1; }
+.altimeter small { font-size: 10px; font-weight: 900; letter-spacing: 1px; }
+.altimeter i { font-style: normal; font-weight: 900; font-size: 13px; color: var(--sun); margin-top: 4px; }
+.hint-keys { position: absolute; bottom: 22px; left: 50%; transform: translateX(-50%); padding: 7px 16px; border-radius: 999px; background: var(--glass); border: 1px solid var(--line); font-weight: 900; font-size: 13px; white-space: nowrap; }
+.hint-keys:empty { display: none; }
+.click-hint { position: absolute; top: 76%; left: 50%; transform: translateX(-50%); padding: 8px 16px; border-radius: 10px; background: rgba(20,18,58,.8); border: 1px solid var(--line); font-weight: 900; font-size: 14px; opacity: 0; transition: opacity .2s; }
+.click-hint.show { opacity: 1; animation: pulse 1.4s infinite; }
+.place { position: absolute; top: 24%; left: 50%; transform: translateX(-50%) skew(-5deg); font-family: var(--display); font-size: 52px; letter-spacing: 2px; text-shadow: 0 4px 0 rgba(20,18,58,.7); opacity: 0; transition: opacity .5s; white-space: nowrap; }
+.place.show { opacity: 1; }
+.crosshair { position: absolute; left: 50%; top: 50%; width: 5px; height: 5px; margin: -2.5px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 1.5px rgba(0,0,0,.45); opacity: .8; }
+.fps { position: absolute; left: 14px; bottom: 10px; font-size: 11px; font-weight: 800; opacity: .55; }
+.world-tags { position: absolute; inset: 0; overflow: hidden; }
+.wtag { position: absolute; left: 0; top: 0; display: flex; flex-direction: column; align-items: center; font-weight: 900; font-size: 13px; text-shadow: 0 1px 3px rgba(0,0,0,.8); white-space: nowrap; }
+.wtag span { font-size: 10px; order: 3; }
+.wtag i { font-style: normal; font-size: 11px; opacity: .85; }
+.wtag .pin { width: 14px; height: 14px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); border: 2px solid #14123a; order: 0; margin-bottom: 4px; }
+.flash { position: absolute; inset: 0; background: #fff; opacity: 0; }
+.flash.go { animation: flash 1.1s ease-out; }
+@keyframes flash { 0% { opacity: 1; } 100% { opacity: 0; } }
+.bigmap, .pause { position: absolute; inset: 0; display: none; place-items: center; background: rgba(10,8,30,.55); pointer-events: auto; z-index: 20; }
+.bigmap.open, .pause.open { display: grid; animation: fade .15s; }
+.bigmap-card { padding: 10px; border-radius: 18px; background: var(--ink); border: 2px solid var(--line); box-shadow: 0 30px 80px rgba(0,0,0,.5); }
+.bigmap canvas { display: block; width: min(80vh, 88vw); height: min(80vh, 88vw); border-radius: 10px; cursor: crosshair; }
+.bigmap-help { display: flex; gap: 18px; justify-content: center; padding-top: 8px; font-size: 12px; font-weight: 800; color: var(--muted); }
+kbd { font-family: var(--body); font-weight: 900; font-size: 11px; padding: 2px 7px; border-radius: 6px; background: rgba(255,255,255,.14); border: 1px solid var(--line); color: #fff; }
+.pause-card { width: min(340px, 92vw); display: flex; flex-direction: column; gap: 12px; padding: 24px; border-radius: 20px; background: var(--glass); border: 1px solid var(--line); backdrop-filter: blur(12px); }
+.pause-title { font-family: var(--display); font-size: 36px; text-align: center; }
+.controls { display: grid; gap: 6px; padding: 6px 0; }
+.controls div { display: flex; justify-content: space-between; align-items: center; font-weight: 800; font-size: 13px; color: var(--muted); }
+@media (max-width: 860px) { .minimap { width: 130px; height: 130px; } .banner { font-size: 30px; } .compass { width: 240px; } .mate { min-width: 0; } }

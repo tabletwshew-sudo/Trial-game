@@ -13,6 +13,17 @@ npm run build && npm start      # http://localhost:8080
 ```
 Dev mode with hot reload: `npm run dev` (client on :5173, server on :8080).
 
+## Controls
+| Key | Action |
+|---|---|
+| W A S D | Move (steer while dropping) |
+| Mouse | Look (click the game to capture the mouse) |
+| Shift | Sprint |
+| Space | Jump / drop from the ship / open or fold the glider |
+| M | Map (click to place a squad marker) |
+| Middle click | Mark the spot you're looking at |
+| Esc | Menu / leave match |
+
 ## Checks
 ```bash
 npm run typecheck

@@ -19,7 +19,7 @@
 ## Tests
 - `npm test`: 27 unit and integration tests (matchmaker rules, auth, the full WebSocket
   friend → party → ready → queue → match flow, fill merging, mode bump)
-- `npm run e2e` (server running on :8099 with `QUEUE_TIMEOUT_S=3`): two real browsers
+- `npm run e2e:lobby` (server running on :8099 with `QUEUE_TIMEOUT_S=3`): two real browsers
   register, friend, party, ready, use the locker, queue, get matched, and refresh to keep the session
 
 ## Manual checklist

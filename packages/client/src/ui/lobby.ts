@@ -10,16 +10,14 @@ import { fmtTime, h, toast } from './dom';
 const MODE_LABEL: Record<Mode, string> = { solo: 'SOLO', duo: 'DUOS', trio: 'TRIOS', squad: 'SQUADS' };
 const PRESENCE_LABEL = { lobby: 'In Lobby', queue: 'Matchmaking', in_match: 'In Match', offline: 'Offline' } as const;
 
-export function lobbyScreen(net: Net, you: UserView, onSignOut: () => void) {
+export function lobbyScreen(net: Net, you: UserView, onSignOut: () => void, onMatch: (m: MatchFoundView) => void) {
   let party: PartyView | null = null;
   let queue: QueueView = { state: 'idle' };
   let friends: FriendView[] = [];
   let incoming: UserView[] = [];
   let outgoing: UserView[] = [];
-  let match: MatchFoundView | null = null;
   let tab: 'play' | 'locker' = 'play';
   let friendsOpen = false;
-  let serverOffset = 0;
 
   const root = h('div.screen.lobby');
   const stage = h('div.stage');
@@ -42,7 +40,7 @@ export function lobbyScreen(net: Net, you: UserView, onSignOut: () => void) {
       el.style.transform = `translate(${p.x}px, ${p.y}px) translate(-50%, -100%)`;
     }
     const timer = document.querySelector<HTMLElement>('.queue-timer');
-    if (timer && queue.state === 'searching' && queue.since) timer.textContent = fmtTime((Date.now() + serverOffset - queue.since) / 1000);
+    if (timer && queue.state === 'searching' && queue.since) timer.textContent = fmtTime((Date.now() + net.serverOffset - queue.since) / 1000);
   };
 
   function renderTags() {
@@ -189,28 +187,6 @@ export function lobbyScreen(net: Net, you: UserView, onSignOut: () => void) {
     );
   }
 
-  // ---------------------------------------------------------- match found
-  function matchOverlay(m: MatchFoundView) {
-    const team = m.teams.find((t) => t.id === m.yourTeam)!;
-    return h('div.match-overlay',
-      h('div.match-card',
-        h('div.mf-kicker', 'MATCH FOUND'),
-        h('div.mf-title', `${MODE_LABEL[m.mode]}`),
-        h('div.mf-stats',
-          h('div', h('b', m.teams.length), h('small', 'TEAMS')),
-          h('div', h('b', m.humans), h('small', 'PLAYERS')),
-          h('div', h('b', m.bots), h('small', 'BOTS'))),
-        h('div.mf-team-title', 'YOUR TEAM'),
-        h('div.mf-team', ...team.members.map((x) => h('div.mf-member', { class: x.id === you.id ? 'you' : '' },
-          h('span.avatar', { style: { background: SKINS[x.skin % SKINS.length].hoodie } }),
-          h('b', x.name), x.bot ? h('small.bot', 'BOT') : null))),
-        h('div.loading', h('div.bar', h('span')), 'Loading the island…'),
-        h('div.fineprint', 'The island and battle bus arrive in Phase 3. This screen confirms your team was matched.'),
-        h('button.btn.btn-ghost', { onclick: () => net.send({ t: 'leave_match' }) }, 'BACK TO LOBBY'),
-      ),
-    );
-  }
-
   // ---------------------------------------------------------- render
   function setTab(t: typeof tab) { tab = t; scene.focusYou = t === 'locker'; render(); }
 
@@ -220,7 +196,6 @@ export function lobbyScreen(net: Net, you: UserView, onSignOut: () => void) {
       tab === 'play' ? partyPanel() : h('div'),
       tab === 'play' ? playPanel() : lockerPanel(),
       friendsPanel(),
-      match ? matchOverlay(match) : h('div'),
     );
   }
 
@@ -237,7 +212,6 @@ export function lobbyScreen(net: Net, you: UserView, onSignOut: () => void) {
   let prevReady = new Set<string>();
   const off = net.on((m: ServerMsg) => {
     switch (m.t) {
-      case 'welcome': serverOffset = m.serverTime - Date.now(); break;
       case 'party': {
         party = m.party;
         scene.setMembers(party.members.map((x) => ({ ...x, leader: x.id === party!.leaderId, you: x.id === you.id })));
@@ -248,7 +222,7 @@ export function lobbyScreen(net: Net, you: UserView, onSignOut: () => void) {
       }
       case 'queue': queue = m.queue; break;
       case 'friends': friends = m.friends; incoming = m.incoming; outgoing = m.outgoing; break;
-      case 'match_found': match = m.match; break;
+      case 'match_found': onMatch(m.match); return;
       case 'toast': toast(m.message, m.kind); return;
       case 'party_invite': return showInvite(m.partyId, m.from);
       case 'error': toast(m.message, 'error'); return;
@@ -268,10 +242,6 @@ export function lobbyScreen(net: Net, you: UserView, onSignOut: () => void) {
     setTimeout(() => el.remove(), 20_000);
   }
 
-  // leave_match: optimistic clear
-  const origSend = net.send.bind(net);
-  net.send = (msg) => { if (msg.t === 'leave_match') { match = null; render(); } origSend(msg); };
-
   net.onStatus = (s) => {
     status.textContent = s === 'online' ? '' : s === 'reconnecting' ? 'Reconnecting…' : '';
     status.className = 'conn ' + s;
@@ -279,5 +249,6 @@ export function lobbyScreen(net: Net, you: UserView, onSignOut: () => void) {
   };
 
   render();
+  net.send({ t: 'sync' }); // (re)entering the lobby: ask for the current party / friends / queue
   return { el: root, destroy: () => { off(); removeEventListener('keydown', onKey); scene.dispose(); } };
 }

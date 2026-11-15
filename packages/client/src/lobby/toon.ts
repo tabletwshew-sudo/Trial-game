@@ -8,6 +8,16 @@ const ramp = (() => {
   return t;
 })();
 
+/** Softer 5-step ramp for big surfaces (terrain, buildings). */
+export const softRamp = (() => {
+  const t = new THREE.DataTexture(new Uint8Array([95, 140, 185, 225, 255]), 5, 1, THREE.RedFormat);
+  t.minFilter = t.magFilter = THREE.NearestFilter;
+  t.needsUpdate = true;
+  return t;
+})();
+/** Toon material that takes its colour from vertex colours (one draw call for many parts). */
+export const toonVertex = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: ramp });
+
 const cache = new Map<string, THREE.MeshToonMaterial>();
 export function toon(color: THREE.ColorRepresentation, emissive = 0): THREE.MeshToonMaterial {
   const key = `${new THREE.Color(color).getHexString()}:${emissive}`;
@@ -40,6 +50,8 @@ export function part(geo: THREE.BufferGeometry, color: THREE.ColorRepresentation
   const m = new THREE.Mesh(geo, toon(color));
   m.castShadow = true;
   m.receiveShadow = true;
+  m.userData.color = color;
+  m.userData.outline = outline;
   if (outline) {
     const o = new THREE.Mesh(geo, outlineMaterial);
     o.raycast = () => {};

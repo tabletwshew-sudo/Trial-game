@@ -3,6 +3,7 @@ import type { UserView } from '@dropzone/shared';
 import { auth, Net } from './net';
 import { loginScreen } from './ui/login';
 import { lobbyScreen } from './ui/lobby';
+import { gameScreen } from './game/game';
 import { h } from './ui/dom';
 
 const app = document.getElementById('app')!;
@@ -23,9 +24,17 @@ function showLogin() {
 function enterLobby(user: UserView) {
   net?.close();
   net = new Net();
-  const lobby = lobbyScreen(net, user, async () => { await auth.logout(); showLogin(); });
-  show(lobby.el, lobby.destroy);
+  showLobby(user);
   net.connect();
+}
+
+function showLobby(user: UserView) {
+  const n = net!;
+  const lobby = lobbyScreen(n, user, async () => { await auth.logout(); showLogin(); }, (match) => {
+    const game = gameScreen(n, user, match, () => showLobby(user));
+    show(game.el, game.destroy);
+  });
+  show(lobby.el, lobby.destroy);
 }
 
 auth.me().then(

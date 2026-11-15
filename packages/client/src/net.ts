@@ -34,17 +34,23 @@ export class Net {
   private handlers = new Set<Handler>();
   private retry = 0;
   private closed = false;
+  /** Server clock minus local clock, in ms. */
+  serverOffset = 0;
   onStatus?: (s: 'online' | 'reconnecting' | 'signed_out') => void;
+  /** Binary packets (match snapshots). */
+  onBinary?: (v: DataView) => void;
 
   connect() {
     const token = getToken();
     if (!token) return this.onStatus?.('signed_out');
     const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
     this.ws = ws;
+    ws.binaryType = 'arraybuffer';
     ws.onopen = () => ws.send(JSON.stringify({ t: 'hello', token }));
     ws.onmessage = (e) => {
+      if (typeof e.data !== 'string') return this.onBinary?.(new DataView(e.data as ArrayBuffer));
       const m = JSON.parse(e.data) as ServerMsg;
-      if (m.t === 'welcome') { this.retry = 0; this.onStatus?.('online'); }
+      if (m.t === 'welcome') { this.retry = 0; this.serverOffset = m.serverTime - Date.now(); this.onStatus?.('online'); }
       this.handlers.forEach((h) => h(m));
     };
     ws.onclose = (e) => {
@@ -56,5 +62,6 @@ export class Net {
   }
   on(h: Handler) { this.handlers.add(h); return () => this.handlers.delete(h); }
   send(m: ClientMsg) { if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(m)); }
+  sendBinary(b: ArrayBuffer) { if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(b); }
   close() { this.closed = true; this.ws?.close(); }
 }

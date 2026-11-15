@@ -1,0 +1,514 @@
+import { MAP } from './constants.js';
+import { clamp, fbm, hash2, lerp, mulberry32, smooth, vnoise } from './noise.js';
+
+/**
+ * The island. Everything here is deterministic from the seed, so the server
+ * (authority) and each browser (prediction + rendering) build the identical world.
+ * Units are metres. +X is east, +Z is south, sea level is y = 0.
+ */
+
+export const WATER_FLOAT_Y = -1.15; // feet height while swimming
+export const STEP_UP = 0.6;
+export const PLAYER_RADIUS = 0.42;
+export const PLAYER_HEIGHT = 1.85;
+export const WORLD_LIMIT = 1900;
+export const SPAWN_ISLAND = { x: -1450, z: -1450, r: 75 };
+/** Roads become bridge decks at this height wherever the ground dips below it (rivers). */
+export const BRIDGE_Y = 1.25;
+
+export class HeightField {
+  readonly data: Float32Array;
+  readonly maxX: number;
+  readonly maxZ: number;
+  constructor(readonly ox: number, readonly oz: number, readonly cell: number, readonly nx: number, readonly nz: number) {
+    this.data = new Float32Array(nx * nz);
+    this.maxX = ox + (nx - 1) * cell;
+    this.maxZ = oz + (nz - 1) * cell;
+  }
+  contains(x: number, z: number) { return x >= this.ox && z >= this.oz && x <= this.maxX && z <= this.maxZ; }
+  /** Height using the same triangle split the terrain mesh uses, so feet never float or sink. */
+  sample(x: number, z: number) {
+    const gx = clamp((x - this.ox) / this.cell, 0, this.nx - 1.0001);
+    const gz = clamp((z - this.oz) / this.cell, 0, this.nz - 1.0001);
+    const ix = Math.floor(gx), iz = Math.floor(gz);
+    const fx = gx - ix, fz = gz - iz;
+    const d = this.data, i = iz * this.nx + ix;
+    const h00 = d[i], h10 = d[i + 1], h01 = d[i + this.nx], h11 = d[i + this.nx + 1];
+    return fx + fz <= 1 ? h00 + (h10 - h00) * fx + (h01 - h00) * fz : h11 + (h01 - h11) * (1 - fx) + (h10 - h11) * (1 - fz);
+  }
+}
+
+// ------------------------------------------------------------------ locations
+export type PoiKind = 'city' | 'town' | 'industrial' | 'farm' | 'camp' | 'harbor' | 'station' | 'resort' | 'quarry';
+export interface Poi { id: number; name: string; x: number; z: number; r: number; kind: PoiKind; h: number }
+
+const POI_DEFS: Omit<Poi, 'id' | 'h'>[] = [
+  { name: 'Brickwell', kind: 'city', x: -140, z: 40, r: 125 },
+  { name: 'Pinewood Plaza', kind: 'town', x: -520, z: -560, r: 100 },
+  { name: 'Northgate', kind: 'town', x: -160, z: -700, r: 95 },
+  { name: 'Windmill Flats', kind: 'farm', x: 200, z: -730, r: 95 },
+  { name: 'Summit Station', kind: 'station', x: 520, z: -520, r: 46 },
+  { name: 'Coral Cove', kind: 'resort', x: -800, z: -150, r: 90 },
+  { name: 'Stillwater Camp', kind: 'camp', x: -330, z: -95, r: 70 },
+  { name: 'Cloverfield Farm', kind: 'farm', x: -640, z: 160, r: 110 },
+  { name: 'Arcade Avenue', kind: 'town', x: 420, z: 30, r: 100 },
+  { name: 'Rustworks', kind: 'industrial', x: 660, z: 250, r: 120 },
+  { name: 'Mosshollow', kind: 'camp', x: 240, z: 420, r: 80 },
+  { name: 'Quarry Nine', kind: 'quarry', x: -400, z: 690, r: 90 },
+  { name: 'Harborlight', kind: 'harbor', x: 130, z: 850, r: 100 },
+  { name: 'Sandbar Shacks', kind: 'town', x: 600, z: 610, r: 80 },
+];
+
+/** Road links between locations (by name), with optional waypoints. */
+const ROAD_LINKS: [string, string, ...[number, number][]][] = [
+  ['Brickwell', 'Stillwater Camp'],
+  ['Brickwell', 'Cloverfield Farm'],
+  ['Brickwell', 'Northgate', [-120, -330]],
+  ['Northgate', 'Pinewood Plaza'],
+  ['Pinewood Plaza', 'Coral Cove', [-700, -400]],
+  ['Coral Cove', 'Cloverfield Farm'],
+  ['Cloverfield Farm', 'Quarry Nine', [-560, 460]],
+  ['Quarry Nine', 'Harborlight', [-150, 830]],
+  ['Harborlight', 'Mosshollow'],
+  ['Mosshollow', 'Arcade Avenue'],
+  ['Arcade Avenue', 'Rustworks'],
+  ['Rustworks', 'Sandbar Shacks'],
+  ['Sandbar Shacks', 'Harborlight', [380, 780]],
+  ['Arcade Avenue', 'Brickwell', [140, 10]],
+  ['Northgate', 'Windmill Flats'],
+  ['Windmill Flats', 'Summit Station', [360, -660], [470, -600]],
+];
+
+const RIVER: [number, number][] = [[300, -330], [170, -160], [70, 60], [-40, 300], [-140, 560], [-200, 800], [-230, 1080]];
+const LAKE = { x: -350, z: -250, r: 100 };
+
+export interface Road { pts: Float32Array; width: number; street: boolean }
+
+export const ROOF_FLAT = 0, ROOF_GABLE_X = 1, ROOF_GABLE_Z = 2;
+/** A solid building block. `roof` 1/2 = gable with the ridge along X/Z. */
+export interface Box {
+  x0: number; x1: number; z0: number; z1: number;
+  y0: number; fy: number; y1: number;
+  roof: number; roofH: number;
+  kind: PoiKind; style: number; poi: number;
+  /** 0 = building, 1 = container, 2 = silo */
+  shape: number;
+}
+
+export interface World {
+  seed: number;
+  main: HeightField;
+  spawn: HeightField;
+  pois: Poi[];
+  roads: Road[];
+  river: Float32Array;
+  boxes: Box[];
+  boxGrid: Map<number, Box[]>;
+  roadGrid: Map<number, number[]>; // cell -> flat [x, z, halfWidth, ...]
+}
+
+// ------------------------------------------------------------------ helpers
+function distToPolyline(x: number, z: number, pts: ArrayLike<number>) {
+  let best = Infinity;
+  for (let i = 0; i + 3 < pts.length; i += 2) {
+    const ax = pts[i], az = pts[i + 1], bx = pts[i + 2], bz = pts[i + 3];
+    const dx = bx - ax, dz = bz - az;
+    const t = clamp(((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+    const px = ax + dx * t - x, pz = az + dz * t - z;
+    const d = px * px + pz * pz;
+    if (d < best) best = d;
+  }
+  return Math.sqrt(best);
+}
+
+/** Chaikin corner cutting, then resample at a fixed spacing. */
+function smoothPath(ctrl: [number, number][], spacing: number): Float32Array {
+  let pts = ctrl;
+  for (let it = 0; it < 3; it++) {
+    const next: [number, number][] = [pts[0]];
+    for (let i = 0; i < pts.length - 1; i++) {
+      const [ax, az] = pts[i], [bx, bz] = pts[i + 1];
+      next.push([ax * 0.75 + bx * 0.25, az * 0.75 + bz * 0.25], [ax * 0.25 + bx * 0.75, az * 0.25 + bz * 0.75]);
+    }
+    next.push(pts[pts.length - 1]);
+    pts = next;
+  }
+  const out: number[] = [pts[0][0], pts[0][1]];
+  let carry = 0;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const [ax, az] = pts[i], [bx, bz] = pts[i + 1];
+    const len = Math.hypot(bx - ax, bz - az);
+    let d = spacing - carry;
+    while (d <= len) { out.push(ax + ((bx - ax) * d) / len, az + ((bz - az) * d) / len); d += spacing; }
+    carry = len - (d - spacing);
+  }
+  out.push(pts[pts.length - 1][0], pts[pts.length - 1][1]);
+  return new Float32Array(out);
+}
+
+const gridKey = (cx: number, cz: number) => (cx + 512) * 1024 + (cz + 512);
+const BOX_CELL = 32, ROAD_CELL = 16;
+
+// ------------------------------------------------------------------ terrain
+function rawHeight(x: number, z: number, seed: number, riverPts: Float32Array) {
+  const warp = fbm(x / 420 + 11, z / 420 - 7, seed, 3) - 0.5;
+  const bays = fbm(x / 800 - 3, z / 800 + 5, seed + 13, 2) - 0.5;
+  const r = Math.sqrt(x * x + z * z) / 1000 + warp * 0.34 + bays * 0.22;
+  const mask = smooth(1.0, 0.8, r);
+  let land = 5 + fbm(x / 300, z / 300, seed + 1, 4) * 26 + (fbm(x / 70, z / 70, seed + 2, 3) - 0.5) * 5;
+
+  // the mountain (north-east)
+  const dm = Math.hypot(x - 520, z + 520) / 400;
+  if (dm < 1) {
+    const m = (1 - dm * dm) ** 2;
+    const ridge = 1 - Math.abs(2 * vnoise(x / 120, z / 120, seed + 5) - 1);
+    land += m * (118 + (fbm(x / 90, z / 90, seed + 3, 4) - 0.5) * 60 + ridge * 22);
+  }
+  // western highlands and southern hills
+  const dh = Math.hypot(x + 640, z + 420) / 260;
+  if (dh < 1) land += (1 - dh * dh) ** 2 * 26;
+  const ds = Math.hypot(x - 340, z - 680) / 220;
+  if (ds < 1) land += (1 - ds * ds) ** 2 * 34;
+
+  let h = lerp(-9, land, mask);
+
+  // river valley + channel
+  const dr = Math.abs(x - 40) > 520 ? 999 : distToPolyline(x + (vnoise(z / 110, 0.5, seed + 8) - 0.5) * 70, z, riverPts) + (vnoise(x / 40, z / 40, seed + 9) - 0.5) * 6;
+  if (dr < 75) {
+    const t = smooth(75, 14, dr);
+    h = lerp(h, Math.min(h, 1.3 + (h - 1.3) * 0.12), t);
+    h = lerp(h, Math.min(h, -2.6), smooth(13, 5, dr));
+  }
+  // lake
+  const dl = Math.hypot(x - LAKE.x, z - LAKE.z) + (fbm(x / 60, z / 60, seed + 7, 2) - 0.5) * 50;
+  if (dl < LAKE.r + 60) {
+    h = lerp(h, Math.min(h, 2), smooth(LAKE.r + 60, LAKE.r + 5, dl));
+    h = lerp(h, Math.min(h, -5), smooth(LAKE.r, LAKE.r - 35, dl));
+  }
+  return h;
+}
+
+function genMain(seed: number, pois: Poi[], riverPts: Float32Array): HeightField {
+  const half = MAP.size / 2, cell = 5, n = MAP.size / cell + 1;
+  const f = new HeightField(-half, -half, cell, n, n);
+  for (const p of pois) {
+    const pre = rawHeight(p.x, p.z, seed, riverPts);
+    p.h = p.kind === 'harbor' ? 2.4 : p.kind === 'resort' ? 2.8 : p.kind === 'quarry' ? Math.max(pre, 24) : Math.max(pre, 3.2);
+  }
+  for (let iz = 0; iz < n; iz++) {
+    for (let ix = 0; ix < n; ix++) {
+      const x = -half + ix * cell, z = -half + iz * cell;
+      let h = rawHeight(x, z, seed, riverPts);
+      for (const p of pois) {
+        const d = Math.hypot(x - p.x, z - p.z);
+        if (d > p.r * 1.35) continue;
+        h = lerp(h, p.h, smooth(p.r * 1.35, p.r * 0.78, d));
+        if (p.kind === 'quarry' && d < p.r * 0.8) h = p.h - Math.floor((1 - d / (p.r * 0.8)) * 4.99) * 4.5;
+      }
+      f.data[iz * n + ix] = h;
+    }
+  }
+  return f;
+}
+
+function genSpawn(seed: number): HeightField {
+  const cell = 2.5, n = 81;
+  const f = new HeightField(SPAWN_ISLAND.x - 100, SPAWN_ISLAND.z - 100, cell, n, n);
+  for (let iz = 0; iz < n; iz++) {
+    for (let ix = 0; ix < n; ix++) {
+      const x = f.ox + ix * cell, z = f.oz + iz * cell;
+      const d = Math.hypot(x - SPAWN_ISLAND.x, z - SPAWN_ISLAND.z) / SPAWN_ISLAND.r + (fbm(x / 40, z / 40, seed + 21, 2) - 0.5) * 0.3;
+      const land = 3.6 + fbm(x / 30, z / 30, seed + 22, 3) * 2.4;
+      f.data[iz * n + ix] = lerp(-10, land, smooth(1.0, 0.72, d));
+    }
+  }
+  return f;
+}
+
+// ------------------------------------------------------------------ roads
+function genRoads(seed: number, pois: Poi[]): Road[] {
+  const byName = new Map(pois.map((p) => [p.name, p]));
+  const roads: Road[] = [];
+  let k = 0;
+  for (const [a, b, ...mids] of ROAD_LINKS) {
+    const A = byName.get(a)!, B = byName.get(b)!;
+    const anchors: [number, number][] = [[A.x, A.z], ...mids, [B.x, B.z]];
+    const ctrl: [number, number][] = [];
+    for (let i = 0; i < anchors.length - 1; i++) {
+      const [ax, az] = anchors[i], [bx, bz] = anchors[i + 1];
+      const len = Math.hypot(bx - ax, bz - az), steps = Math.max(2, Math.round(len / 60));
+      for (let s = 0; s < steps; s++) {
+        const t = s / steps;
+        const off = (vnoise(k * 13.7 + i * 3.1 + s * 0.9, 0.5, seed + 31) - 0.5) * 70 * 4 * t * (1 - t);
+        ctrl.push([ax + (bx - ax) * t + (-(bz - az) / len) * off, az + (bz - az) * t + ((bx - ax) / len) * off]);
+      }
+    }
+    ctrl.push(anchors[anchors.length - 1]);
+    roads.push({ pts: smoothPath(ctrl, 4), width: 7, street: false });
+    k++;
+  }
+  // streets inside built-up locations
+  for (const p of pois) {
+    const line = (x0: number, z0: number, x1: number, z1: number) => {
+      const pts: number[] = [];
+      const n = Math.ceil(Math.hypot(x1 - x0, z1 - z0) / 4);
+      for (let i = 0; i <= n; i++) pts.push(x0 + ((x1 - x0) * i) / n, z0 + ((z1 - z0) * i) / n);
+      roads.push({ pts: new Float32Array(pts), width: 6.5, street: true });
+    };
+    const e = p.r * 0.88;
+    if (p.kind === 'city') {
+      for (const o of [-0.42, 0.42]) { line(p.x - e, p.z + o * p.r, p.x + e, p.z + o * p.r); line(p.x + o * p.r, p.z - e, p.x + o * p.r, p.z + e); }
+      line(p.x - e, p.z, p.x + e, p.z); line(p.x, p.z - e, p.x, p.z + e);
+    } else if (p.kind === 'town' || p.kind === 'industrial' || p.kind === 'harbor' || p.kind === 'resort') {
+      line(p.x - e, p.z, p.x + e, p.z); line(p.x, p.z - e, p.x, p.z + e);
+    }
+  }
+  return roads;
+}
+
+function buildRoadGrid(roads: Road[]) {
+  const grid = new Map<number, number[]>();
+  for (const r of roads) {
+    for (let i = 0; i < r.pts.length; i += 2) {
+      const key = gridKey(Math.floor(r.pts[i] / ROAD_CELL), Math.floor(r.pts[i + 1] / ROAD_CELL));
+      let list = grid.get(key);
+      if (!list) grid.set(key, (list = []));
+      list.push(r.pts[i], r.pts[i + 1], r.width / 2);
+    }
+  }
+  return grid;
+}
+
+/** Distance from (x, z) to the nearest road edge (negative = on the road). Infinity if none within ~16 m. */
+export function roadEdgeDist(w: World, x: number, z: number) {
+  const cx = Math.floor(x / ROAD_CELL), cz = Math.floor(z / ROAD_CELL);
+  let best = Infinity;
+  for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+    const list = w.roadGrid.get(gridKey(cx + dx, cz + dz));
+    if (!list) continue;
+    for (let i = 0; i < list.length; i += 3) {
+      const d = Math.hypot(list[i] - x, list[i + 1] - z) - list[i + 2];
+      if (d < best) best = d;
+    }
+  }
+  return best;
+}
+
+// ------------------------------------------------------------------ buildings
+interface Spec { n: number; w: [number, number]; d: [number, number]; h: [number, number]; roof: 'flat' | 'gable' | 'mix'; roofH: [number, number]; shape?: number }
+const SPECS: Record<PoiKind, Spec[]> = {
+  city: [
+    { n: 9, w: [16, 24], d: [16, 24], h: [20, 44], roof: 'flat', roofH: [0, 0] },
+    { n: 16, w: [10, 16], d: [10, 14], h: [8, 16], roof: 'flat', roofH: [0, 0] },
+  ],
+  town: [
+    { n: 3, w: [14, 20], d: [10, 14], h: [6.5, 8], roof: 'flat', roofH: [0, 0] },
+    { n: 16, w: [9, 13], d: [8, 11], h: [3.6, 6.6], roof: 'gable', roofH: [2.4, 3.4] },
+  ],
+  industrial: [
+    { n: 6, w: [24, 36], d: [16, 24], h: [9, 13], roof: 'mix', roofH: [2, 3] },
+    { n: 5, w: [6, 6], d: [6, 6], h: [13, 17], roof: 'flat', roofH: [0, 0], shape: 2 },
+    { n: 10, w: [2.6, 2.6], d: [6.2, 6.2], h: [2.7, 2.7], roof: 'flat', roofH: [0, 0], shape: 1 },
+  ],
+  farm: [
+    { n: 2, w: [16, 20], d: [11, 13], h: [6, 7], roof: 'gable', roofH: [4.5, 5.5] },
+    { n: 2, w: [5, 5], d: [5, 5], h: [10, 12], roof: 'flat', roofH: [0, 0], shape: 2 },
+    { n: 6, w: [7, 10], d: [6, 8], h: [3.2, 4], roof: 'gable', roofH: [2, 2.6] },
+  ],
+  camp: [{ n: 9, w: [6, 8], d: [6, 7], h: [3, 3.4], roof: 'gable', roofH: [1.8, 2.4] }],
+  harbor: [
+    { n: 5, w: [16, 22], d: [22, 30], h: [7, 9], roof: 'gable', roofH: [2, 2.8] },
+    { n: 14, w: [2.6, 2.6], d: [6.2, 6.2], h: [2.7, 2.7], roof: 'flat', roofH: [0, 0], shape: 1 },
+    { n: 5, w: [8, 11], d: [7, 9], h: [3.4, 4.2], roof: 'flat', roofH: [0, 0] },
+  ],
+  station: [
+    { n: 1, w: [16, 16], d: [14, 14], h: [6, 6], roof: 'flat', roofH: [0, 0] },
+    { n: 3, w: [6, 7], d: [5, 6], h: [3.2, 3.6], roof: 'gable', roofH: [1.6, 2] },
+  ],
+  resort: [
+    { n: 1, w: [32, 36], d: [14, 16], h: [15, 18], roof: 'flat', roofH: [0, 0] },
+    { n: 11, w: [7, 9], d: [7, 9], h: [3.4, 3.8], roof: 'gable', roofH: [2.2, 2.8] },
+  ],
+  quarry: [
+    { n: 3, w: [8, 12], d: [7, 9], h: [3.6, 4.5], roof: 'flat', roofH: [0, 0] },
+    { n: 8, w: [2.6, 2.6], d: [6.2, 6.2], h: [2.7, 2.7], roof: 'flat', roofH: [0, 0], shape: 1 },
+  ],
+};
+
+function genBoxes(w: World) {
+  const rnd = mulberry32(w.seed * 7 + 99);
+  const range = (r: [number, number]) => r[0] + (r[1] - r[0]) * rnd();
+  for (const p of w.pois) {
+    const placed: Box[] = [];
+    for (const spec of SPECS[p.kind]) {
+      let made = 0;
+      for (let tries = 0; tries < spec.n * 40 && made < spec.n; tries++) {
+        let bw = Math.round(range(spec.w) * 2) / 2, bd = Math.round(range(spec.d) * 2) / 2;
+        if (rnd() < 0.5) [bw, bd] = [bd, bw];
+        // sample a point in the disc (rejection keeps it trig-free)
+        const ux = rnd() * 2 - 1, uz = rnd() * 2 - 1;
+        if (ux * ux + uz * uz > 1) continue;
+        const reach = p.kind === 'quarry' ? 0.98 : 0.86;
+        const cx = Math.round((p.x + ux * p.r * reach) / 2) * 2, cz = Math.round((p.z + uz * p.r * reach) / 2) * 2;
+        if (p.kind === 'quarry' && Math.hypot(cx - p.x, cz - p.z) < p.r * 0.82 && Math.hypot(cx - p.x, cz - p.z) > p.r * 0.2) continue;
+        const b: Box = {
+          x0: cx - bw / 2, x1: cx + bw / 2, z0: cz - bd / 2, z1: cz + bd / 2, y0: 0, fy: 0, y1: 0,
+          roof: ROOF_FLAT, roofH: 0, kind: p.kind, style: Math.floor(rnd() * 65536), poi: p.id, shape: spec.shape ?? 0,
+        };
+        const gap = b.shape === 1 ? 1.2 : 4;
+        if (placed.some((o) => b.x0 < o.x1 + gap && b.x1 > o.x0 - gap && b.z0 < o.z1 + gap && b.z1 > o.z0 - gap)) continue;
+        // keep off the roads
+        let onRoad = false;
+        for (let sx = 0; sx <= 4 && !onRoad; sx++) for (let sz = 0; sz <= 4; sz++) {
+          if (roadEdgeDist(w, lerp(b.x0, b.x1, sx / 4), lerp(b.z0, b.z1, sz / 4)) < 2.2) { onRoad = true; break; }
+        }
+        if (onRoad) continue;
+        // needs flat, dry ground
+        const hs = [terrainAt(w, b.x0, b.z0), terrainAt(w, b.x1, b.z0), terrainAt(w, b.x0, b.z1), terrainAt(w, b.x1, b.z1), terrainAt(w, cx, cz)];
+        const lo = Math.min(...hs), hi = Math.max(...hs);
+        if (lo < 1.1 || hi - lo > 1.6) continue;
+        const height = range(spec.h);
+        b.y0 = lo - 0.6; b.fy = hi + 0.15; b.y1 = b.fy + height;
+        const gable = spec.roof === 'gable' || (spec.roof === 'mix' && rnd() < 0.5);
+        if (gable) { b.roof = bw >= bd ? ROOF_GABLE_X : ROOF_GABLE_Z; b.roofH = range(spec.roofH); }
+        placed.push(b);
+        made++;
+      }
+    }
+    w.boxes.push(...placed);
+  }
+  for (const b of w.boxes) {
+    const pad = PLAYER_RADIUS + 1;
+    for (let cz = Math.floor((b.z0 - pad) / BOX_CELL); cz <= Math.floor((b.z1 + pad) / BOX_CELL); cz++)
+      for (let cx = Math.floor((b.x0 - pad) / BOX_CELL); cx <= Math.floor((b.x1 + pad) / BOX_CELL); cx++) {
+        const key = gridKey(cx, cz);
+        let list = w.boxGrid.get(key);
+        if (!list) w.boxGrid.set(key, (list = []));
+        list.push(b);
+      }
+  }
+}
+
+// ------------------------------------------------------------------ queries
+export function terrainAt(w: World, x: number, z: number) {
+  if (w.main.contains(x, z)) return w.main.sample(x, z);
+  if (w.spawn.contains(x, z)) return w.spawn.sample(x, z);
+  return -9;
+}
+
+/** Roof / top height of a box at (x, z) (clamped to its footprint). */
+export function boxTop(b: Box, x: number, z: number) {
+  if (b.roof === ROOF_GABLE_X) { const half = (b.z1 - b.z0) / 2; return b.y1 + b.roofH * (1 - Math.min(1, Math.abs(z - (b.z0 + b.z1) / 2) / half)); }
+  if (b.roof === ROOF_GABLE_Z) { const half = (b.x1 - b.x0) / 2; return b.y1 + b.roofH * (1 - Math.min(1, Math.abs(x - (b.x0 + b.x1) / 2) / half)); }
+  return b.y1;
+}
+
+/** Highest walkable surface at (x, z) that is no more than a step above feet height y. */
+export function surfaceAt(w: World, x: number, z: number, y: number) {
+  let s = Math.max(terrainAt(w, x, z), WATER_FLOAT_Y);
+  if (s < BRIDGE_Y && BRIDGE_Y <= y + STEP_UP && roadEdgeDist(w, x, z) < 0.2) s = BRIDGE_Y;
+  const list = w.boxGrid.get(gridKey(Math.floor(x / BOX_CELL), Math.floor(z / BOX_CELL)));
+  if (list) for (const b of list) {
+    if (x < b.x0 || x > b.x1 || z < b.z0 || z > b.z1) continue;
+    const top = boxTop(b, x, z);
+    if (top <= y + STEP_UP && top > s) s = top;
+  }
+  return s;
+}
+
+/** Push a player out of any building walls. Mutates and returns true if moved. */
+export function collideBoxes(w: World, s: { x: number; y: number; z: number; vx: number; vz: number }) {
+  const list = w.boxGrid.get(gridKey(Math.floor(s.x / BOX_CELL), Math.floor(s.z / BOX_CELL)));
+  if (!list) return false;
+  const r = PLAYER_RADIUS;
+  let hit = false;
+  for (const b of list) {
+    if (s.x <= b.x0 - r || s.x >= b.x1 + r || s.z <= b.z0 - r || s.z >= b.z1 + r) continue;
+    const top = boxTop(b, clamp(s.x, b.x0, b.x1), clamp(s.z, b.z0, b.z1));
+    if (s.y >= top - STEP_UP || s.y + PLAYER_HEIGHT <= b.y0) continue;
+    const dl = s.x - (b.x0 - r), dr = b.x1 + r - s.x, dt = s.z - (b.z0 - r), db = b.z1 + r - s.z;
+    const m = Math.min(dl, dr, dt, db);
+    if (m === dl) { s.x = b.x0 - r; if (s.vx > 0) s.vx = 0; }
+    else if (m === dr) { s.x = b.x1 + r; if (s.vx < 0) s.vx = 0; }
+    else if (m === dt) { s.z = b.z0 - r; if (s.vz > 0) s.vz = 0; }
+    else { s.z = b.z1 + r; if (s.vz < 0) s.vz = 0; }
+    hit = true;
+  }
+  return hit;
+}
+
+export function poiAt(w: World, x: number, z: number): Poi | null {
+  for (const p of w.pois) if (Math.hypot(x - p.x, z - p.z) < p.r) return p;
+  return null;
+}
+
+// ------------------------------------------------------------------ scatter (trees, rocks, bushes)
+export const SC_OAK = 0, SC_PINE = 1, SC_PALM = 2, SC_ROCK = 3, SC_BUSH = 4;
+/** Flat arrays of [x, y, z, scale, rotation01, tint01] per type. Visual only for now. */
+export function genScatter(w: World): Float32Array[] {
+  const out: number[][] = [[], [], [], [], []];
+  const step = 10;
+  const half = MAP.size / 2;
+  const place = (x: number, z: number, i: number, j: number, s: number) => {
+    const h = terrainAt(w, x, z);
+    if (h < 0.9) return;
+    const r1 = hash2(i, j, s + 1), r2 = hash2(i, j, s + 2), r3 = hash2(i, j, s + 3), r4 = hash2(i, j, s + 4);
+    const slope = Math.hypot(terrainAt(w, x + 2, z) - terrainAt(w, x - 2, z), terrainAt(w, x, z + 2) - terrainAt(w, x, z - 2)) / 4;
+    const road = roadEdgeDist(w, x, z);
+    if (road < 3) return;
+    const poi = poiAt(w, x, z);
+    const push = (t: number, scale: number) => out[t].push(x, h - 0.05, z, scale, r3, r4);
+    if (slope > 0.75 || h > 96) { if (r1 < 0.22) push(SC_ROCK, 0.8 + r2 * 2.4); return; }
+    if (poi) {
+      if (poi.kind === 'quarry' || poi.kind === 'city' && r1 > 0.05) return;
+      if (r1 > 0.12) return;
+      const list = w.boxGrid.get(gridKey(Math.floor(x / BOX_CELL), Math.floor(z / BOX_CELL)));
+      if (list && list.some((b) => x > b.x0 - 3 && x < b.x1 + 3 && z > b.z0 - 3 && z < b.z1 + 3)) return;
+    }
+    if (h < 3.2) { // beach
+      if (r1 < 0.05) push(SC_PALM, 0.85 + r2 * 0.5);
+      else if (r1 < 0.08) push(SC_ROCK, 0.5 + r2);
+      return;
+    }
+    const forest = fbm(x / 170, z / 170, w.seed + 41, 3);
+    const density = poi ? 1 : 0.035 + smooth(0.5, 0.66, forest) * 0.6;
+    if (r1 < density) {
+      const piney = h > 38 || fbm(x / 260, z / 260, w.seed + 43, 2) + (z < -300 ? 0.12 : 0) > 0.62;
+      push(piney ? SC_PINE : SC_OAK, 0.8 + r2 * 0.7);
+    } else if (r1 < density + 0.05) push(SC_BUSH, 0.7 + r2 * 0.8);
+    else if (r1 > 0.985) push(SC_ROCK, 0.5 + r2 * 1.2);
+  };
+  for (let j = 0; j < MAP.size / step; j++) for (let i = 0; i < MAP.size / step; i++) {
+    const x = -half + (i + hash2(i, j, w.seed + 51)) * step, z = -half + (j + hash2(i, j, w.seed + 52)) * step;
+    place(x, z, i, j, w.seed + 60);
+  }
+  // warm-up island: a ring of trees and bushes
+  for (let j = 0; j < 22; j++) for (let i = 0; i < 22; i++) {
+    const x = w.spawn.ox + (i + hash2(i, j, w.seed + 71)) * 9, z = w.spawn.oz + (j + hash2(i, j, w.seed + 72)) * 9;
+    const d = Math.hypot(x - SPAWN_ISLAND.x, z - SPAWN_ISLAND.z);
+    const h = terrainAt(w, x, z), r1 = hash2(i, j, w.seed + 73), r2 = hash2(i, j, w.seed + 74);
+    if (h < 1.2 || d < 34) continue;
+    if (r1 < 0.3) out[h < 3 ? SC_PALM : SC_OAK].push(x, h - 0.05, z, 0.8 + r2 * 0.5, r2, r1 * 3);
+    else if (r1 < 0.42) out[SC_BUSH].push(x, h - 0.05, z, 0.8 + r2 * 0.6, r2, r1);
+  }
+  return out.map((a) => new Float32Array(a));
+}
+
+// ------------------------------------------------------------------ entry
+const cache = new Map<number, World>();
+export function getWorld(seed: number = MAP.seed): World {
+  let w = cache.get(seed);
+  if (w) return w;
+  const pois: Poi[] = POI_DEFS.map((p, id) => ({ ...p, id, h: 0 }));
+  const river = smoothPath(RIVER, 30);
+  const roads = genRoads(seed, pois);
+  w = {
+    seed, pois, roads, river,
+    main: genMain(seed, pois, river),
+    spawn: genSpawn(seed),
+    boxes: [], boxGrid: new Map(), roadGrid: buildRoadGrid(roads),
+  };
+  genBoxes(w);
+  cache.set(seed, w);
+  return w;
+}

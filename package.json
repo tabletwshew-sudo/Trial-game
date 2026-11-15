@@ -14,7 +14,8 @@
     "start": "npm run start -w @dropzone/server",
     "test": "vitest run",
     "typecheck": "tsc -p packages/shared && tsc -p packages/server --noEmit && tsc -p packages/client --noEmit",
-    "e2e": "node tests/e2e/lobby.e2e.cjs"
+    "e2e:lobby": "node tests/e2e/lobby.e2e.cjs",
+    "e2e:match": "node tests/e2e/match.e2e.cjs"
   },
   "devDependencies": {
     "typescript": "5.7.2",

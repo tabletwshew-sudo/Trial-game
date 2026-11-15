@@ -17,16 +17,17 @@ export const matchCapacity = (mode: Mode) => Math.floor(MAX_PLAYERS / TEAM_SIZE[
 export const QUEUE_TIMEOUT_S = 30;
 
 export const MOVEMENT = {
-  walkSpeed: 4.2,
-  sprintSpeed: 6.4,
-  crouchSpeed: 2.4,
+  walkSpeed: 5.2,
+  sprintSpeed: 7.6,
+  crouchSpeed: 2.6,
   adsSpeedMul: 0.6,
-  swimSpeed: 3.2,
+  swimSpeed: 3.4,
   swimSprintSpeed: 4.8,
+  groundAccel: 55,
   slideMinEntrySpeed: 5.5,
   slideFriction: 2.2,
   slideSlopeAccel: 9.0,
-  jumpVelocity: 6.2,
+  jumpVelocity: 6.4,
   gravity: 19.6,
   airControl: 0.35,
   mantleMaxHeight: 2.5,
@@ -36,15 +37,24 @@ export const MOVEMENT = {
 } as const;
 
 export const DROP = {
-  busSpeed: 30,
-  busAltitude: 320,
-  doorsOpenDelayS: 5,
-  freefallMaxSpeed: 80,
-  freefallHorizontalSpeed: 25,
-  gliderAutoDeployHeight: 100,
-  gliderSpeed: 16,
-  gliderSink: 7,
+  busSpeed: 45,
+  busAltitude: 330,
+  /** Distance from the island centre where the route starts and ends. */
+  routeRadius: 1350,
+  doorsOpenDelayS: 6,
+  /** Everyone still on board is dropped this many seconds before the route ends. */
+  forceExitBeforeEndS: 7,
+  freefallMinSpeed: 32,
+  freefallMaxSpeed: 78,
+  freefallHorizontalSpeed: 24,
+  freefallDiveHorizontalSpeed: 9,
+  gliderAutoDeployHeight: 65,
+  gliderSpeed: 17,
+  gliderSink: 9,
 } as const;
+
+/** Seconds on the warm-up island before the dropship leaves. */
+export const WARMUP_S = 30;
 
 export const HEALTH = { maxHealth: 100, maxShield: 100 } as const;
 
@@ -76,4 +86,4 @@ export const STORM_PHASES: StormPhase[] = [
   { waitS: 10, shrinkS: 25, radiusFrac: 0, dps: 10 },
 ];
 
-export const MAP = { size: 2200, seed: 1337 } as const;
+export const MAP = { size: 2400, seed: 1337 } as const;
