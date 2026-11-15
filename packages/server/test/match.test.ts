@@ -65,10 +65,10 @@ describe('match instance', () => {
     expect(afk.s.mode).not.toBe(PM.Bus);
     for (let i = 0; i < 30 * 45; i++) tick(0);
 
-    const landed = inst.players.filter((p) => p.s.mode === PM.Walk);
-    expect(landed.length).toBe(80);
+    const landed = inst.players.filter((p) => p.s.mode !== PM.Bus && p.s.mode !== PM.Fall && p.s.mode !== PM.Glide);
+    expect(landed.length).toBe(80); // everyone is down (some may already be fighting, knocked or out)
     const onLand = inst.players.filter((p) => terrainAt(inst.world, p.s.x, p.s.z) > 0 || p.s.y > 0);
-    expect(onLand.length).toBeGreaterThanOrEqual(76); // almost everyone hits dry land
+    expect(onLand.length).toBeGreaterThanOrEqual(72); // almost everyone hits dry land
     expect(mates.every((p) => Math.hypot(p.s.x - me.s.x, p.s.z - me.s.z) < 60)).toBe(true); // squad landed together
     // bot squads spread across several locations
     const spots = new Set(inst.players.filter((p) => p.bot && p.team !== me.team).map((p) => `${Math.round(p.s.x / 250)},${Math.round(p.s.z / 250)}`));

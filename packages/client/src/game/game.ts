@@ -1,12 +1,16 @@
 import * as THREE from 'three';
 import {
-  DROP, PM, SIM_DT, busPos, clamp, decodeSnapshot, encodeInputs, getWorld, stepPlayer, surfaceAt, terrainAt,
-  type EntSnap, type GameInit, type GamePhase, type InputCmd, type MatchFoundView, type PlayerState, type RouteView, type ServerMsg, type UserView, type World,
+  ACT, DROP, EF, ITEMS, K, PM, SIM_DT, busPos, clamp, currentSpread, decodeSnapshot, encodeInputs, getWorld, raycastWorld, seatWorld, stepPlayer, surfaceAt, terrainAt, weaponDef,
+  type EntSnap, type GameEvent, type GameInit, type GamePhase, type InputCmd, type MatchFoundView, type PlayerState, type RouteView, type ServerMsg, type SimEvents, type UserView, type World,
 } from '@dropzone/shared';
 import type { Net } from '../net';
 import { SKINS } from '../lobby/character';
 import { h, toast } from '../ui/dom';
 import { Actors } from './actors';
+import { CarRenderer } from './cars';
+import { CombatHud } from './combathud';
+import { Effects } from './effects';
+import { LootRenderer } from './lootview';
 import { buildDropship } from './dropship';
 import { Hud, type HudView } from './hud';
 import { Input } from './input';
@@ -14,7 +18,7 @@ import { FOG_COLOR, FOG_FAR, FOG_NEAR, buildSky } from './sky';
 import { QUALITY, buildIsland, type Quality } from './terrain';
 
 const INTERP_MS = 100;
-interface Sample { t: number; x: number; y: number; z: number; yaw: number; mode: number; grounded: boolean }
+interface Sample { t: number; x: number; y: number; z: number; yaw: number; pitch: number; mode: number; flags: number; item: number; rarity: number }
 
 function pickQuality(): Quality {
   let name = new URLSearchParams(location.search).get('q');
@@ -84,6 +88,12 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
     ship.root.visible = false;
     scene.add(ship.root);
     const actors = new Actors(scene, roster, selfIdx);
+    const fx = new Effects(scene, world);
+    const lootR = new LootRenderer(scene);
+    lootR.set(init.loot);
+    const cars = new CarRenderer(scene, world);
+    let aliveCount = init.alive, specIdx = -1, revive = { p: 0, at: 0 };
+    const kills = [...init.kills];
 
     // squad map markers: a light beam in the world
     const beams = new Map<number, THREE.Mesh>();
@@ -110,7 +120,11 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       onMarker: (x, z) => net.send(x === undefined ? { t: 'game_marker' } : { t: 'game_marker', x, z }),
       onCloseMap: () => toggleMap(false),
     });
-    root.append(hud.el);
+    const combat = new CombatHud(roster, selfIdx, {
+      onLeave: () => leave(true),
+      onSpectate: () => input.lock(),
+    });
+    root.append(hud.el, combat.el);
 
     function toggleMap(open = !hud.mapOpen) {
       hud.setMap(open);
@@ -172,6 +186,50 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       if (m.t === 'game_phase') setPhase(m.phase, m.route);
       else if (m.t === 'game_gone') gone.add(m.idx);
       else if (m.t === 'game_marker') setMarker(m.idx, m.x, m.z);
+      else if (m.t === 'loot') { lootR.remove(m.del); lootR.add(m.add); }
+      else if (m.t === 'alive') aliveCount = m.alive;
+      else if (m.t === 'spec') specIdx = m.idx;
+      else if (m.t === 'result') { input.unlock(); combat.showResult(m.result); }
+      else if (m.t === 'ev') for (const e of m.ev) onEvent(e);
+    }
+
+    const tmpA = new THREE.Vector3(), tmpB = new THREE.Vector3();
+    function onEvent(e: GameEvent) {
+      switch (e.e) {
+        case 'shot': {
+          const ch = actors.character(e.i);
+          const from = ch && actors.states[e.i].visible ? ch.muzzleWorld(tmpA, e.w) : tmpA.set(...e.o);
+          fx.muzzle(from, weaponDef(e.w)?.cls === 'sniper');
+          for (let i = 0; i < e.h.length; i += 4) {
+            tmpB.set(e.h[i], e.h[i + 1], e.h[i + 2]);
+            if (i < 12 || weaponDef(e.w)?.pellets === 1) fx.tracer(from, tmpB);
+            fx.impact(tmpB, e.h[i + 3]);
+          }
+          break;
+        }
+        case 'dmg': {
+          combat.hitMarker(e.hd, !!e.ko);
+          if (e.d > 0) { const p = project(...e.p); if (p.show) combat.damageNumber(p.sx, p.sy, e.d, e.sh, e.hd); }
+          break;
+        }
+        case 'hurt': {
+          if (!e.from || !pred) { combat.hurtFrom(null); break; }
+          const ang = Math.atan2(-(e.from[0] - pred.x), -(e.from[1] - pred.z)) - input.yaw;
+          combat.hurtFrom(-ang);
+          break;
+        }
+        case 'proj': fx.spawnProjectile(e.id, e.it, e.p, e.v, e.fuse, !!weaponDef(e.it)?.projectile); break;
+        case 'boom': fx.removeProjectile(e.id); fx.explosion(tmpA.set(...e.p), e.r); break;
+        case 'car_boom': fx.explosion(tmpA.set(...e.p), 6); break;
+        case 'feed':
+          combat.feedLine(e.k, e.v, e.w, e.knock, e.cause);
+          if (!e.knock && e.k >= 0 && e.k !== e.v) kills[e.k] = (kills[e.k] ?? 0) + 1;
+          break;
+        case 'revived':
+          if (e.i < 0) revive = { p: e.by / 100, at: performance.now() };
+          else if (e.i !== selfIdx) toast(`${roster[e.by]?.name} revived ${roster[e.i]?.name}`, 'success');
+          break;
+      }
     }
 
     function onSnapshot(view: DataView) {
@@ -184,10 +242,11 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       for (const e of snap.ents as EntSnap[]) {
         if (e.idx >= hist.length) continue;
         const list = hist[e.idx];
-        list.push({ t: snap.time, x: e.x, y: e.y, z: e.z, yaw: e.yaw, mode: e.mode, grounded: e.grounded });
+        list.push({ t: snap.time, x: e.x, y: e.y, z: e.z, yaw: e.yaw, pitch: e.pitch, mode: e.mode, flags: e.flags, item: e.item, rarity: e.rarity });
         if (list.length > 16) list.shift();
         seenTick[e.idx] = snap.tick;
       }
+      cars.onSnapshot(snap.time, snap.vehs, snap.tick);
       if (snap.self) {
         const before = pred ? { x: pred.x, y: pred.y, z: pred.z } : null;
         pred = { ...snap.self, yaw: input.yaw, pitch: input.pitch };
@@ -203,15 +262,40 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       }
     }
 
+    // your own shots: draw them right away (the server confirms hits)
+    const liveEvents: SimEvents = {
+      shot: (e) => {
+        const def = weaponDef(e.weapon);
+        if (!def) return;
+        const ch = actors.character(selfIdx);
+        const from = ch ? ch.muzzleWorld(tmpA, e.weapon).clone() : new THREE.Vector3(e.origin.x, e.origin.y, e.origin.z);
+        fx.muzzle(from, def.cls === 'sniper' || def.cls === 'shotgun');
+        if (!def.projectile) for (const d of e.dirs) {
+          const hit = raycastWorld(world, e.origin, d, def.range);
+          tmpB.set(e.origin.x + d.x * hit.t, e.origin.y + d.y * hit.t, e.origin.z + d.z * hit.t);
+          fx.tracer(from, tmpB, '#fff3b0', true);
+          if (hit.kind !== 'none') fx.impact(tmpB, hit.kind === 'water' ? 3 : 0);
+        }
+        // recoil kick
+        const kick = { pistol: 0.012, smg: 0.006, ar: 0.008, burst: 0.006, shotgun: 0.045, autoshotgun: 0.025, dmr: 0.018, sniper: 0.06, rocket: 0.05 }[def.cls];
+        input.pitch = Math.min(1.5, input.pitch + kick * ((input.keys & K.ADS) ? 0.6 : 1));
+        input.yaw += (Math.random() - 0.5) * kick * 0.3;
+      },
+    };
+
     function simStep() {
-      const frozen = hud.menuOpen || hud.mapOpen;
-      const cmd: InputCmd = { keys: frozen ? 0 : input.keys, yaw: Math.fround(input.yaw), pitch: Math.fround(input.pitch) };
+      const frozen = hud.menuOpen || hud.mapOpen || combat.resultOpen;
+      const slot = pred ? input.takeSlot(pred.slot, (i) => pred!.inv[i].id !== 0) : 0;
+      const cmd: InputCmd = { keys: frozen ? 0 : input.keys, yaw: Math.fround(input.yaw), pitch: Math.fround(input.pitch), slot };
       seq++;
       pending.push({ seq, cmd });
       if (pending.length > 180) pending.shift();
       outbox.push(cmd);
-      if (pred) { prevPos.set(pred.x, pred.y, pred.z); stepPlayer(pred, cmd, world); }
-      if (outbox.length >= 2) { net.sendBinary(encodeInputs(seq - outbox.length + 1, outbox)); outbox = []; }
+      if (pred) { prevPos.set(pred.x, pred.y, pred.z); stepPlayer(pred, cmd, world, liveEvents); }
+      if (outbox.length >= 2) {
+        net.sendBinary(encodeInputs(seq - outbox.length + 1, outbox, performance.now() + clockOffset - INTERP_MS));
+        outbox = [];
+      }
     }
 
     // ---------------------------------------------------------------- render
@@ -272,7 +356,10 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
         s.x = A.x + (B.x - A.x) * k; s.y = A.y + (B.y - A.y) * k; s.z = A.z + (B.z - A.z) * k;
         let dy = B.yaw - A.yaw; if (dy > Math.PI) dy -= Math.PI * 2; if (dy < -Math.PI) dy += Math.PI * 2;
         s.yaw = A.yaw + dy * k;
-        s.mode = B.mode; s.grounded = B.grounded;
+        s.pitch = A.pitch + (B.pitch - A.pitch) * k;
+        s.mode = B.mode; s.grounded = (B.flags & EF.GROUNDED) !== 0; s.flags = B.flags; s.item = B.item; s.rarity = B.rarity;
+        if (s.mode === PM.Drive) { const at = seatWorld({ x: s.x, y: s.y, z: s.z, vh: s.yaw }, 0); s.x = at.x; s.y = at.y - 0.55; s.z = at.z; }
+        if (s.mode === PM.Ride) { s.y -= 0.55; const near = cars.nearest(s.x, s.y, s.z, 3); if (near !== null) { const c = cars.sample(near, rt); if (c) s.yaw = c.vh; } }
         const span = Math.max(0.001, (B.t - A.t) / 1000);
         const sp = Math.hypot(B.x - A.x, B.z - A.z) / span;
         s.speed += (sp - s.speed) * 0.25;
@@ -283,34 +370,66 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       // self
       const me = st[selfIdx];
       const inBus = !pred || pred.mode === PM.Bus;
-      if (pred && !inBus) {
+      const dead = !!pred && pred.mode === PM.Dead;
+      let carOverride: Parameters<typeof cars.update>[2];
+      if (pred && !inBus && !dead) {
         err.multiplyScalar(Math.exp(-dt * 12));
         selfPos.set(prevPos.x + (pred.x - prevPos.x) * alpha, prevPos.y + (pred.y - prevPos.y) * alpha, prevPos.z + (pred.z - prevPos.z) * alpha).add(err);
         me.x = selfPos.x; me.y = selfPos.y; me.z = selfPos.z;
-        me.yaw = input.yaw; me.mode = pred.mode; me.grounded = pred.grounded;
+        me.yaw = input.yaw; me.pitch = input.pitch; me.mode = pred.mode; me.grounded = pred.grounded;
         me.speed = Math.hypot(pred.vx, pred.vz);
         me.dive = clamp((-input.pitch - 0.2) / 0.9, 0, 1);
+        const held = pred.inv[pred.slot];
+        me.item = held.id; me.rarity = held.r;
+        me.flags = (pred.keys & K.SPRINT && me.speed > 6 ? EF.SPRINT : 0) | (pred.keys & K.CROUCH ? EF.CROUCH : 0) | (pred.use > 0 ? EF.USING : 0) | (pred.keys & K.ADS ? EF.ADS : 0);
         me.visible = true;
+        if (pred.mode === PM.Drive) {
+          const steer = ((input.keys & K.R) ? 1 : 0) - ((input.keys & K.L) ? 1 : 0);
+          carOverride = { id: pred.veh, x: selfPos.x, y: selfPos.y, z: selfPos.z, vh: pred.vh, vs: pred.vs, steer };
+          const at = seatWorld(carOverride, 0);
+          me.x = at.x; me.y = at.y - 0.55; me.z = at.z; me.yaw = pred.vh;
+        } else if (pred.mode === PM.Ride) {
+          const c = cars.sample(pred.veh, rt);
+          if (c) { const at = seatWorld(c, pred.seat); selfPos.set(at.x, at.y, at.z); me.x = at.x; me.y = at.y - 0.55; me.z = at.z; me.yaw = c.vh; }
+        }
       } else {
-        me.visible = false; me.mode = PM.Bus;
+        me.visible = false; me.mode = inBus ? PM.Bus : PM.Dead;
         if (shipActive) selfPos.set(shipX, shipY, shipZ);
+        else if (dead && specIdx >= 0 && st[specIdx].visible) selfPos.set(st[specIdx].x, st[specIdx].y, st[specIdx].z);
         else if (pred) selfPos.set(pred.x, pred.y, pred.z);
       }
 
       // camera
-      const cp = Math.cos(input.pitch);
-      dir.set(-Math.sin(input.yaw) * cp, Math.sin(input.pitch), -Math.cos(input.yaw) * cp);
+      const watching = dead && specIdx >= 0 && st[specIdx].visible;
+      const camYaw = watching ? st[specIdx].yaw : pred?.mode === PM.Drive ? input.yaw : input.yaw;
+      const camPitch = watching ? -0.2 : input.pitch;
+      const cp = Math.cos(camPitch);
+      dir.set(-Math.sin(camYaw) * cp, Math.sin(camPitch), -Math.cos(camYaw) * cp);
       const air = !inBus && (me.mode === PM.Fall || me.mode === PM.Glide);
-      const kCam = 1 - Math.exp(-dt * 6);
-      camDist += ((inBus ? 46 : air ? 8.5 : 4.3) - camDist) * kCam;
-      shoulder += ((inBus || air ? 0 : 0.75) - shoulder) * kCam;
-      pivot.set(selfPos.x + Math.cos(input.yaw) * shoulder, selfPos.y + (inBus ? 4 : air ? 1.3 : 1.62), selfPos.z - Math.sin(input.yaw) * shoulder);
+      const driving = !!pred && (pred.mode === PM.Drive || pred.mode === PM.Ride);
+      const heldDef = pred ? weaponDef(pred.inv[pred.slot].id) : null;
+      const ads = !!pred && !!heldDef && (input.keys & K.ADS) !== 0 && (pred.mode === PM.Walk || pred.mode === PM.Ride) && pred.act === ACT.None;
+      const kCam = 1 - Math.exp(-dt * (ads ? 14 : 6));
+      camDist += ((inBus ? 46 : air ? 8.5 : driving ? 8 : ads ? 2.2 : dead ? 5 : 4.3) - camDist) * kCam;
+      shoulder += ((inBus || air || driving ? 0 : ads ? 0.62 : 0.75) - shoulder) * kCam;
+      const knockedCam = pred?.mode === PM.Knocked ? -0.7 : 0;
+      pivot.set(selfPos.x + Math.cos(camYaw) * shoulder, selfPos.y + (inBus ? 4 : air ? 1.3 : driving ? 2.4 : 1.62 + knockedCam), selfPos.z - Math.sin(camYaw) * shoulder);
       camPos.copy(pivot).addScaledVector(dir, -camDist);
+      // keep the camera out of walls: pull in to the first thing behind the player
+      const back = { x: camPos.x - pivot.x, y: camPos.y - pivot.y, z: camPos.z - pivot.z };
+      const bl = Math.hypot(back.x, back.y, back.z);
+      if (bl > 0.5 && !inBus) {
+        const hit = raycastWorld(world, pivot, { x: back.x / bl, y: back.y / bl, z: back.z / bl }, bl, false);
+        if (hit.kind === 'building') camPos.copy(pivot).addScaledVector(dir, -Math.max(0.6, hit.t - 0.3));
+      }
       camPos.y = Math.max(camPos.y, Math.max(terrainAt(world, camPos.x, camPos.z), 0) + 0.35);
       camera.position.copy(camPos);
       camera.lookAt(pivot.x + dir.x * 20, pivot.y + dir.y * 20, pivot.z + dir.z * 20);
-      const wantFov = me.mode === PM.Fall && !inBus ? 76 + me.dive * 10 : 70;
+      const scoped = ads && !!heldDef?.scope && camDist < 2.6;
+      const wantFov = me.mode === PM.Fall && !inBus ? 76 + me.dive * 10 : ads && heldDef ? heldDef.adsFov : 70;
       if (Math.abs(wantFov - fov) > 0.05) { fov += (wantFov - fov) * kCam; camera.fov = fov; camera.updateProjectionMatrix(); }
+      input.zoom = fov / 70;
+      actors.states[selfIdx].visible &&= !scoped; // hide yourself inside a scope
 
       if (debugCam) { // free camera for screenshots and debugging
         camPos.set(debugCam.x, debugCam.y, debugCam.z);
@@ -321,6 +440,9 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       sky.update(dt, camPos, debugCam ? camPos : selfPos);
       island.update(dt, camPos);
       actors.update(dt, time, camPos);
+      fx.update(dt);
+      lootR.update(dt, time, camPos);
+      cars.update(dt, rt, carOverride);
       for (const b of beams.values()) if (b.visible) (b.material as THREE.MeshBasicMaterial).opacity = 0.42 + Math.sin(time * 3) * 0.12;
       renderer.render(scene, camera);
 
@@ -331,7 +453,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
           x: selfPos.x, y: selfPos.y, z: selfPos.z, yaw: input.yaw, mode: inBus ? PM.Bus : me.mode,
           height: selfPos.y - surfaceAt(world, selfPos.x, selfPos.z, Infinity), vy: pred?.vy ?? 0, speed: me.speed,
         },
-        alive: roster.length - gone.size,
+        alive: aliveCount,
         team: team.map((idx) => ({ idx, x: idx === selfIdx ? selfPos.x : st[idx].x, z: idx === selfIdx ? selfPos.z : st[idx].z, yaw: idx === selfIdx ? input.yaw : st[idx].yaw, mode: idx === selfIdx ? (inBus ? PM.Bus : me.mode) : hist[idx].length ? hist[idx][hist[idx].length - 1].mode : PM.Walk, visible: idx === selfIdx ? !inBus : st[idx].visible })),
         tags: team.filter((idx) => idx !== selfIdx && st[idx].visible).map((idx) => {
           const s = st[idx], p = project(s.x, s.y + 2.45, s.z);
@@ -344,6 +466,25 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
         locked: input.locked, fps,
       };
       hud.update(view, dt);
+      if (pred) {
+        // what would E do right now?
+        let prompt: string | null = null, promptRarity = 0;
+        if (pred.mode === PM.Drive || pred.mode === PM.Ride) prompt = 'Get out';
+        else if (pred.mode === PM.Walk && pred.act === ACT.None) {
+          const downed = team.find((i) => i !== selfIdx && st[i].visible && st[i].mode === PM.Knocked && Math.hypot(st[i].x - pred!.x, st[i].z - pred!.z) < 2.8);
+          const car = cars.nearest(pred.x, pred.y, pred.z, 3.8);
+          const it = lootR.pickTarget(pred.x, pred.y, pred.z, input.yaw);
+          if (downed !== undefined) prompt = `Hold to revive ${roster[downed].name}`;
+          else if (car !== null) prompt = 'Get in';
+          else if (it) { prompt = CombatHud.label(it.item, it.r, it.n); promptRarity = ITEMS[it.item]?.kind === 'weapon' ? it.r : 0; }
+        }
+        const rp = performance.now() - revive.at < 200 ? revive.p : 0;
+        combat.update({
+          s: pred, spread: heldDef ? currentSpread(pred, heldDef) : 0, fov, prompt, promptRarity,
+          revive: rp, reviveLabel: pred.act === ACT.Reviving ? 'REVIVING' : 'BEING REVIVED', scoped,
+          spectating: watching ? roster[specIdx].name : null, kills: kills[selfIdx] ?? 0,
+        }, dt);
+      }
 
       // slow computer? quietly drop to cheaper settings
       if (time > 4 && fps < 26) { slowFor += dt; } else slowFor = 0;
@@ -361,7 +502,8 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       input,
       set cam(c: typeof debugCam) { debugCam = c; },
       self: selfIdx, roster, actors: actors.states,
-      get state() { return { phase, mode: pred?.mode ?? -1, x: selfPos.x, y: selfPos.y, z: selfPos.z, grounded: pred?.grounded ?? false, fps, pending: pending.length, visible: actors.states.filter((s) => s.visible).length, doorsOpen: !!route && performance.now() + clockOffset >= route.doorsAt, err: err.length() }; },
+      get pred() { return pred; }, loot: lootR, cars, fx,
+      get state() { return { phase, mode: pred?.mode ?? -1, hp: pred?.hp ?? 0, shield: pred?.shield ?? 0, slot: pred?.slot ?? 0, inv: pred?.inv.map((x) => x.id) ?? [], veh: pred?.veh ?? -1, alive: aliveCount, x: selfPos.x, y: selfPos.y, z: selfPos.z, grounded: pred?.grounded ?? false, fps, pending: pending.length, visible: actors.states.filter((s) => s.visible).length, doorsOpen: !!route && performance.now() + clockOffset >= route.doorsAt, err: err.length() }; },
     };
 
     return {
@@ -369,7 +511,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       dispose() {
         renderer.setAnimationLoop(null);
         removeEventListener('resize', resize);
-        input.dispose(); actors.dispose();
+        input.dispose(); actors.dispose(); lootR.clear();
         scene.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh || (o as THREE.InstancedMesh).isInstancedMesh) m.geometry?.dispose(); });
         renderer.dispose(); renderer.domElement.remove();
         delete (window as any).__dz;

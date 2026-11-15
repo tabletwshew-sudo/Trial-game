@@ -5,3 +5,7 @@ export * from './world.js';
 export * from './sim.js';
 export * from './bus.js';
 export * from './netcode.js';
+export * from './items.js';
+export * from './combat.js';
+export * from './veh.js';
+export * from './projectile.js';

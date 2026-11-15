@@ -85,7 +85,7 @@ tests/      e2e (Playwright)
     by jumping from height later (if enabled)
   * Squad **follow-leader** jumping
 
-### Phase 4 — Weapons, heals, vehicles, ammo, inventory
+### Phase 4 — Weapons, heals, vehicles, ammo, inventory ✅
 * Inventory: **5 slots** + ammo pouch; rarity tiers Common → Uncommon → Rare →
   Epic → Legendary (grey/green/blue/purple/gold), with damage scaling per tier
 * Weapon classes (original names): AR, Burst AR, SMG, Pump Shotgun, Tactical

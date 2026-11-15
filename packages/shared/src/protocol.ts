@@ -1,6 +1,6 @@
 import type { Mode } from './constants.js';
 
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 // ---------- view models (what the server sends about things) ----------
 export type Presence = 'offline' | 'lobby' | 'queue' | 'in_match';
@@ -43,6 +43,27 @@ export type GamePhase = 'warmup' | 'bus' | 'play';
 export interface RosterEntry { idx: number; name: string; team: number; skin: number; bot: boolean }
 export interface RouteView { x0: number; z0: number; x1: number; z1: number; t0: number; t1: number; doorsAt: number; ejectAt: number }
 export interface MarkerView { idx: number; x: number; z: number }
+/** A pickup lying on the ground. */
+export interface LootView { id: number; item: number; r: number; n: number; x: number; y: number; z: number }
+
+export type FeedCause = 'gun' | 'blast' | 'fall' | 'bleed' | 'car' | 'water' | 'left';
+type V3 = [number, number, number];
+/** Things that happened this tick, batched into one message per player. */
+export type GameEvent =
+  /** A shot: shooter, weapon, origin, and per pellet the end point + what it hit (0 world, 1 shield, 2 health, 3 water, 4 car, 5 nothing). */
+  | { e: 'shot'; i: number; w: number; o: V3; h: number[] }
+  /** Damage you dealt (for hit markers and damage numbers). */
+  | { e: 'dmg'; t: number; d: number; sh: boolean; hd: boolean; p: V3; ko?: boolean }
+  /** Damage you took, and the direction it came from. */
+  | { e: 'hurt'; d: number; from: [number, number] | null }
+  | { e: 'proj'; id: number; it: number; p: V3; v: V3; fuse: number }
+  | { e: 'boom'; id: number; p: V3; r: number }
+  | { e: 'feed'; k: number; v: number; w: number; knock: boolean; cause: FeedCause }
+  | { e: 'revived'; i: number; by: number }
+  | { e: 'car_boom'; id: number; p: V3 };
+
+export interface GameResult { place: number; kills: number; killer: string | null; win: boolean; teams: number }
+
 export interface GameInit {
   matchId: string;
   seed: number;
@@ -56,6 +77,12 @@ export interface GameInit {
   players: RosterEntry[];
   gone: number[];
   markers: MarkerView[];
+  loot: LootView[];
+  /** Players still in (not eliminated), and how many teams. */
+  alive: number;
+  teamsAlive: number;
+  /** Eliminations per player index. */
+  kills: number[];
 }
 
 // ---------- client -> server ----------
@@ -95,6 +122,12 @@ export type ServerMsg =
   | { t: 'game_gone'; idx: number }
   | { t: 'game_marker'; idx: number; x?: number; z?: number }
   | { t: 'game_end'; reason: string }
+  | { t: 'ev'; ev: GameEvent[] }
+  | { t: 'loot'; add: LootView[]; del: number[] }
+  | { t: 'alive'; alive: number; teams: number }
+  | { t: 'result'; result: GameResult }
+  /** Who you're watching after you've been eliminated (-1 = nobody). */
+  | { t: 'spec'; idx: number }
   | { t: 'toast'; kind: 'info' | 'error' | 'success'; message: string }
   | { t: 'error'; message: string };
 

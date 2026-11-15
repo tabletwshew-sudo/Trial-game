@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DROP, K, MOVEMENT, PM, SIM_HZ, SPAWN_ISLAND, WATER_FLOAT_Y, busPos, collideBoxes, decodeInputs, decodeSnapshot, encodeEnts, encodeInputs, encodeSnapshot, getWorld, makeRoute, mulberry32, newPlayerState, stepPlayer, surfaceAt, terrainAt, type InputCmd } from '../src/index';
+import { DROP, K, MOVEMENT, PM, SIM_HZ, SPAWN_ISLAND, WATER_FLOAT_Y, busPos, collideBoxes, decodeInputs, decodeSnapshot, encodeEnt, ENT_BYTES, encodeInputs, encodeSnapshot, getWorld, makeRoute, mulberry32, newPlayerState, stepPlayer, surfaceAt, terrainAt, type InputCmd } from '../src/index';
 
 const w = getWorld();
 const run = (s: ReturnType<typeof newPlayerState>, cmd: InputCmd, seconds: number) => { for (let i = 0; i < seconds * SIM_HZ; i++) stepPlayer(s, cmd, w); };
@@ -117,24 +117,35 @@ describe('drop', () => {
 
 describe('netcode', () => {
   it('round-trips inputs and rejects garbage', () => {
-    const cmds = [{ keys: 5, yaw: Math.fround(1.25), pitch: Math.fround(-0.5) }, { keys: 16, yaw: Math.fround(-3), pitch: 0 }];
-    expect(decodeInputs(new DataView(encodeInputs(42, cmds)))).toEqual({ firstSeq: 42, cmds });
+    const cmds = [{ keys: 5 | K.FIRE | K.ADS, yaw: Math.fround(1.25), pitch: Math.fround(-0.5), slot: 0 }, { keys: 16, yaw: Math.fround(-3), pitch: 0, slot: 3 }];
+    expect(decodeInputs(new DataView(encodeInputs(42, cmds, 1234.5)))).toEqual({ firstSeq: 42, cmds, viewTime: 1234.5 });
     expect(decodeInputs(new DataView(new ArrayBuffer(3)))).toBeNull();
-    const bad = encodeInputs(1, [{ keys: 0, yaw: NaN, pitch: 0 }]);
-    expect(decodeInputs(new DataView(bad))).toBeNull();
+    expect(decodeInputs(new DataView(encodeInputs(1, [{ keys: 0, yaw: NaN, pitch: 0 }])))).toBeNull();
+    expect(decodeInputs(new DataView(encodeInputs(1, [{ keys: 0, yaw: 0, pitch: 0, slot: 9 }])))).toBeNull();
     const steep = decodeInputs(new DataView(encodeInputs(1, [{ keys: 0, yaw: 0, pitch: 9 }])))!;
     expect(steep.cmds[0].pitch).toBeLessThanOrEqual(1.55);
   });
-  it('round-trips snapshots within quantisation error', () => {
-    const self = { ...newPlayerState(), x: 101.5, y: 22.25, z: -640.125, vx: 1, vy: -2, vz: 3, mode: PM.Glide, grounded: false, keys: 17 };
-    const ents = [{ idx: 7, x: -1450.3, y: 330, z: 912.77, yaw: 4.2, mode: PM.Fall, grounded: false }, { idx: 79, x: 0, y: -1.15, z: 0, yaw: 0, mode: PM.Walk, grounded: true }];
-    const snap = decodeSnapshot(new DataView(encodeSnapshot(9, 123456.5, 77, self, encodeEnts(ents))))!;
+  it('round-trips snapshots, including the full inventory', () => {
+    const self = { ...newPlayerState(), x: 101.5, y: 22.25, z: -640.125, vx: 1, vy: -2, vz: 3, mode: PM.Glide, grounded: false, keys: 17 | K.ADS, hp: 73, shield: 50, slot: 2, cd: 40, burst: 2, reload: 99, use: 0, bloom: 31, shots: 123456, seed: 99, veh: 3, seat: 1, vh: 1.5, vs: -4.25, yaw: 0.5, pitch: -0.25 };
+    self.inv[2] = { id: 3, r: 4, n: 1, mag: 27 }; self.inv[4] = { id: 11, r: 0, n: 12, mag: 0 };
+    self.ammo = [10, 999, 0, 7, 2];
+    const ents = [
+      { idx: 7, x: -1450.3, y: 330, z: 912.77, yaw: 4.2, pitch: -0.6, mode: PM.Fall, flags: 3, item: 5, rarity: 2 },
+      { idx: 79, x: 0, y: -1.15, z: 0, yaw: 0, pitch: 0.3, mode: PM.Walk, flags: 1, item: 0, rarity: 0 },
+    ];
+    const block = new Uint8Array(ents.length * ENT_BYTES);
+    ents.forEach((e, i) => encodeEnt(e, block, i * ENT_BYTES));
+    const vehs = [{ id: 4, x: 10.5, y: 3.25, z: -20, vh: 2.0, vs: 18.33, hp: 640, driver: true }];
+    const snap = decodeSnapshot(new DataView(encodeSnapshot(9, 123456.5, 77, self, block, ents.length, vehs)))!;
     expect(snap).toMatchObject({ tick: 9, time: 123456.5, ack: 77 });
-    expect(snap.self).toMatchObject({ x: 101.5, y: 22.25, mode: PM.Glide, grounded: false, keys: 17 });
+    expect(snap.self).toEqual(self);
     snap.ents.forEach((e, i) => {
-      expect(e.idx).toBe(ents[i].idx); expect(e.mode).toBe(ents[i].mode); expect(e.grounded).toBe(ents[i].grounded);
-      expect(Math.abs(e.x - ents[i].x)).toBeLessThan(0.04); expect(Math.abs(e.y - ents[i].y)).toBeLessThan(0.02); expect(Math.abs(e.yaw - ents[i].yaw)).toBeLessThan(0.03);
+      expect(e).toMatchObject({ idx: ents[i].idx, mode: ents[i].mode, flags: ents[i].flags, item: ents[i].item, rarity: ents[i].rarity });
+      expect(Math.abs(e.x - ents[i].x)).toBeLessThan(0.04); expect(Math.abs(e.y - ents[i].y)).toBeLessThan(0.02);
+      expect(Math.abs(e.yaw - ents[i].yaw)).toBeLessThan(0.03); expect(Math.abs(e.pitch - ents[i].pitch)).toBeLessThan(0.01);
     });
-    expect(decodeSnapshot(new DataView(encodeSnapshot(1, 1, 1, null, encodeEnts([]))))!.self).toBeNull();
+    expect(snap.vehs[0]).toMatchObject({ id: 4, hp: 640, driver: true });
+    expect(Math.abs(snap.vehs[0].vs - 18.33)).toBeLessThan(0.2);
+    expect(decodeSnapshot(new DataView(encodeSnapshot(1, 1, 1, null, new Uint8Array(0), 0, [])))!.self).toBeNull();
   });
 });

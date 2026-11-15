@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { outlineMaterial, part, softRamp, toonVertex } from './toon';
 import { GeoBuilder, mergeColored, type Piece } from '../game/geo';
+import { itemMesh, muzzleOffset } from '../game/items3d';
+import { weaponDef } from '@dropzone/shared';
 
 /**
  * Original stylised character ("Ranger"): beanie, hoodie, cargo pants,
@@ -39,8 +41,8 @@ function bake(group: THREE.Group) {
   group.add(mesh);
 }
 
-export type PoseMode = 'idle' | 'run' | 'air' | 'fall' | 'glide' | 'swim';
-export interface Pose { mode: PoseMode; speed: number; dive: number }
+export type PoseMode = 'idle' | 'run' | 'air' | 'fall' | 'glide' | 'swim' | 'knocked' | 'drive' | 'sit';
+export interface Pose { mode: PoseMode; speed: number; dive: number; hold?: 'none' | 'gun' | 'item'; pitch: number; sprint?: boolean; crouch?: boolean; using?: boolean }
 const damp = (a: number, b: number, k: number) => a + (b - a) * k;
 
 export class Character {
@@ -52,6 +54,8 @@ export class Character {
   private legL = new THREE.Group();
   private legR = new THREE.Group();
   private glider = new THREE.Group();
+  private held = new THREE.Group();
+  private heldKey = '';
   private cycle = 0;
   private gliderOpen = 0;
   private phase = Math.random() * 10;
@@ -169,6 +173,9 @@ export class Character {
     H.add(neck, skull, nose, mouth, beanie, fold, pom, fringe);
     B.add(H);
     for (const g of [B, H, this.armL, this.armR, this.legL, this.legR]) bake(g);
+    this.held.position.set(0, -0.62, 0.02);
+    this.armR.add(this.held);
+    for (const a of [this.armL, this.armR]) a.rotation.order = 'YXZ';
 
     // glider: an original delta kite in the outfit's colours
     const g = new GeoBuilder();
@@ -187,11 +194,27 @@ export class Character {
     this.root.add(this.glider);
   }
 
+  /** Put an item in the right hand (0 = nothing). */
+  setHeld(item: number, rarity: number) {
+    const key = item ? `${item}:${rarity}` : '';
+    if (key === this.heldKey) return;
+    this.heldKey = key;
+    this.held.clear();
+    if (!item) return;
+    const m = itemMesh(item, rarity);
+    const isWeapon = !!weaponDef(item);
+    // weapon barrels run along the arm; small items sit in the palm
+    if (isWeapon) { m.rotation.set(-Math.PI / 2, 0, Math.PI, 'XYZ'); m.position.set(0, -0.04, 0.02); }
+    else { m.position.set(0, -0.08, 0.08); m.scale.setScalar(0.9); }
+    this.held.add(m);
+  }
+
   /** In-match animation: blends joints toward the pose for the current movement state. */
   animate(dt: number, t: number, p: Pose) {
     const k = 1 - Math.exp(-dt * 14);
-    let rx = 0, by = 0, legL = 0, legR = 0, aLx = 0, aRx = 0, aLz = -0.12, aRz = 0.12, headX = 0;
+    let rx = 0, by = 0, legL = 0, legR = 0, aLx = 0, aRx = 0, aLz = -0.12, aRz = 0.12, aLy = 0, aRy = 0, headX = 0;
     const sp = Math.min(1.15, p.speed / 7.6);
+    const gun = p.hold === 'gun';
     switch (p.mode) {
       case 'idle': by = Math.sin((t + this.phase) * 2.1) * 0.012; aLx = Math.sin((t + this.phase) * 1.05) * 0.05; aRx = -aLx; break;
       case 'run': {
@@ -224,7 +247,33 @@ export class Character {
         legL = sw * 0.45; legR = -sw * 0.45;
         break;
       }
+      case 'knocked': {
+        this.cycle += dt * (2 + p.speed * 2.5);
+        const sw = Math.sin(this.cycle) * Math.min(1, p.speed);
+        rx = 1.35; by = -0.55; headX = -0.9;
+        aLx = -2.6 + sw * 0.5; aRx = -2.6 - sw * 0.5; aLz = -0.35; aRz = 0.35;
+        legL = sw * 0.3; legR = -sw * 0.3;
+        break;
+      }
+      case 'drive': case 'sit': {
+        by = -0.42; legL = legR = -1.45; rx = -0.08;
+        if (p.mode === 'drive') { aLx = aRx = -1.15; aLz = -0.05; aRz = 0.05; }
+        else { aLx = aRx = -0.3; }
+        break;
+      }
     }
+    // upper body: aim the gun (except while sprinting, swimming, gliding...)
+    const canAim = gun && (p.mode === 'idle' || p.mode === 'run' || p.mode === 'air' || p.mode === 'sit');
+    if (canAim && !p.sprint) {
+      const pitch = Math.max(-1.2, Math.min(1.2, p.pitch));
+      aRx = -Math.PI / 2 - pitch; aRz = 0.05; aRy = -0.08;
+      aLx = -Math.PI / 2 - pitch + 0.05; aLz = 0.1; aLy = 0.62;
+      headX = -pitch * 0.5;
+      if (p.mode === 'run') rx = 0.04;
+    } else if (canAim && p.sprint) { aRx = -0.9; aRy = 0; aLx = -0.75; aLy = 0.5; aRz = 0.15; }
+    if (p.using) { aRx = -2.3 + Math.sin(t * 8) * 0.08; aRz = -0.25; aRy = 0.3; headX = 0.25; }
+    if (p.crouch && (p.mode === 'idle' || p.mode === 'run')) { by -= 0.32; legL -= 0.55; legR -= 0.55; rx += 0.18; }
+
     const B = this.body;
     B.rotation.x = damp(B.rotation.x, rx, k);
     B.rotation.z = 0; B.position.x = 0;
@@ -234,9 +283,11 @@ export class Character {
     B.position.z = -pivot * Math.sin(B.rotation.x);
     this.legL.rotation.set(damp(this.legL.rotation.x, legL, k), 0, -0.03);
     this.legR.rotation.set(damp(this.legR.rotation.x, legR, k), 0, 0.03);
-    this.armL.rotation.set(damp(this.armL.rotation.x, aLx, k), 0, damp(this.armL.rotation.z, aLz, k));
-    this.armR.rotation.set(damp(this.armR.rotation.x, aRx, k), 0, damp(this.armR.rotation.z, aRz, k));
+    const kArm = gun ? 1 - Math.exp(-dt * 24) : k;
+    this.armL.rotation.set(damp(this.armL.rotation.x, aLx, kArm), damp(this.armL.rotation.y, aLy, kArm), damp(this.armL.rotation.z, aLz, kArm));
+    this.armR.rotation.set(damp(this.armR.rotation.x, aRx, kArm), damp(this.armR.rotation.y, aRy, kArm), damp(this.armR.rotation.z, aRz, kArm));
     this.head.rotation.set(damp(this.head.rotation.x, headX, k), damp(this.head.rotation.y, 0, k), 0);
+    this.held.visible = p.mode !== 'fall' && p.mode !== 'glide' && p.mode !== 'swim' && p.mode !== 'knocked' && p.mode !== 'drive';
     // glider pops open / folds away
     this.gliderOpen = damp(this.gliderOpen, p.mode === 'glide' ? 1 : 0, 1 - Math.exp(-dt * 10));
     this.glider.visible = this.gliderOpen > 0.03;
@@ -245,7 +296,18 @@ export class Character {
     this.glider.rotation.z = Math.sin(t * 1.3 + this.phase) * 0.04;
   }
 
-  dispose() { this.root.traverse((o) => { if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).geometry.dispose(); }); }
+  /** World position of the muzzle of the held weapon (for flashes and tracers). */
+  muzzleWorld(out: THREE.Vector3, item: number) {
+    const m = this.held.children[0];
+    if (!m) return this.armR.getWorldPosition(out);
+    return m.localToWorld(out.copy(muzzleOffset(item)));
+  }
+
+  /** Frees this character's own geometry (held items share a cache, so they're detached first). */
+  dispose() {
+    this.held.removeFromParent();
+    this.root.traverse((o) => { if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).geometry.dispose(); });
+  }
 
   /** Little hop + wave (ready-up, joining). */
   celebrate() { this.hop = 1; this.wave = 1.6; }

@@ -19,6 +19,9 @@ require('fs').mkdirSync(S, { recursive: true });
   await p.waitForSelector('.game-loading'); await p.waitForTimeout(300); await shot('10-loading');
   await p.waitForSelector('.hud', { timeout: 30000 });
   log.warmup = await until((s) => s.mode === 0 && s.visible > 40, 15000, 'warmup');
+  // record every movement mode the page passes through (screenshots are slow in headless, so polling can miss short phases)
+  await p.evaluate(() => { window.__modes = new Set(); setInterval(() => { const s = window.__dz && window.__dz.state; if (s) window.__modes.add(s.mode); }, 40); });
+  const seen = (m) => p.evaluate((m) => window.__modes.has(m), m);
   await p.waitForTimeout(1500); await shot('11-warmup');
   await p.keyboard.down('KeyW'); await p.keyboard.down('ShiftLeft'); await p.waitForTimeout(1500);
   await shot('12-warmup-run');
@@ -30,14 +33,16 @@ require('fs').mkdirSync(S, { recursive: true });
   await p.mouse.click(720, 420); await p.waitForTimeout(500); await shot('14-map'); await p.keyboard.press('KeyM');
   await until((s) => s.doorsOpen, 15000, 'doors'); await until((s) => Math.hypot(s.x, s.z) < 620, 40000, 'over island');
   await p.keyboard.press('Space');
-  await until((s) => s.mode === 2, 5000, 'freefall');
+  for (let i = 0; i < 50 && !(await seen(2)); i++) await p.waitForTimeout(100);
+  if (!(await seen(2))) throw new Error('never entered freefall');
   // steer toward the nearest town centre-ish (the middle of the island)
   const aim = () => p.evaluate(() => { const s = window.__dz.state; window.__dz.input.yaw = Math.atan2(s.x - (-140), s.z - 40); });
   await aim();
   await p.evaluate(() => { window.__dz.input.pitch = -0.5; }); await p.keyboard.down('KeyW');
   await p.waitForTimeout(1200); await shot('15-freefall');
   await p.evaluate(() => { window.__dz.input.pitch = -1.25; }); await p.waitForTimeout(1500); await shot('16-dive');
-  await until((s) => s.mode === 3, 20000, 'glide');
+  for (let i = 0; i < 200 && !(await seen(3)); i++) await p.waitForTimeout(100);
+  if (!(await seen(3))) throw new Error('never opened the glider');
   await aim();
   await p.evaluate(() => { window.__dz.input.pitch = -0.35; }); await p.waitForTimeout(1500); await shot('17-glide');
   log.landed = await until((s) => s.mode === 0 && s.grounded, 40000, 'land');

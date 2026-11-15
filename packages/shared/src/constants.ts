@@ -33,7 +33,7 @@ export const MOVEMENT = {
   mantleMaxHeight: 2.5,
   hurdleMaxHeight: 1.2,
   fallDamageMinHeight: 10,
-  fallDamagePerMetre: 6,
+  fallDamagePerMetre: 3.5,
 } as const;
 
 export const DROP = {
