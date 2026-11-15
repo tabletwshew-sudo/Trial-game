@@ -1,6 +1,6 @@
 import {
-  AMMO_ITEM, AMMO_PICKUP, ITEM, ITEMS, RARITIES, SPAWN_ISLAND, surfaceAt, terrainAt, weaponDef,
-  type LootView, type PlayerState, type World,
+  AMMO_ITEM, AMMO_PICKUP, CHEST_KIND, ITEM, ITEMS, RARITIES, SC_OAK, SC_PINE, SPAWN_ISLAND, hash2, surfaceAt, terrainAt, weaponDef,
+  type ChestView, type LootView, type PlayerState, type Spot, type World,
 } from '@dropzone/shared';
 
 export interface LootItem extends LootView {}
@@ -89,7 +89,7 @@ const WEAPON_POOL: [number, number][] = [
 ];
 const CONSUMABLE_POOL: [number, number][] = [[ITEM.bandage, 10], [ITEM.medpack, 4], [ITEM.shieldSip, 10], [ITEM.shieldJug, 4], [ITEM.fizz, 3], [ITEM.grenade, 6]];
 
-const pickWeighted = <T,>(pool: [T, number][], rnd: () => number) => {
+export const pickWeighted = <T,>(pool: [T, number][], rnd: () => number) => {
   let total = 0; for (const [, w] of pool) total += w;
   let x = rnd() * total;
   for (const [v, w] of pool) { if ((x -= w) < 0) return v; }
@@ -104,7 +104,7 @@ export function rollWeapon(rnd: () => number, rarityWeights = FLOOR_RARITY): [nu
   return [id, pickWeighted(pool, rnd)];
 }
 
-const defaultCount = (id: number) => {
+export const defaultCount = (id: number) => {
   const d = ITEMS[id];
   if (!d) return 1;
   if (d.kind === 'throwable') return 3;
@@ -129,32 +129,80 @@ export function rollFloor(store: LootStore, rnd: () => number, x: number, y: num
   }
 }
 
-/**
- * Phase 4 loot placement: by every building's door, plus scattered spots around each
- * location and along the roads. Phase 5 replaces this with chests and interiors.
- */
-export function spawnFloorLoot(w: World, store: LootStore, rnd: () => number) {
-  for (const b of w.boxes) {
-    if (b.shape !== 0) { if (rnd() < 0.25) rollFloor(store, rnd, b.x1 + 1.2, b.fy, (b.z0 + b.z1) / 2); continue; }
-    const doorWall = (b.style >> 6) % 4;
-    const cx = (b.x0 + b.x1) / 2, cz = (b.z0 + b.z1) / 2;
-    const spots: [number, number][] = [[cx, b.z1 + 1.6], [b.x1 + 1.6, cz], [cx, b.z0 - 1.6], [b.x0 - 1.6, cz]];
-    const [x, z] = spots[doorWall];
-    rollFloor(store, rnd, x, surfaceAt(w, x, z, b.fy + 1), z);
-    if (rnd() < 0.5) { const [x2, z2] = spots[(doorWall + 2) % 4]; rollFloor(store, rnd, x2, surfaceAt(w, x2, z2, b.fy + 1), z2); }
+const FACE: [number, number][] = [[0, 1], [1, 0], [0, -1], [-1, 0]];
+const CHEST_RARITY = [0, 45, 35, 16, 4];
+const SUPPLY_RARITY = [0, 0, 40, 45, 15];
+
+/** What spills out of a chest, ammo box or supply drop, in a fan in front of it. */
+export function rollContainer(store: LootStore, rnd: () => number, kind: number, x: number, y: number, z: number, face: number) {
+  const [fx, fz] = FACE[face % 4];
+  const ox = x + fx * 0.9, oz = z + fz * 0.9;
+  let k = 0;
+  const drop = (item: number, r: number, n: number) => store.drop(item, r, n, ox, y, oz, k++);
+  if (kind === CHEST_KIND.Ammo) {
+    const a = Math.floor(rnd() * 4), b = (a + 1 + Math.floor(rnd() * 3)) % 4;
+    drop(AMMO_ITEM[a], 0, AMMO_PICKUP[a] * 2); drop(AMMO_ITEM[b], 0, AMMO_PICKUP[b]);
+    return;
   }
+  const supply = kind === CHEST_KIND.Supply;
+  const [id, r] = rollWeapon(rnd, supply ? SUPPLY_RARITY : CHEST_RARITY);
+  const def = weaponDef(id)!;
+  drop(id, r, def.mag);
+  drop(AMMO_ITEM[def.ammo], 0, AMMO_PICKUP[def.ammo] * (supply ? 2 : 1));
+  const pool: [number, number][] = supply
+    ? [[ITEM.shieldJug, 4], [ITEM.fizz, 3], [ITEM.medpack, 2], [ITEM.grenade, 2]]
+    : [[ITEM.bandage, 8], [ITEM.shieldSip, 8], [ITEM.medpack, 3], [ITEM.shieldJug, 3], [ITEM.fizz, 2], [ITEM.grenade, 4]];
+  const c = pickWeighted(pool, rnd);
+  drop(c, 0, defaultCount(c));
+  if (supply) drop(ITEM.shieldJug, 0, 1);
+  else if (rnd() < 0.35) { const a = Math.floor(rnd() * 4); drop(AMMO_ITEM[a], 0, AMMO_PICKUP[a]); }
+}
+
+export interface ChestEnt extends ChestView { landY?: number }
+
+/**
+ * Loot for the island: floor loot in rooms, chests by walls, ammo boxes, outdoor chests at
+ * landmarks and caves, and food to forage. Returns the chests (closed until someone opens them).
+ */
+export function spawnIslandLoot(w: World, store: LootStore, rnd: () => number, nextId: () => number): ChestEnt[] {
+  const chests: ChestEnt[] = [];
+  const chest = (sp: Spot, kind: number) => chests.push({ id: nextId(), k: kind, x: sp.x, y: sp.y, z: sp.z, face: sp.face, open: false });
+  for (const L of w.layouts) {
+    for (const sp of L.chests) if (rnd() < 0.55) chest(sp, CHEST_KIND.Chest);
+    for (const sp of L.loot) {
+      const r = rnd();
+      if (r < 0.12) chest(sp, CHEST_KIND.Ammo);
+      else if (r < 0.8) rollFloor(store, rnd, sp.x, sp.y, sp.z);
+    }
+  }
+  for (const sp of w.outdoorChests) if (rnd() < 0.85) chest(sp, CHEST_KIND.Chest);
+  // a little floor loot outdoors around each location too
   for (const p of w.pois) {
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 4; i++) {
       const x = p.x + (rnd() - 0.5) * p.r * 1.4, z = p.z + (rnd() - 0.5) * p.r * 1.4;
       const y = surfaceAt(w, x, z, 500);
-      if (terrainAt(w, x, z) < 1.2 || insideBuilding(w, x, z, y)) continue;
+      if (terrainAt(w, x, z) < 1.2 || Math.abs(y - terrainAt(w, x, z)) > 0.3) continue;
       rollFloor(store, rnd, x, y, z);
     }
   }
-}
-
-function insideBuilding(w: World, x: number, z: number, y: number) {
-  return w.boxes.some((b) => x > b.x0 - 1 && x < b.x1 + 1 && z > b.z0 - 1 && z < b.z1 + 1 && y < b.y1 + 0.5 && y > b.y0);
+  // forage: apples under some oaks, glow caps in pine woods and caves
+  const oaks = w.scatter[SC_OAK], pines = w.scatter[SC_PINE];
+  let apples = 0, caps = 0;
+  for (let i = 0; i < oaks.length && apples < 220; i += 6) {
+    if (hash2(i, 3, w.seed + 901) > 0.07) continue;
+    const a = hash2(i, 4, w.seed + 901) * Math.PI * 2, x = oaks[i] + Math.cos(a) * 1.3, z = oaks[i + 2] + Math.sin(a) * 1.3;
+    store.add(ITEM.apple, 0, 1, x, surfaceAt(w, x, z, oaks[i + 1] + 2), z); apples++;
+  }
+  for (let i = 0; i < pines.length && caps < 90; i += 6) {
+    if (hash2(i, 5, w.seed + 902) > 0.04) continue;
+    const x = pines[i] + 1.1, z = pines[i + 2];
+    store.add(ITEM.glowcap, 0, 1, x, surfaceAt(w, x, z, pines[i + 1] + 2), z); caps++;
+  }
+  for (const c of w.caves) for (let k = 0; k < 3; k++) {
+    const t = (k - 1) * 7, x = c.x + c.dx * t - c.dz * 1.8, z = c.z + c.dz * t + c.dx * 1.8;
+    store.add(ITEM.glowcap, 0, 1, x, c.floor, z);
+  }
+  return chests;
 }
 
 /** The warm-up island: a ring of weapons to play with. */

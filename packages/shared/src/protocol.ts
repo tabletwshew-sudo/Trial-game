@@ -43,6 +43,11 @@ export type GamePhase = 'warmup' | 'bus' | 'play';
 export interface RosterEntry { idx: number; name: string; team: number; skin: number; bot: boolean }
 export interface RouteView { x0: number; z0: number; x1: number; z1: number; t0: number; t1: number; doorsAt: number; ejectAt: number }
 export interface MarkerView { idx: number; x: number; z: number }
+/** Chests (0), ammo boxes (1) and supply drops (2). Supply drops fall from y0 at t0 (server ms) at SUPPLY_FALL m/s. */
+export interface ChestView { id: number; k: number; x: number; y: number; z: number; face: number; open: boolean; t0?: number; y0?: number }
+export const SUPPLY_FALL = 9;
+export const CHEST_KIND = { Chest: 0, Ammo: 1, Supply: 2 } as const;
+
 /** A pickup lying on the ground. */
 export interface LootView { id: number; item: number; r: number; n: number; x: number; y: number; z: number }
 
@@ -60,7 +65,9 @@ export type GameEvent =
   | { e: 'boom'; id: number; p: V3; r: number }
   | { e: 'feed'; k: number; v: number; w: number; knock: boolean; cause: FeedCause }
   | { e: 'revived'; i: number; by: number }
-  | { e: 'car_boom'; id: number; p: V3 };
+  | { e: 'car_boom'; id: number; p: V3 }
+  | { e: 'opened'; id: number; by: number }
+  | { e: 'supply'; id: number; x: number; z: number };
 
 export interface GameResult { place: number; kills: number; killer: string | null; win: boolean; teams: number }
 
@@ -78,6 +85,7 @@ export interface GameInit {
   gone: number[];
   markers: MarkerView[];
   loot: LootView[];
+  chests: ChestView[];
   /** Players still in (not eliminated), and how many teams. */
   alive: number;
   teamsAlive: number;
@@ -124,6 +132,7 @@ export type ServerMsg =
   | { t: 'game_end'; reason: string }
   | { t: 'ev'; ev: GameEvent[] }
   | { t: 'loot'; add: LootView[]; del: number[] }
+  | { t: 'chests'; add: ChestView[]; open: number[] }
   | { t: 'alive'; alive: number; teams: number }
   | { t: 'result'; result: GameResult }
   /** Who you're watching after you've been eliminated (-1 = nobody). */

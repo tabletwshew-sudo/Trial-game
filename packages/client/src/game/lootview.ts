@@ -42,7 +42,7 @@ export class LootRenderer {
           const ring = new THREE.Mesh(this.ringGeo, this.ringMats[r]);
           ring.position.y = 0.04;
           g.add(model, ring);
-          if (r >= 2 || isWeapon) g.add(new THREE.Mesh(this.beamGeo, this.beamMats[r]));
+          if ((r >= 2 || isWeapon) && ITEMS[it.item]?.kind !== 'forage') g.add(new THREE.Mesh(this.beamGeo, this.beamMats[r]));
           g.position.set(it.x, it.y, it.z);
           g.userData.phase = (id % 17) / 17;
           g.userData.weapon = isWeapon;
@@ -64,7 +64,7 @@ export class LootRenderer {
     let best: LootView | null = null, bestScore = Infinity;
     for (const it of this.items.values()) {
       const dx = it.x - x, dz = it.z - z, d = Math.hypot(dx, dz);
-      if (d > 2.6 || Math.abs(it.y - y) > 2 || ITEMS[it.item]?.kind === 'ammo') continue;
+      if (d > 2.6 || Math.abs(it.y - y) > 2 || ITEMS[it.item]?.kind === 'ammo') continue; // ammo is picked up by walking over it
       const facing = d > 0.01 ? (dx * fx + dz * fz) / d : 1;
       const score = d + (1 - facing) * 1.5;
       if (score < bestScore) { bestScore = score; best = it; }

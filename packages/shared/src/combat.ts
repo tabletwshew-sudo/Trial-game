@@ -1,5 +1,6 @@
 import { hash2 } from './noise.js';
-import { BRIDGE_Y, boxTop, roadEdgeDist, terrainAt, type Box, type World } from './world.js';
+import { BRIDGE_Y, SOLID_CELL, boxTop, roadEdgeDist, solidKey, terrainAt, type World } from './world.js';
+import { SK, type Solid } from './structures.js';
 
 /**
  * Shooting maths shared by the server (authority) and the browser (instant tracers):
@@ -40,9 +41,6 @@ export function spreadDir(d: Vec3, spread: number, seed: number, shot: number, p
 }
 
 // ------------------------------------------------------------------ world raycast
-const BOX_CELL = 32;
-const gridKey = (cx: number, cz: number) => (cx + 512) * 1024 + (cz + 512);
-
 /** Ray vs axis-aligned box. Returns entry distance or Infinity. */
 export function rayBox(o: Vec3, d: Vec3, x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, maxT: number) {
   let tmin = 0, tmax = maxT;
@@ -57,49 +55,51 @@ export function rayBox(o: Vec3, d: Vec3, x0: number, y0: number, z0: number, x1:
   return tmin;
 }
 
-function rayBuilding(o: Vec3, d: Vec3, b: Box, maxT: number) {
-  // body
-  let t = rayBox(o, d, b.x0, b.y0, b.z0, b.x1, b.y1, b.z1, maxT);
-  if (b.roofH > 0) {
-    // gable roof: march the roof volume coarsely (roofs are small)
-    const tr = rayBox(o, d, b.x0, b.y1, b.z0, b.x1, b.y1 + b.roofH, b.z1, maxT);
-    if (tr < t) {
-      const exit = Math.min(maxT, tr + Math.hypot(b.x1 - b.x0, b.roofH, b.z1 - b.z0));
-      for (let s = tr; s <= exit; s += 0.25) {
-        const px = o.x + d.x * s, py = o.y + d.y * s, pz = o.z + d.z * s;
-        if (px >= b.x0 && px <= b.x1 && pz >= b.z0 && pz <= b.z1 && py <= boxTop(b, px, pz)) { t = Math.min(t, s); break; }
-      }
-    }
+function raySolid(o: Vec3, d: Vec3, s: Solid, maxT: number) {
+  const t = rayBox(o, d, s.x0, s.y0, s.z0, s.x1, s.y1, s.z1, maxT);
+  if (t === Infinity || s.k !== SK.Roof || !s.b) return t;
+  // gable roofs: step through the roof volume to find the sloped surface
+  const b = s.b;
+  const exit = Math.min(maxT, t + Math.hypot(b.x1 - b.x0, b.roofH, b.z1 - b.z0));
+  for (let q = t; q <= exit; q += 0.2) {
+    const px = o.x + d.x * q, py = o.y + d.y * q, pz = o.z + d.z * q;
+    if (px >= b.x0 && px <= b.x1 && pz >= b.z0 && pz <= b.z1 && py <= boxTop(b, px, pz)) return q;
   }
-  return t;
+  return Infinity;
 }
 
-export interface WorldHit { t: number; kind: 'terrain' | 'water' | 'building' | 'none'; box?: Box }
+export interface WorldHit { t: number; kind: 'terrain' | 'water' | 'building' | 'none'; solid?: Solid }
 
-/** First solid thing a ray hits (terrain, water surface, buildings, bridge decks). */
+/** Visit the 16 m grid cells a ray passes over (2D DDA), nearest first. */
+function forCells(o: Vec3, d: Vec3, maxT: number, fn: (key: number, tEnter: number) => boolean) {
+  let cx = Math.floor(o.x / SOLID_CELL), cz = Math.floor(o.z / SOLID_CELL);
+  const sx = d.x > 0 ? 1 : -1, sz = d.z > 0 ? 1 : -1;
+  const inv = (v: number) => (Math.abs(v) < 1e-9 ? Infinity : 1 / Math.abs(v));
+  const dtx = SOLID_CELL * inv(d.x), dtz = SOLID_CELL * inv(d.z);
+  let tx = Math.abs(d.x) < 1e-9 ? Infinity : ((d.x > 0 ? (cx + 1) * SOLID_CELL - o.x : o.x - cx * SOLID_CELL) * inv(d.x));
+  let tz = Math.abs(d.z) < 1e-9 ? Infinity : ((d.z > 0 ? (cz + 1) * SOLID_CELL - o.z : o.z - cz * SOLID_CELL) * inv(d.z));
+  let t = 0;
+  for (let i = 0; i < 400 && t <= maxT; i++) {
+    if (fn(solidKey(cx, cz), t)) return;
+    if (tx < tz) { t = tx; tx += dtx; cx += sx; } else { t = tz; tz += dtz; cz += sz; }
+  }
+}
+
+/** First solid thing a ray hits (terrain, water surface, buildings, trunks, rocks, props, bridge decks). */
 export function raycastWorld(w: World, o: Vec3, d: Vec3, maxT: number, stopAtWater = true): WorldHit {
   let best: WorldHit = { t: maxT, kind: 'none' };
-  // buildings: walk the 32 m grid cells the ray passes through
-  const seen = new Set<Box>();
-  const steps = Math.ceil(maxT / (BOX_CELL / 2));
-  let lastKey = NaN;
-  for (let i = 0; i <= steps; i++) {
-    const s = Math.min(maxT, i * (BOX_CELL / 2));
-    if (s > best.t) break;
-    const px = o.x + d.x * s, pz = o.z + d.z * s;
-    for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
-      const key = gridKey(Math.floor(px / BOX_CELL) + dx, Math.floor(pz / BOX_CELL) + dz);
-      if (key === lastKey) continue;
-      const list = w.boxGrid.get(key);
-      if (!list) continue;
-      for (const b of list) {
-        if (seen.has(b)) continue;
-        seen.add(b);
-        const t = rayBuilding(o, d, b, best.t);
-        if (t < best.t) best = { t, kind: 'building', box: b };
-      }
+  const seen = new Set<Solid>();
+  forCells(o, d, maxT, (key, tEnter) => {
+    if (tEnter > best.t) return true;
+    const list = w.solidGrid.get(key);
+    if (list) for (const s of list) {
+      if (seen.has(s)) continue;
+      seen.add(s);
+      const t = raySolid(o, d, s, best.t);
+      if (t < best.t) best = { t, kind: 'building', solid: s };
     }
-  }
+    return false;
+  });
   // terrain + water: march, then refine with bisection
   const ground = (x: number, z: number) => {
     let g = terrainAt(w, x, z);

@@ -316,7 +316,7 @@ export function applyDamage(s: PlayerState, dmg: number, ignoreShield = false): 
 /** Add an item to the inventory. Returns how many were taken (0 = no room). */
 export function addToInventory(s: PlayerState, id: number, r: number, n: number, mag: number): number {
   const def = ITEMS[id];
-  if (!def) return 0;
+  if (!def || def.kind === 'forage') return 0;
   if (def.kind === 'ammo') {
     const room = AMMO_MAX[def.ammo] - s.ammo[def.ammo];
     const take = Math.min(room, n);

@@ -11,6 +11,7 @@ import { CarRenderer } from './cars';
 import { CombatHud } from './combathud';
 import { Effects } from './effects';
 import { LootRenderer } from './lootview';
+import { ChestRenderer } from './chests3d';
 import { buildDropship } from './dropship';
 import { Hud, type HudView } from './hud';
 import { Input } from './input';
@@ -92,6 +93,8 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
     const lootR = new LootRenderer(scene);
     lootR.set(init.loot);
     const cars = new CarRenderer(scene, world);
+    const chestR = new ChestRenderer(scene);
+    chestR.set(init.chests);
     let aliveCount = init.alive, specIdx = -1, revive = { p: 0, at: 0 };
     const kills = [...init.kills];
 
@@ -187,6 +190,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       else if (m.t === 'game_gone') gone.add(m.idx);
       else if (m.t === 'game_marker') setMarker(m.idx, m.x, m.z);
       else if (m.t === 'loot') { lootR.remove(m.del); lootR.add(m.add); }
+      else if (m.t === 'chests') { chestR.add(m.add); chestR.open(m.open); }
       else if (m.t === 'alive') aliveCount = m.alive;
       else if (m.t === 'spec') specIdx = m.idx;
       else if (m.t === 'result') { input.unlock(); combat.showResult(m.result); }
@@ -221,6 +225,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
         case 'proj': fx.spawnProjectile(e.id, e.it, e.p, e.v, e.fuse, !!weaponDef(e.it)?.projectile); break;
         case 'boom': fx.removeProjectile(e.id); fx.explosion(tmpA.set(...e.p), e.r); break;
         case 'car_boom': fx.explosion(tmpA.set(...e.p), 6); break;
+        case 'supply': toast('Supply drop incoming! Check your map.', 'info'); break;
         case 'feed':
           combat.feedLine(e.k, e.v, e.w, e.knock, e.cause);
           if (!e.knock && e.k >= 0 && e.k !== e.v) kills[e.k] = (kills[e.k] ?? 0) + 1;
@@ -442,6 +447,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       actors.update(dt, time, camPos);
       fx.update(dt);
       lootR.update(dt, time, camPos);
+      chestR.update(dt, time, camPos, serverNow);
       cars.update(dt, rt, carOverride);
       for (const b of beams.values()) if (b.visible) (b.material as THREE.MeshBasicMaterial).opacity = 0.42 + Math.sin(time * 3) * 0.12;
       renderer.render(scene, camera);
@@ -464,6 +470,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
           return [idx, { ...m, sx: p.sx, sy: p.sy, show: p.show, dist: Math.hypot(m.x - selfPos.x, m.z - selfPos.z) }];
         })),
         locked: input.locked, fps,
+        drops: [...chestR.chests.values()].filter((c) => c.k === 2 && !c.open).map((c) => ({ x: c.x, z: c.z })),
       };
       hud.update(view, dt);
       if (pred) {
@@ -474,9 +481,14 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
           const downed = team.find((i) => i !== selfIdx && st[i].visible && st[i].mode === PM.Knocked && Math.hypot(st[i].x - pred!.x, st[i].z - pred!.z) < 2.8);
           const car = cars.nearest(pred.x, pred.y, pred.z, 3.8);
           const it = lootR.pickTarget(pred.x, pred.y, pred.z, input.yaw);
+          const chest = chestR.pickTarget(pred.x, pred.y, pred.z, input.yaw, serverNow);
+          const fx2 = -Math.sin(input.yaw), fz2 = -Math.cos(input.yaw);
+          const score = (x: number, z: number) => { const dx = x - pred!.x, dz = z - pred!.z, d = Math.hypot(dx, dz); return d + (1 - (d > 0.01 ? (dx * fx2 + dz * fz2) / d : 1)) * 1.5; };
+          const chestWins = chest && (!it || score(chest.x, chest.z) - 0.3 < score(it.x, it.z));
           if (downed !== undefined) prompt = `Hold to revive ${roster[downed].name}`;
           else if (car !== null) prompt = 'Get in';
-          else if (it) { prompt = CombatHud.label(it.item, it.r, it.n); promptRarity = ITEMS[it.item]?.kind === 'weapon' ? it.r : 0; }
+          else if (chestWins) { prompt = chest!.k === 0 ? 'Open Chest' : chest!.k === 1 ? 'Search Ammo Box' : 'Open Supply Drop'; promptRarity = chest!.k === 2 ? 3 : chest!.k === 0 ? 4 : 0; }
+          else if (it) { prompt = ITEMS[it.item]?.kind === 'forage' ? `Eat ${ITEMS[it.item]!.name}` : CombatHud.label(it.item, it.r, it.n); promptRarity = ITEMS[it.item]?.kind === 'weapon' ? it.r : 0; }
         }
         const rp = performance.now() - revive.at < 200 ? revive.p : 0;
         combat.update({
@@ -502,7 +514,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       input,
       set cam(c: typeof debugCam) { debugCam = c; },
       self: selfIdx, roster, actors: actors.states,
-      get pred() { return pred; }, loot: lootR, cars, fx,
+      get pred() { return pred; }, loot: lootR, cars, fx, world, chests: chestR,
       get state() { return { phase, mode: pred?.mode ?? -1, hp: pred?.hp ?? 0, shield: pred?.shield ?? 0, slot: pred?.slot ?? 0, inv: pred?.inv.map((x) => x.id) ?? [], veh: pred?.veh ?? -1, alive: aliveCount, x: selfPos.x, y: selfPos.y, z: selfPos.z, grounded: pred?.grounded ?? false, fps, pending: pending.length, visible: actors.states.filter((s) => s.visible).length, doorsOpen: !!route && performance.now() + clockOffset >= route.doorsAt, err: err.length() }; },
     };
 

@@ -123,11 +123,15 @@ describe('knocked, revive, eliminated', () => {
     for (let i = 0; i < 30 * 7.5; i++) { cm.send(g.inst, mate.id, { keys: K.USE, yaw: 0, pitch: 0 }); g.step(); }
     expect(a.s.mode).toBe(PM.Walk); expect(a.s.hp).toBe(30); expect(mate.s.act).toBe(ACT.None);
     // knock both: the team is out, and both get a placement
+    for (const it of g.inst.loot.near(AT.x, AT.z, 12)) g.inst.loot.remove(it.id);
+    a.s.inv[0] = { id: ITEM.ar, r: 1, n: 1, mag: 20 }; a.s.ammo[1] = 40;
     for (const p of [a, mate]) { p.s.hp = 0; p.lastHit = { by: 4, at: g.now, w: ITEM.ar, cause: 'gun' }; (g.inst as any).checkDown(p); }
     expect(a.alive).toBe(false); expect(mate.alive).toBe(false);
     const result = g.clients.get(a.id)!.msgs.find((m) => m.t === 'result');
     expect(result && result.t === 'result' && result.result.place).toBeGreaterThan(1);
-    expect(g.inst.loot.near(AT.x, AT.z, 10).length).toBeGreaterThan(0); // dropped their stuff
+    const dropped = g.inst.loot.near(AT.x, AT.z, 10);
+    expect(dropped.some((x) => x.item === ITEM.ar)).toBe(true); // dropped their gun...
+    expect(dropped.some((x) => x.item === ITEM.ammoMedium && x.n === 40)).toBe(true); // ...and their ammo
   });
 
   it('knocked players bleed out', () => {
@@ -239,4 +243,83 @@ describe('a full match with 80 bots', () => {
       if (ps.every((p) => !p.alive)) expect(new Set(ps.map((p) => p.place)).size).toBe(1);
     }
   }, 120_000);
+});
+
+describe('chests, supply drops, forage', () => {
+  it('the island is stocked: chests in buildings and outdoors, ammo boxes, forage', () => {
+    const g = inPlay([1, 1], [0], 'solo');
+    const kinds = [0, 0, 0];
+    for (const c of g.inst.chests.values()) kinds[c.k]++;
+    expect(kinds[0]).toBeGreaterThan(80);
+    expect(kinds[1]).toBeGreaterThan(20);
+    const forage = g.inst.loot.all().filter((x) => x.item === ITEM.apple || x.item === ITEM.glowcap).length;
+    expect(forage).toBeGreaterThan(50);
+  });
+
+  it('E opens a chest: a weapon, its ammo and a heal spill out in front of it', () => {
+    const g = inPlay([1, 1], [0], 'solo');
+    const a = g.inst.players[0], c = g.clients.get(a.id)!;
+    const chest = [...g.inst.chests.values()].find((x) => x.k === 0 && !x.open)!;
+    const fd = [[0, 1], [1, 0], [0, -1], [-1, 0]][chest.face];
+    a.s.mode = PM.Walk; a.s.x = chest.x + fd[0] * 1.4; a.s.z = chest.z + fd[1] * 1.4; a.s.y = chest.y; a.s.grounded = true;
+    for (const it of g.inst.loot.near(chest.x, chest.z, 4)) g.inst.loot.remove(it.id);
+    const yaw = Math.atan2(-(chest.x - a.s.x), -(chest.z - a.s.z));
+    c.send(g.inst, a.id, { keys: K.USE, yaw, pitch: 0 }); g.step();
+    expect(chest.open).toBe(true);
+    const spill = g.inst.loot.near(chest.x, chest.z, 4);
+    const weapons = spill.filter((x) => weaponDef(x.item));
+    expect(weapons.length).toBe(1);
+    expect(weapons[0].r).toBeGreaterThanOrEqual(1); // chests never give commons
+    expect(spill.length).toBeGreaterThanOrEqual(3);
+    expect(c.msgs.some((m) => m.t === 'chests' && m.open.includes(chest.id))).toBe(true);
+    // can't open it twice
+    c.send(g.inst, a.id, { keys: 0, yaw, pitch: 0 }); c.send(g.inst, a.id, { keys: K.USE, yaw, pitch: 0 }); g.step();
+    expect(g.inst.loot.near(chest.x, chest.z, 4).length).toBeLessThanOrEqual(spill.length);
+  });
+
+  it('eating an apple heals right away', () => {
+    const g = inPlay([1, 1], [0], 'solo');
+    const a = g.inst.players[0], c = g.clients.get(a.id)!;
+    g.place(a.idx, AT.x, AT.z); a.s.hp = 50;
+    for (const it of g.inst.loot.near(AT.x, AT.z, 4)) g.inst.loot.remove(it.id);
+    g.inst.loot.add(ITEM.apple, 0, 1, AT.x, a.s.y, AT.z - 1);
+    c.send(g.inst, a.id, { keys: K.USE, yaw: 0, pitch: 0 }); g.step();
+    expect(a.s.hp).toBe(55);
+    expect(a.s.inv.every((x) => x.id === 0)).toBe(true);
+  });
+
+  it('supply drops fall from the sky, land, and hold better loot', () => {
+    const g = inPlay([1, 1], [0], 'solo');
+    for (let i = 0; i < 30 * 45; i++) g.step(); // 45 s into the match
+    const drop = [...g.inst.chests.values()].find((x) => x.k === 2);
+    expect(drop).toBeTruthy();
+    expect(g.clients.get(g.inst.players[0].id)!.events().some((e) => e.e === 'supply')).toBe(true);
+    for (let i = 0; i < 30 * 40 && drop!.y !== drop!.landY; i++) g.step();
+    expect(drop!.y).toBe(drop!.landY);
+    const a = g.inst.players[0], c = g.clients.get(a.id)!;
+    a.s.mode = PM.Walk; a.s.x = drop!.x; a.s.z = drop!.z + 1.5; a.s.y = drop!.y; a.s.grounded = true;
+    for (const it of g.inst.loot.near(drop!.x, drop!.z, 5)) g.inst.loot.remove(it.id);
+    c.send(g.inst, a.id, { keys: K.USE, yaw: 0, pitch: 0 }); g.step();
+    const w = g.inst.loot.near(drop!.x, drop!.z, 5).find((x) => weaponDef(x.item));
+    expect(w && w.r).toBeGreaterThanOrEqual(2);
+  });
+
+  it('bots go indoors through the door to loot a chest', () => {
+    const g = inPlay([1, 1, 1], [0], 'solo');
+    const bot = g.inst.players[1];
+    const L = g.inst.world.layouts.find((x) => x.type === 'house' && x.floors.length === 1 && x.chests.length)!;
+    const sp = L.chests[0];
+    // clear the area, put one chest inside, the bot outside the front door
+    for (const c of g.inst.chests.values()) if (Math.hypot(c.x - sp.x, c.z - sp.z) < 60) c.open = true;
+    for (const it of g.inst.loot.near(sp.x, sp.z, 60)) g.inst.loot.remove(it.id);
+    const chest = { id: 99999, k: 0, x: sp.x, y: sp.y, z: sp.z, face: sp.face, open: false };
+    g.inst.chests.set(chest.id, chest);
+    const d = L.doors[0];
+    bot.s.mode = PM.Walk; bot.s.x = d.x + (d.x - d.ix) * 2; bot.s.z = d.z + (d.z - d.iz) * 2; bot.s.y = surfaceAt(g.inst.world, bot.s.x, bot.s.z, 500); bot.s.grounded = true;
+    bot.s.inv = bot.s.inv.map(() => ({ id: 0, r: 0, n: 0, mag: 0 }));
+    bot.brain!.idleUntil = 0; bot.brain!.enemy = -1; bot.brain!.lootId = -1; bot.brain!.ignoreLoot.clear();
+    g.inst.players[2].alive = false; g.inst.players[2].s.mode = PM.Dead; // no distractions
+    for (let i = 0; i < 30 * 25 && !chest.open; i++) g.step();
+    expect(chest.open).toBe(true);
+  });
 });

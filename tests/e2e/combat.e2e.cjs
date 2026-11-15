@@ -82,6 +82,23 @@ const K = { F: 1, SPRINT: 32, FIRE: 128, ADS: 256, USE: 1024 };
   log.slotAfterKey2 = (await st()).slot;
   await shot('35-hotbar');
 
+  // ---- open a chest
+  const chestBefore = await p.evaluate(() => window.__dz.loot.items.size);
+  const chest = await goTo(() => {
+    const dz = window.__dz, me = dz.pred;
+    let best = null, bd = 1e9;
+    for (const c of dz.chests.chests.values()) { if (c.open) continue; const d = Math.hypot(c.x - me.x, c.z - me.z); if (d < bd) { bd = d; best = c; } }
+    if (!best) return null;
+    dz.input.yaw = Math.atan2(-(best.x - me.x), -(best.z - me.z)); dz.input.pitch = -0.4;
+    return { dist: bd, id: best.id };
+  }, 1.6, 'chest');
+  await p.waitForTimeout(300); await shot('34b-chest-prompt');
+  log.chestPrompt = await p.$eval('.prompt', (e) => e.textContent);
+  await p.keyboard.press('KeyE'); await p.waitForTimeout(450); await shot('34c-chest-open');
+  await p.waitForTimeout(900);
+  log.chestOpened = await p.evaluate((id) => window.__dz.chests.chests.get(id).open, chest.id);
+  log.chestLoot = (await p.evaluate(() => window.__dz.loot.items.size)) - chestBefore;
+
   // ---- get in a car and drive
   await goTo(() => {
     const dz = window.__dz, me = dz.pred;
@@ -93,7 +110,9 @@ const K = { F: 1, SPRINT: 32, FIRE: 128, ADS: 256, USE: 1024 };
   }, 2.8, 'car');
   await p.keyboard.press('KeyE');
   const inCar = await until((s) => s.veh >= 0 && s.mode === 4, 3000, 'enter car');
-  await p.keyboard.down('KeyW'); await p.waitForTimeout(1800); await shot('36-driving'); await p.waitForTimeout(800);
+  await p.keyboard.down('KeyW');
+  log.drive = [];
+  for (let i = 0; i < 9; i++) { await p.waitForTimeout(300); const s = await st(); log.drive.push([s.x.toFixed(1), s.z.toFixed(1), s.mode, (await p.evaluate(() => window.__dz.pred && window.__dz.pred.vs.toFixed(1)))]); if (i === 5) await shot('36-driving'); }
   await p.keyboard.up('KeyW');
   const drove = await st();
   log.droveMetres = Math.hypot(drove.x - inCar.x, drove.z - inCar.z).toFixed(1);
@@ -104,6 +123,6 @@ const K = { F: 1, SPRINT: 32, FIRE: 128, ADS: 256, USE: 1024 };
   log.errs = errs;
   console.log(JSON.stringify(log, null, 1));
   await b.close();
-  const ok = log.hits > 0 && log.invAfter >= log.invBefore && log.slotAfterKey2 === 1 && Number(log.droveMetres) > 5 && !errs.length;
+  const ok = log.hits > 0 && log.chestOpened && log.chestLoot >= 2 && log.invAfter >= log.invBefore && log.slotAfterKey2 === 1 && Number(log.droveMetres) > 5 && !errs.length;
   if (!ok) { console.error('FAIL: expectations not met'); process.exit(2); }
 })().catch((e) => { console.error('FAIL', e.message); process.exit(1); });

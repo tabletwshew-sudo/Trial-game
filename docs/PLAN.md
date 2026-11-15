@@ -98,7 +98,7 @@ tests/      e2e (Playwright)
 * Vehicles: car + boat with fuel, seat swapping and passengers shooting
 * Down-But-Not-Out in team modes, revive, **reboot cards / reboot vans**
 
-### Phase 5 — Map detail, buildings, chests
+### Phase 5 — Map detail, buildings, chests ✅
 * GPU-instanced grass, trees, rocks and bushes with LOD and wind sway; caves; docks; bridges
 * Modular building kit (walls, floors, stairs, roofs) for houses, shops, a factory, a mansion
 * **Destructible** props and walls (no building, but you can still break things)

@@ -108,6 +108,16 @@ function itemPieces(id: number, rarity: number): Piece[] {
       { geo: new THREE.CylinderGeometry(0.045, 0.06, 0.02, 12), color: '#c0c0c0', matrix: mat4(0, 0.21, 0) },
     ];
   }
+  if (id === ITEM.apple) return [
+    { geo: new THREE.SphereGeometry(0.11, 10, 8), color: '#e63946', matrix: mat4(0, 0.1, 0, 0, 0, 0, 1, 0.9, 1) },
+    { geo: new THREE.CylinderGeometry(0.01, 0.012, 0.06, 5), color: '#5b3b24', matrix: mat4(0, 0.21, 0) },
+    { geo: new THREE.ConeGeometry(0.04, 0.08, 4).rotateZ(1.2), color: '#52b788', matrix: mat4(0.04, 0.22, 0) },
+  ];
+  if (id === ITEM.glowcap) return [
+    { geo: new THREE.CylinderGeometry(0.035, 0.045, 0.16, 7), color: '#f1faee', matrix: mat4(0, 0.08, 0) },
+    { geo: new THREE.SphereGeometry(0.12, 10, 8, 0, Math.PI * 2, 0, Math.PI / 2), color: '#3ee6ff', matrix: mat4(0, 0.15, 0) },
+    { geo: new THREE.SphereGeometry(0.02, 5, 4), color: '#ffffff', matrix: mat4(0.05, 0.24, 0.03) },
+  ];
   if (d.kind === 'ammo') {
     const col = ['#9fd3ff', '#ffd23f', '#ff8a5c', '#ff5f6d', '#b388ff'][d.ammo];
     return [

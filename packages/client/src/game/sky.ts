@@ -53,8 +53,8 @@ export function buildSky(scene: THREE.Scene, shadows: boolean) {
   };
   placeClouds();
 
-  scene.add(new THREE.HemisphereLight('#d6ecff', '#6f8f5a', 1.05));
-  const sun = new THREE.DirectionalLight('#fff3da', 2.5);
+  scene.add(new THREE.HemisphereLight('#e2f1ff', '#c7cbb8', 1.45));
+  const sun = new THREE.DirectionalLight('#fff3da', 2.3);
   sun.castShadow = shadows;
   if (shadows) {
     sun.shadow.mapSize.set(2048, 2048);

@@ -9,3 +9,5 @@ export * from './items.js';
 export * from './combat.js';
 export * from './veh.js';
 export * from './projectile.js';
+export * from './structures.js';
+export * from './props.js';

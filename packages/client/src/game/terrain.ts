@@ -5,11 +5,14 @@ import {
 } from '@dropzone/shared';
 import { softRamp } from '../lobby/toon';
 import { GeoBuilder, mat4, mergeColored } from './geo';
+import { buildBuildingMeshes, buildingMat } from './buildings';
+import { Grass, addWind, wind } from './grass';
+import { buildProps } from './props3d';
 
-export interface Quality { shadows: boolean; treeRange: number; bushes: boolean; pixelRatio: number }
+export interface Quality { shadows: boolean; treeRange: number; bushes: boolean; pixelRatio: number; grass: number }
 export const QUALITY: Record<'low' | 'high', Quality> = {
-  low: { shadows: false, treeRange: 380, bushes: false, pixelRatio: 1 },
-  high: { shadows: true, treeRange: 950, bushes: true, pixelRatio: 2 },
+  low: { shadows: false, treeRange: 380, bushes: false, pixelRatio: 1, grass: 2500 },
+  high: { shadows: true, treeRange: 950, bushes: true, pixelRatio: 2, grass: 9000 },
 };
 
 const C = (hex: string) => new THREE.Color(hex);
@@ -49,7 +52,40 @@ export function groundColor(w: World, x: number, z: number, h: number, slope: nu
   return out;
 }
 
+/** A tiling noise texture that breaks up the flat ground colour up close. */
+function detailTexture() {
+  const N = 256, cv = document.createElement('canvas'); cv.width = cv.height = N;
+  const g = cv.getContext('2d')!, img = g.createImageData(N, N);
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const v = 0.5 * vnoiseT(x / 8, y / 8, N / 8) + 0.3 * vnoiseT(x / 3, y / 3, N / 3) + 0.2 * (hash2(x, y, 3));
+    const c = Math.round(180 + v * 75);
+    img.data.set([c, c, c, 255], (y * N + x) * 4);
+  }
+  g.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(cv);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 4;
+  return t;
+}
+/** Tileable value noise (period p) for the detail texture. */
+function vnoiseT(x: number, y: number, p: number) {
+  const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+  const u = fx * fx * (3 - 2 * fx), v = fy * fy * (3 - 2 * fy);
+  const h = (a: number, b: number) => hash2(((a % p) + p) % p, ((b % p) + p) % p, 9);
+  const a = h(ix, iy), b = h(ix + 1, iy), c = h(ix, iy + 1), d = h(ix + 1, iy + 1);
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+}
 const terrainMat = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: softRamp });
+{
+  const detail = { value: null as THREE.Texture | null };
+  terrainMat.onBeforeCompile = (sh) => {
+    detail.value ??= detailTexture();
+    sh.uniforms.uDetail = detail;
+    sh.vertexShader = 'varying vec3 vWorldXZ;\n' + sh.vertexShader.replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\n vWorldXZ = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.fragmentShader = 'uniform sampler2D uDetail;\nvarying vec3 vWorldXZ;\n' + sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
+      float dn = texture2D(uDetail, vWorldXZ.xz * 0.11).r * 0.6 + texture2D(uDetail, vWorldXZ.xz * 0.023).r * 0.4;
+      diffuseColor.rgb *= mix(0.86, 1.1, dn);`);
+  };
+}
 
 function fieldChunks(w: World, f: HeightField, chunkCells: number, group: THREE.Group, colorsOut?: Float32Array) {
   const { nx, nz, cell, data } = f;
@@ -200,144 +236,6 @@ function buildRoads(w: World, group: THREE.Group) {
   }
 }
 
-// ---------------------------------------------------------------- buildings
-const buildingMat = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: softRamp, side: THREE.DoubleSide });
-
-const WALLS: Record<PoiKind, string[]> = {
-  city: ['#e8dcc4', '#c96f4a', '#9fb7c9', '#d9a441', '#b5c99a', '#cfcfd6', '#e07a5f'],
-  town: ['#f2e8cf', '#ffd6a5', '#a8dadc', '#f4a261', '#e9c46a', '#cdb4db', '#ffb4a2', '#b7e4c7'],
-  industrial: ['#8d99ae', '#b08968', '#7f8c8d', '#a3b18a', '#c1666b'],
-  farm: ['#c1440e', '#a63d2f', '#e9d8a6', '#d4a373'],
-  camp: ['#8b5e3c', '#a47148', '#7f5539', '#9c6644'],
-  harbor: ['#577590', '#e9ecef', '#90be6d', '#f9c74f', '#b56576'],
-  station: ['#d9dde3', '#aab4c0'],
-  resort: ['#fff1e6', '#ffd6e0', '#bde0fe', '#fde68a'],
-  quarry: ['#c2a878', '#9a8c73', '#d9b44a'],
-};
-const ROOFS: Record<PoiKind, string[]> = {
-  city: ['#4a4e69', '#5c5f66', '#3d405b'],
-  town: ['#9b2226', '#bb3e03', '#3d5a80', '#6d597a', '#588157', '#7f4f24'],
-  industrial: ['#52525b', '#6b705c', '#7a4a3a'],
-  farm: ['#5c4033', '#6f4e37', '#4a4a4a'],
-  camp: ['#386641', '#52796f', '#6a4c3b'],
-  harbor: ['#3d405b', '#9b2226', '#52525b'],
-  station: ['#e63946', '#577590'],
-  resort: ['#00b4d8', '#ef476f', '#f4a261'],
-  quarry: ['#5c5f66'],
-};
-const CONTAINER = ['#e63946', '#2a9d8f', '#e9c46a', '#457b9d', '#f4a261', '#6a994e', '#9d4edd'];
-const shade = (hex: string, k: number) => '#' + new THREE.Color(hex).multiplyScalar(k).getHexString();
-
-function addBuilding(g: GeoBuilder, b: Box, seed: number) {
-  const pick = <T,>(arr: T[], salt: number) => arr[(b.style >> salt) % arr.length];
-  const wall = pick(WALLS[b.kind], 0), roofCol = pick(ROOFS[b.kind], 3);
-  const { x0, x1, z0, z1, y0, fy, y1 } = b;
-  const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
-
-  if (b.shape === 2) { // silo / tank
-    const r = (x1 - x0) / 2;
-    g.cylinder(cx, y0, cz, r, y1, wall, 12, 1.6, shade(wall, 0.8));
-    for (let k = 1; k < 4; k++) g.cylinder(cx, lerp(fy, y1, k / 4) - 0.12, cz, r + 0.06, lerp(fy, y1, k / 4) + 0.12, shade(wall, 0.7), 12);
-    return;
-  }
-  if (b.shape === 1) { // shipping container
-    const col = pick(CONTAINER, 0);
-    g.box(x0, y0, z0, x1, y1, z1, col);
-    const longX = x1 - x0 > z1 - z0;
-    const ribs = 7;
-    for (let k = 1; k < ribs; k++) {
-      if (longX) { const x = lerp(x0, x1, k / ribs); g.box(x - 0.06, fy + 0.15, z0 - 0.04, x + 0.06, y1 - 0.15, z1 + 0.04, shade(col, 0.82)); }
-      else { const z = lerp(z0, z1, k / ribs); g.box(x0 - 0.04, fy + 0.15, z - 0.06, x1 + 0.04, y1 - 0.15, z + 0.06, shade(col, 0.82)); }
-    }
-    return;
-  }
-
-  // body + foundation trim
-  g.box(x0, y0, z0, x1, y1, z1, wall);
-  g.box(x0 - 0.12, y0, z0 - 0.12, x1 + 0.12, fy + 0.45, z1 + 0.12, shade(wall, 0.62));
-
-  // roof
-  if (b.roof === ROOF_FLAT) {
-    g.box(x0 - 0.25, y1 - 0.02, z0 - 0.25, x1 + 0.25, y1 + 0.02, z1 + 0.25, shade(roofCol, 1.05));
-    const pw = 0.3, ph = b.kind === 'city' ? 0.9 : 0.45; // parapet
-    g.box(x0 - 0.25, y1, z0 - 0.25, x1 + 0.25, y1 + ph, z0 - 0.25 + pw, roofCol);
-    g.box(x0 - 0.25, y1, z1 + 0.25 - pw, x1 + 0.25, y1 + ph, z1 + 0.25, roofCol);
-    g.box(x0 - 0.25, y1, z0, x0 - 0.25 + pw, y1 + ph, z1, roofCol);
-    g.box(x1 + 0.25 - pw, y1, z0, x1 + 0.25, y1 + ph, z1, roofCol);
-    if (x1 - x0 > 7 && z1 - z0 > 7) {
-      const r = (k: number) => hash2(b.style, k, seed);
-      // rooftop clutter: AC unit, access hut, water tank or sign
-      g.box(cx - 3 + r(1) * 2, y1, cz - 2.5 + r(2) * 2, cx - 1 + r(1) * 2, y1 + 1.1, cz - 1 + r(2) * 2, '#c8ccd2');
-      if (r(3) < 0.6) g.box(cx + 0.5, y1, cz + 0.5, cx + 3, y1 + 2.4, cz + 3, shade(wall, 0.85));
-      if (b.kind === 'city' && r(4) < 0.5) { g.cylinder(cx - 2, y1 + 1.2, cz + 2.2, 1.3, y1 + 3.6, '#b08968', 8, 0.9, '#7f5539'); for (const [ox, oz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) g.box(cx - 2 + ox * 0.9 - 0.08, y1, cz + 2.2 + oz * 0.9 - 0.08, cx - 2 + ox * 0.9 + 0.08, y1 + 1.2, cz + 2.2 + oz * 0.9 + 0.08, '#555'); }
-      if (b.kind === 'city' && y1 - fy > 30) { g.box(cx - 0.12, y1, cz - 0.12, cx + 0.12, y1 + 9, cz + 0.12, '#d8d8d8'); g.box(cx - 0.3, y1 + 8.6, cz - 0.3, cx + 0.3, y1 + 9.2, cz + 0.3, '#ff3b3b'); }
-    }
-  } else {
-    const o = 0.55, alongX = b.roof === ROOF_GABLE_X;
-    const half = alongX ? (z1 - z0) / 2 : (x1 - x0) / 2, slope = b.roofH / half, ye = y1 - o * slope, yr = y1 + b.roofH;
-    const P = (a: number, y: number, c: number): [number, number, number] => (alongX ? [a, y, c] : [c, y, a]);
-    const a0 = alongX ? x0 : z0, a1 = alongX ? x1 : z1, c0 = alongX ? z0 : x0, c1 = alongX ? z1 : x1, cc = (c0 + c1) / 2;
-    g.quad(P(a0 - o, ye, c1 + o), P(a1 + o, ye, c1 + o), P(a1 + o, yr, cc), P(a0 - o, yr, cc), roofCol, [0, 1, 0]);
-    g.quad(P(a0 - o, ye, c0 - o), P(a1 + o, ye, c0 - o), P(a1 + o, yr, cc), P(a0 - o, yr, cc), shade(roofCol, 0.92), [0, 1, 0]);
-    g.tri(P(a0, y1, c0), P(a0, y1, c1), P(a0, yr, cc), wall, alongX ? [-1, 0, 0] : [0, 0, -1]);
-    g.tri(P(a1, y1, c0), P(a1, y1, c1), P(a1, yr, cc), wall, alongX ? [1, 0, 0] : [0, 0, 1]);
-    // ridge cap + chimney
-    g.box(...(alongX ? [x0 - o, yr - 0.08, cz - 0.18, x1 + o, yr + 0.14, cz + 0.18] : [cx - 0.18, yr - 0.08, z0 - o, cx + 0.18, yr + 0.14, z1 + o]) as [number, number, number, number, number, number], shade(roofCol, 0.75));
-    if ((b.kind === 'town' || b.kind === 'camp' || b.kind === 'resort') && (b.style & 1)) {
-      const [px, , pz] = P(lerp(a0, a1, 0.72), 0, cc + half * 0.45);
-      g.box(px - 0.4, y1, pz - 0.4, px + 0.4, yr + 0.7, pz + 0.4, '#8d6e63');
-      g.box(px - 0.5, yr + 0.7, pz - 0.5, px + 0.5, yr + 0.9, pz + 0.5, '#5d4037');
-    }
-  }
-
-  // windows + door on each wall
-  const storey = b.kind === 'city' ? 3.4 : 3.1;
-  const floors = Math.max(1, Math.floor((y1 - fy) / storey));
-  const doorWall = (b.style >> 6) % 4;
-  const walls: [number, number, number, number, number][] = [ // origin x, z, outward normal x, z, length
-    [x0, z1, 0, 1, x1 - x0], [x1, z1, 1, 0, z1 - z0], [x1, z0, 0, -1, x1 - x0], [x0, z0, -1, 0, z1 - z0],
-  ];
-  const big = b.kind === 'industrial' || b.kind === 'harbor' || b.kind === 'farm' && y1 - fy > 5;
-  walls.forEach(([ox, oz, nx, nz, len], wi) => {
-    const ux = nz, uz = -nx;
-    const at = (s: number, y: number, out: number): [number, number, number] => [ox + ux * s + nx * out, y, oz + uz * s + nz * out];
-    const panel = (s0: number, s1: number, ya: number, yb: number, color: string, out = 0.05) =>
-      g.quad(at(s0, ya, out), at(s1, ya, out), at(s1, yb, out), at(s0, yb, out), color, [nx, 0, nz]);
-    const cols = Math.max(1, Math.floor(len / (big ? 5 : 3.2)));
-    const cw = len / cols;
-    for (let f = 0; f < floors; f++) {
-      const base = fy + f * storey;
-      for (let c = 0; c < cols; c++) {
-        const mid = (c + 0.5) * cw;
-        if (f === 0 && wi === doorWall && c === Math.floor(cols / 2)) {
-          if (big) { panel(mid - 2, mid + 2, fy, fy + 3.6, '#5a6470'); for (let k = 1; k < 6; k++) panel(mid - 2, mid + 2, fy + k * 0.6 - 0.03, fy + k * 0.6 + 0.03, '#454d57', 0.07); }
-          else { panel(mid - 0.75, mid + 0.75, fy, fy + 2.35, shade(wall, 0.55)); panel(mid - 0.6, mid + 0.6, fy, fy + 2.2, pick(['#7b3f00', '#2d6a4f', '#1d3557', '#9d0208', '#f1faee'], 9), 0.08); panel(mid + 0.32, mid + 0.44, fy + 1.0, fy + 1.12, '#ffd23f', 0.1); }
-          continue;
-        }
-        if (big && f === 0) { if (c % 2 === 0) panel(mid - 1.1, mid + 1.1, base + 4.2, base + 5.4, '#9fd3e6'); continue; }
-        const r = hash2(b.style + wi * 7, f * 31 + c, seed);
-        if (b.kind !== 'city' && r < 0.12) continue; // a few blank spots
-        const ww = Math.min(cw * 0.5, 1.5), wy0 = base + 1.05, wy1 = base + 2.45;
-        panel(mid - ww / 2 - 0.1, mid + ww / 2 + 0.1, wy0 - 0.1, wy1 + 0.1, shade(wall, 0.7));
-        panel(mid - ww / 2, mid + ww / 2, wy0, wy1, r > 0.86 ? '#ffe9a3' : r > 0.45 ? '#8fd0ea' : '#6fb7d6', 0.08);
-        if (b.kind === 'town' || b.kind === 'camp' || b.kind === 'resort') panel(mid - ww / 2 - 0.2, mid + ww / 2 + 0.2, wy0 - 0.22, wy0 - 0.08, '#f5f1e8', 0.14);
-      }
-    }
-    if (b.kind === 'city' && floors > 3) panel(0, len, fy + 3.25, fy + 3.5, shade(wall, 0.6), 0.1); // storefront band
-  });
-}
-
-function buildBuildings(w: World, group: THREE.Group) {
-  for (const p of w.pois) {
-    const g = new GeoBuilder();
-    for (const b of w.boxes) if (b.poi === p.id) addBuilding(g, b, w.seed);
-    if (!g.vertexCount) continue;
-    const m = new THREE.Mesh(g.build(), buildingMat);
-    m.castShadow = true; m.receiveShadow = true;
-    group.add(m);
-  }
-}
-
 // ---------------------------------------------------------------- trees, rocks, bushes
 function scatterGeometries() {
   const ico = (r: number) => new THREE.IcosahedronGeometry(r, 0);
@@ -382,8 +280,8 @@ function scatterGeometries() {
 interface ScatterChunk { mesh: THREE.InstancedMesh; cx: number; cz: number; radius: number }
 
 function buildScatter(w: World, group: THREE.Group, q: Quality): ScatterChunk[] {
-  const data = genScatter(w), geos = scatterGeometries();
-  const mat = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: softRamp });
+  const data = w.scatter, geos = scatterGeometries();
+  const mat = addWind(new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: softRamp }), 0.022, 2.2);
   const REGION = 300, chunks: ScatterChunk[] = [];
   const m = new THREE.Matrix4(), pos = new THREE.Vector3(), quat = new THREE.Quaternion(), scl = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0), col = new THREE.Color();
   data.forEach((arr, type) => {
@@ -433,8 +331,10 @@ export function buildIsland(w: World, q: Quality, fogColor: THREE.Color, fogNear
   fieldChunks(w, w.main, 60, group, mainColors);
   fieldChunks(w, w.spawn, 80, group);
   buildRoads(w, group);
-  buildBuildings(w, group);
+  buildBuildingMeshes(w, group);
   const chunks = buildScatter(w, group, q);
+  const props = buildProps(w, group);
+  const grass = new Grass(w, group, q.grass);
   const water = makeWater(fogColor, fogNear, fogFar);
   group.add(water.mesh);
   let t = 0;
@@ -442,6 +342,9 @@ export function buildIsland(w: World, q: Quality, fogColor: THREE.Color, fogNear
     group, water, mainColors,
     update(dt, cam) {
       t += dt;
+      wind.value = t;
+      props.update(dt, t, cam);
+      grass.update(cam);
       water.mat.uniforms.time.value = t;
       for (const c of chunks) c.mesh.visible = Math.hypot(cam.x - c.cx, cam.z - c.cz) < q.treeRange + c.radius;
     },

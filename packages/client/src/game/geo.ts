@@ -64,6 +64,15 @@ export class GeoBuilder {
     this.quad([x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0], color, [0, 1, 0]);
     if (bottom) this.quad([x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1], color, [0, -1, 0]);
   }
+  /** Box with a colour per face (null = skip that face). Faces: +x, -x, +z, -z, +y, -y. */
+  boxFaces(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, c: (THREE.ColorRepresentation | null)[]) {
+    if (c[0]) this.quad([x1, y0, z1], [x1, y0, z0], [x1, y1, z0], [x1, y1, z1], c[0], [1, 0, 0]);
+    if (c[1]) this.quad([x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0], c[1], [-1, 0, 0]);
+    if (c[2]) this.quad([x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1], c[2], [0, 0, 1]);
+    if (c[3]) this.quad([x1, y0, z0], [x0, y0, z0], [x0, y1, z0], [x1, y1, z0], c[3], [0, 0, -1]);
+    if (c[4]) this.quad([x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0], c[4], [0, 1, 0]);
+    if (c[5]) this.quad([x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1], c[5], [0, -1, 0]);
+  }
   /** Vertical cylinder (flat-shaded sides) with a cap or a cone/dome top. */
   cylinder(cx: number, y0: number, cz: number, r: number, y1: number, color: THREE.ColorRepresentation, seg = 10, topH = 0, topColor = color) {
     for (let i = 0; i < seg; i++) {

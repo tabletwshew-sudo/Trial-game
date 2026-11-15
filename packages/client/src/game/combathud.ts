@@ -14,7 +14,7 @@ ITEMS.forEach((d, i) => {
 const ICON: Record<string, string> = { pistol: '🔫', smg: '🔫', ar: '🔫', burst: '🔫', shotgun: '🔫', autoshotgun: '🔫', dmr: '🔭', sniper: '🔭', rocket: '🚀' };
 const itemIcon = (id: number) => {
   const d = ITEMS[id];
-  if (!d) return '';
+  if (!d || d.kind === 'forage') return '';
   if (d.kind === 'weapon') return ICON[d.cls];
   if (d.kind === 'throwable') return '💣';
   if (d.kind === 'consumable') return d.shield && d.heal ? '🥤' : d.shield ? '🛡️' : '🩹';

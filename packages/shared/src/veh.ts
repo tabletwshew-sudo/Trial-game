@@ -1,5 +1,5 @@
 import { clamp } from './noise.js';
-import { BRIDGE_Y, boxTop, roadEdgeDist, surfaceAt, terrainAt, type World } from './world.js';
+import { BRIDGE_Y, SOLID_CELL, roadEdgeDist, solidKey, solidTop, surfaceAt, terrainAt, type World } from './world.js';
 
 /**
  * Arcade car physics. The same function moves a parked/coasting car on the server and the
@@ -22,21 +22,24 @@ export function seatWorld(c: { x: number; y: number; z: number; vh: number }, se
   return { x: c.x + co * sx - s * sz, y: c.y + sy, z: c.z - s * sx - co * sz };
 }
 
-const BOX_CELL = 32;
-const gridKey = (cx: number, cz: number) => (cx + 512) * 1024 + (cz + 512);
-
-/** Push a circle out of building walls. Returns the push depth (0 = no hit). */
+/** Push a circle out of solids taller than a kerb. Returns the push depth (0 = no hit). */
 function pushOut(w: World, p: { x: number; z: number }, y: number, r: number) {
-  const list = w.boxGrid.get(gridKey(Math.floor(p.x / BOX_CELL), Math.floor(p.z / BOX_CELL)));
+  const list = w.solidGrid.get(solidKey(Math.floor(p.x / SOLID_CELL), Math.floor(p.z / SOLID_CELL)));
   if (!list) return 0;
   let hit = 0;
-  for (const b of list) {
-    if (p.x <= b.x0 - r || p.x >= b.x1 + r || p.z <= b.z0 - r || p.z >= b.z1 + r) continue;
-    if (y >= boxTop(b, clamp(p.x, b.x0, b.x1), clamp(p.z, b.z0, b.z1)) - 0.8) continue;
-    const dl = p.x - (b.x0 - r), dr = b.x1 + r - p.x, dt = p.z - (b.z0 - r), db = b.z1 + r - p.z;
-    const m = Math.min(dl, dr, dt, db);
-    if (m === dl) p.x = b.x0 - r; else if (m === dr) p.x = b.x1 + r; else if (m === dt) p.z = b.z0 - r; else p.z = b.z1 + r;
-    hit = Math.max(hit, m);
+  for (const o of list) {
+    if (p.x <= o.x0 - r || p.x >= o.x1 + r || p.z <= o.z0 - r || p.z >= o.z1 + r) continue;
+    if (o.y0 >= y + 1.8 || y >= solidTop(o, clamp(p.x, o.x0, o.x1), clamp(p.z, o.z0, o.z1)) - 0.8) continue;
+    const cx = clamp(p.x, o.x0, o.x1), cz = clamp(p.z, o.z0, o.z1);
+    let dx = p.x - cx, dz = p.z - cz;
+    const d = Math.hypot(dx, dz);
+    if (d > 1e-6) { if (d >= r) continue; dx /= d; dz /= d; p.x = cx + dx * r; p.z = cz + dz * r; hit = Math.max(hit, r - d); }
+    else {
+      const dl = p.x - (o.x0 - r), dr = o.x1 + r - p.x, dt = p.z - (o.z0 - r), db = o.z1 + r - p.z;
+      const m = Math.min(dl, dr, dt, db);
+      if (m === dl) p.x = o.x0 - r; else if (m === dr) p.x = o.x1 + r; else if (m === dt) p.z = o.z0 - r; else p.z = o.z1 + r;
+      hit = Math.max(hit, m);
+    }
   }
   return hit;
 }

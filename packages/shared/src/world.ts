@@ -1,5 +1,7 @@
 import { MAP } from './constants.js';
 import { clamp, fbm, hash2, lerp, mulberry32, smooth, vnoise } from './noise.js';
+import { SK, genLayout, type Layout, type Prop, type Solid, type Spot } from './structures.js';
+import { genProps, type Cave, type Exclusion } from './props.js';
 
 /**
  * The island. Everything here is deterministic from the seed, so the server
@@ -105,7 +107,21 @@ export interface World {
   boxes: Box[];
   boxGrid: Map<number, Box[]>;
   roadGrid: Map<number, number[]>; // cell -> flat [x, z, halfWidth, ...]
+  /** One layout per box (same index): rooms, doors, stairs, loot and chest spots. */
+  layouts: Layout[];
+  /** Everything solid that isn't terrain, and a 16 m grid over it. */
+  solids: Solid[];
+  solidGrid: Map<number, Solid[]>;
+  props: Prop[];
+  caves: Cave[];
+  /** Chest spots outside buildings (camps, landmarks, docks, caves). */
+  outdoorChests: Spot[];
+  /** Trees, rocks, bushes: per type, flat [x, y, z, scale, rot01, tint01]. */
+  scatter: Float32Array[];
 }
+
+export const SOLID_CELL = 16;
+export const solidKey = (cx: number, cz: number) => (cx + 1024) * 2048 + (cz + 1024);
 
 // ------------------------------------------------------------------ helpers
 function distToPolyline(x: number, z: number, pts: ArrayLike<number>) {
@@ -403,38 +419,76 @@ export function boxTop(b: Box, x: number, z: number) {
   return b.y1;
 }
 
+/** Top of a solid at (x, z): gable roofs slope, everything else is flat. */
+export function solidTop(o: Solid, x: number, z: number) {
+  return o.k === SK.Roof && o.b ? boxTop(o.b, x, z) : o.y1;
+}
+
 /** Highest walkable surface at (x, z) that is no more than a step above feet height y. */
 export function surfaceAt(w: World, x: number, z: number, y: number) {
   let s = Math.max(terrainAt(w, x, z), WATER_FLOAT_Y);
   if (s < BRIDGE_Y && BRIDGE_Y <= y + STEP_UP && roadEdgeDist(w, x, z) < 0.2) s = BRIDGE_Y;
-  const list = w.boxGrid.get(gridKey(Math.floor(x / BOX_CELL), Math.floor(z / BOX_CELL)));
-  if (list) for (const b of list) {
-    if (x < b.x0 || x > b.x1 || z < b.z0 || z > b.z1) continue;
-    const top = boxTop(b, x, z);
+  const list = w.solidGrid.get(solidKey(Math.floor(x / SOLID_CELL), Math.floor(z / SOLID_CELL)));
+  if (list) for (const o of list) {
+    if (x < o.x0 || x > o.x1 || z < o.z0 || z > o.z1) continue;
+    const top = solidTop(o, x, z);
     if (top <= y + STEP_UP && top > s) s = top;
   }
   return s;
 }
 
-/** Push a player out of any building walls. Mutates and returns true if moved. */
-export function collideBoxes(w: World, s: { x: number; y: number; z: number; vx: number; vz: number }) {
-  const list = w.boxGrid.get(gridKey(Math.floor(s.x / BOX_CELL), Math.floor(s.z / BOX_CELL)));
+/**
+ * Push a player out of walls, furniture, trunks... (circle vs box, so corners and door frames
+ * slide smoothly), and stop upward motion against ceilings. Mutates and returns true if moved.
+ */
+export function collideBoxes(w: World, s: { x: number; y: number; z: number; vx: number; vz: number; vy?: number }, radius = PLAYER_RADIUS, height = PLAYER_HEIGHT) {
+  const list = w.solidGrid.get(solidKey(Math.floor(s.x / SOLID_CELL), Math.floor(s.z / SOLID_CELL)));
   if (!list) return false;
-  const r = PLAYER_RADIUS;
+  const r = radius;
   let hit = false;
-  for (const b of list) {
-    if (s.x <= b.x0 - r || s.x >= b.x1 + r || s.z <= b.z0 - r || s.z >= b.z1 + r) continue;
-    const top = boxTop(b, clamp(s.x, b.x0, b.x1), clamp(s.z, b.z0, b.z1));
-    if (s.y >= top - STEP_UP || s.y + PLAYER_HEIGHT <= b.y0) continue;
-    const dl = s.x - (b.x0 - r), dr = b.x1 + r - s.x, dt = s.z - (b.z0 - r), db = b.z1 + r - s.z;
-    const m = Math.min(dl, dr, dt, db);
-    if (m === dl) { s.x = b.x0 - r; if (s.vx > 0) s.vx = 0; }
-    else if (m === dr) { s.x = b.x1 + r; if (s.vx < 0) s.vx = 0; }
-    else if (m === dt) { s.z = b.z0 - r; if (s.vz > 0) s.vz = 0; }
-    else { s.z = b.z1 + r; if (s.vz < 0) s.vz = 0; }
-    hit = true;
+  for (let pass = 0; pass < 2; pass++) {
+    for (const o of list) {
+      if (s.x <= o.x0 - r || s.x >= o.x1 + r || s.z <= o.z0 - r || s.z >= o.z1 + r) continue;
+      if (o.y0 >= s.y + height) continue; // above your head
+      const cx = clamp(s.x, o.x0, o.x1), cz = clamp(s.z, o.z0, o.z1);
+      const top = solidTop(o, cx, cz);
+      if (s.y >= top - STEP_UP) continue; // you can step onto it (or you're on it)
+      const inside = s.x > o.x0 && s.x < o.x1 && s.z > o.z0 && s.z < o.z1;
+      // ceilings: you're under it and jumping into it
+      if (inside && o.y0 > s.y + 1.0) {
+        if ((s.vy ?? 0) > 0) s.vy = 0;
+        s.y = Math.min(s.y, o.y0 - height - 0.01);
+        hit = true;
+        continue;
+      }
+      let dx = s.x - cx, dz = s.z - cz;
+      const d = Math.hypot(dx, dz);
+      if (d > 1e-6) {
+        if (d >= r) continue;
+        dx /= d; dz /= d;
+        s.x = cx + dx * r; s.z = cz + dz * r;
+      } else {
+        // centre inside the box: leave by the nearest side
+        const dl = s.x - o.x0, dr = o.x1 - s.x, dt = s.z - o.z0, db = o.z1 - s.z;
+        const m = Math.min(dl, dr, dt, db);
+        if (m === dl) { s.x = o.x0 - r; dx = -1; dz = 0; } else if (m === dr) { s.x = o.x1 + r; dx = 1; dz = 0; }
+        else if (m === dt) { s.z = o.z0 - r; dx = 0; dz = -1; } else { s.z = o.z1 + r; dx = 0; dz = 1; }
+      }
+      // cancel velocity into the surface
+      const vn = s.vx * dx + s.vz * dz;
+      if (vn < 0) { s.vx -= vn * dx; s.vz -= vn * dz; }
+      hit = true;
+    }
   }
   return hit;
+}
+
+/** Which building footprint (with its layout) contains this point, if any. */
+export function layoutAt(w: World, x: number, z: number): Layout | null {
+  const list = w.boxGrid.get(gridKey(Math.floor(x / BOX_CELL), Math.floor(z / BOX_CELL)));
+  if (!list) return null;
+  for (const b of list) if (x > b.x0 && x < b.x1 && z > b.z0 && z < b.z1) return w.layouts[w.boxes.indexOf(b)] ?? null;
+  return null;
 }
 
 export function poiAt(w: World, x: number, z: number): Poi | null {
@@ -445,13 +499,18 @@ export function poiAt(w: World, x: number, z: number): Poi | null {
 // ------------------------------------------------------------------ scatter (trees, rocks, bushes)
 export const SC_OAK = 0, SC_PINE = 1, SC_PALM = 2, SC_ROCK = 3, SC_BUSH = 4;
 /** Flat arrays of [x, y, z, scale, rotation01, tint01] per type. Visual only for now. */
-export function genScatter(w: World): Float32Array[] {
+export function genScatter(w: World, excl: Exclusion[] = []): Float32Array[] {
   const out: number[][] = [[], [], [], [], []];
+  const exGrid = new Map<number, Exclusion[]>();
+  for (const e of excl) for (let cz = Math.floor((e.z - e.r) / 32); cz <= Math.floor((e.z + e.r) / 32); cz++) for (let cx = Math.floor((e.x - e.r) / 32); cx <= Math.floor((e.x + e.r) / 32); cx++) {
+    const k = gridKey(cx, cz); let l = exGrid.get(k); if (!l) exGrid.set(k, (l = [])); l.push(e);
+  }
+  const excluded = (x: number, z: number) => (exGrid.get(gridKey(Math.floor(x / 32), Math.floor(z / 32))) ?? []).some((e) => (x - e.x) ** 2 + (z - e.z) ** 2 < e.r * e.r);
   const step = 10;
   const half = MAP.size / 2;
   const place = (x: number, z: number, i: number, j: number, s: number) => {
     const h = terrainAt(w, x, z);
-    if (h < 0.9) return;
+    if (h < 0.9 || excluded(x, z)) return;
     const r1 = hash2(i, j, s + 1), r2 = hash2(i, j, s + 2), r3 = hash2(i, j, s + 3), r4 = hash2(i, j, s + 4);
     const slope = Math.hypot(terrainAt(w, x + 2, z) - terrainAt(w, x - 2, z), terrainAt(w, x, z + 2) - terrainAt(w, x, z - 2)) / 4;
     const road = roadEdgeDist(w, x, z);
@@ -494,6 +553,40 @@ export function genScatter(w: World): Float32Array[] {
   return out.map((a) => new Float32Array(a));
 }
 
+/** Tree trunks and rocks block movement and bullets (bushes and leaves don't). */
+function addScatterSolids(w: World) {
+  const sc = w.scatter;
+  const trunk = (arr: Float32Array, rFn: (s: number) => number, hFn: (s: number) => number) => {
+    for (let i = 0; i < arr.length; i += 6) {
+      const x = arr[i], y = arr[i + 1], z = arr[i + 2], s = arr[i + 3], r = rFn(s);
+      w.solids.push({ x0: x - r, x1: x + r, z0: z - r, z1: z + r, y0: y - 0.5, y1: y + hFn(s), k: SK.Trunk });
+    }
+  };
+  trunk(sc[SC_OAK], (s) => 0.36 * s, (s) => 3.6 * s);
+  trunk(sc[SC_PINE], (s) => 0.3 * s, (s) => 3.4 * s);
+  trunk(sc[SC_PALM], () => 0.24, (s) => 5.5 * s);
+  const rocks = sc[SC_ROCK];
+  for (let i = 0; i < rocks.length; i += 6) {
+    const x = rocks[i], y = rocks[i + 1], z = rocks[i + 2], s = rocks[i + 3], rot = rocks[i + 4], tint = rocks[i + 5];
+    const hx = 0.75 * s * (0.8 + tint * 0.6), hz = 0.75 * s, top = 0.8 * s * (0.7 + rot * 0.6);
+    if (s < 0.9) continue; // pebbles don't block
+    w.solids.push({ x0: x - hx, x1: x + hx, z0: z - hz, z1: z + hz, y0: y - 0.5, y1: y + top, k: SK.Rock });
+  }
+}
+
+function buildSolidGrid(w: World) {
+  const pad = 1.6; // big enough for a car's collision circle
+  for (const o of w.solids) {
+    for (let cz = Math.floor((o.z0 - pad) / SOLID_CELL); cz <= Math.floor((o.z1 + pad) / SOLID_CELL); cz++)
+      for (let cx = Math.floor((o.x0 - pad) / SOLID_CELL); cx <= Math.floor((o.x1 + pad) / SOLID_CELL); cx++) {
+        const key = solidKey(cx, cz);
+        let list = w.solidGrid.get(key);
+        if (!list) w.solidGrid.set(key, (list = []));
+        list.push(o);
+      }
+  }
+}
+
 // ------------------------------------------------------------------ entry
 const cache = new Map<number, World>();
 export function getWorld(seed: number = MAP.seed): World {
@@ -507,8 +600,16 @@ export function getWorld(seed: number = MAP.seed): World {
     main: genMain(seed, pois, river),
     spawn: genSpawn(seed),
     boxes: [], boxGrid: new Map(), roadGrid: buildRoadGrid(roads),
+    layouts: [], solids: [], solidGrid: new Map(), props: [], caves: [], outdoorChests: [], scatter: [],
   };
   genBoxes(w);
+  for (const b of w.boxes) w.layouts.push(genLayout(w, b, w.solids));
+  const extra = genProps(w, w.solids);
+  w.props = extra.props; w.caves = extra.caves;
+  w.outdoorChests = [...extra.extraChests, ...extra.caves.map((c) => c.chest)];
+  w.scatter = genScatter(w, extra.excl);
+  addScatterSolids(w);
+  buildSolidGrid(w);
   cache.set(seed, w);
   return w;
 }

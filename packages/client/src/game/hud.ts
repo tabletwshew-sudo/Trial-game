@@ -62,6 +62,8 @@ export interface HudView {
   markers: Map<number, { x: number; z: number; sx: number; sy: number; show: boolean; dist: number }>;
   locked: boolean;
   fps: number;
+  /** Supply drops that haven't been opened. */
+  drops?: { x: number; z: number }[];
 }
 
 export class Hud {
@@ -147,6 +149,12 @@ export class Hud {
       c.fillStyle = '#ffd23f'; c.strokeStyle = '#14123a'; c.lineWidth = 2 * scale;
       c.beginPath(); c.ellipse(0, 0, 13 * scale, 6 * scale, 0, 0, Math.PI * 2); c.fill(); c.stroke();
       c.restore();
+    }
+    for (const d of v.drops ?? []) {
+      const x = toX(d.x), y = toY(d.z), s = 9 * scale;
+      c.fillStyle = '#3a86ff'; c.strokeStyle = '#fff'; c.lineWidth = 2 * scale;
+      c.fillRect(x - s / 2, y - s / 2, s, s); c.strokeRect(x - s / 2, y - s / 2, s, s);
+      c.fillStyle = '#ffd23f'; c.beginPath(); c.arc(x, y - s * 1.1, s * 0.55, 0, 7); c.fill(); c.stroke();
     }
     for (const [idx, m] of v.markers) {
       const col = TEAM_COLORS[this.teamIdx.indexOf(idx) % 4], x = toX(m.x), y = toY(m.z);

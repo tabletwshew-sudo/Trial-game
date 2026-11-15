@@ -1,6 +1,6 @@
 import {
-  ITEMS, K, PM, SPAWN_ISLAND, aimOrigin, consumableDef, raycastWorld, routeParamNear, weaponDef,
-  type BusRoute, type InputCmd, type PlayerState, type World,
+  ITEMS, K, PM, SPAWN_ISLAND, aimOrigin, consumableDef, layoutAt, raycastWorld, routeParamNear, weaponDef,
+  type BusRoute, type InputCmd, type Layout, type PlayerState, type World,
 } from '@dropzone/shared';
 import type { LootStore } from './loot.js';
 
@@ -83,6 +83,39 @@ export interface BotWorld {
   enemiesNear(x: number, z: number, r: number): BotTarget[];
   /** Knocked teammates near a point. */
   downedMates(): BotTarget[];
+  /** Closed chests / ammo boxes / landed supply drops near a point. */
+  chestsNear(x: number, z: number, r: number): { id: number; x: number; y: number; z: number; k: number }[];
+}
+
+/**
+ * Where to walk next to reach (tx, ty, tz): through a door if the target is in a different
+ * building (or outside), up or down the stairs if it's on another floor.
+ */
+export function navStep(w: World, s: PlayerState, tx: number, ty: number, tz: number): { x: number; z: number } {
+  const here = layoutAt(w, s.x, s.z), there = layoutAt(w, tx, tz);
+  const inside = (L: Layout | null) => L && L.type !== 'solid' ? L : null;
+  const A = inside(here), B = inside(there);
+  const viaDoor = (L: Layout, leaving: boolean) => {
+    let best = L.doors[0], bd = Infinity;
+    for (const d of L.doors) { const dd = Math.hypot(d.x - (leaving ? tx : s.x), d.z - (leaving ? tz : s.z)) + Math.hypot(d.ix - s.x, d.iz - s.z) * (leaving ? 1 : 0); if (dd < bd) { bd = dd; best = d; } }
+    const nx = best.ix - best.x, nz = best.iz - best.z, nl = Math.hypot(nx, nz) || 1;
+    const along = ((s.x - best.cx) * nx + (s.z - best.cz) * nz) / nl;      // <0 outside, >0 inside
+    const lateral = Math.abs(((s.x - best.cx) * nz - (s.z - best.cz) * nx) / nl);
+    if (leaving) return lateral < 0.5 && along < 1.7 ? { x: best.x, z: best.z } : { x: best.ix, z: best.iz };
+    return lateral < 0.5 && along > -1.7 ? { x: best.ix, z: best.iz } : { x: best.x, z: best.z };
+  };
+  if (A && A !== B) return viaDoor(A, true);
+  if (B && A !== B) {
+    // only bother with the door if the target is on the ground floor or we'll take the stairs after
+    return viaDoor(B, false);
+  }
+  if (A && A === B && A.stairs) {
+    const st = A.stairs, up = ty > st.y0 + 1.5, onUpper = s.y > st.y0 + 1.5;
+    const onStairs = s.x > st.x0 - 0.1 && s.x < st.x1 + 0.1 && s.z > st.z0 - 0.1 && s.z < st.z1 + 0.1;
+    if (up && !onUpper) return onStairs || Math.hypot(s.x - st.bx, s.z - st.bz) < 0.7 ? { x: st.tx, z: st.tz } : { x: st.bx, z: st.bz };
+    if (!up && onUpper) return onStairs || Math.hypot(s.x - st.tx, s.z - st.tz) < 0.7 ? { x: st.bx, z: st.bz } : { x: st.tx, z: st.tz };
+  }
+  return { x: tx, z: tz };
 }
 
 /** Score how much a bot wants this item (0 = ignore). */
@@ -279,28 +312,39 @@ export function botInput(s: PlayerState, b: BotBrain, bw: BotWorld, home: { x: n
     return cmd;
   }
 
-  if (now > b.lootUntil || b.lootId < 0 || !bw.loot.get(b.lootId)) {
+  const chestTarget = () => (b.lootId <= -10 ? bw.chestsNear(s.x, s.z, 60).find((c) => c.id === -b.lootId - 10) : undefined);
+  if (now > b.lootUntil || b.lootId === -1 || (b.lootId >= 0 && !bw.loot.get(b.lootId)) || (b.lootId <= -10 && !chestTarget())) {
     b.lootUntil = now + 1500;
     let best = -1, bestScore = 0;
     for (const it of bw.loot.near(s.x, s.z, 45)) {
-      if (b.ignoreLoot.has(it.id) || Math.abs(it.y - s.y) > 3) continue;
-      const want = wantItem(s, it.item, it.r);
+      if (b.ignoreLoot.has(it.id) || Math.abs(it.y - s.y) > 6) continue;
+      const want = ITEMS[it.item]?.kind === 'forage' ? (s.hp < 95 || s.shield < 95 ? 2 : 0) : wantItem(s, it.item, it.r);
       if (!want) continue;
-      const score = want / (1 + Math.hypot(it.x - s.x, it.z - s.z) / 10);
+      const score = want / (1 + Math.hypot(it.x - s.x, it.z - s.z) / 10 + Math.abs(it.y - s.y) / 3);
       if (score > bestScore) { bestScore = score; best = it.id; }
+    }
+    // chests are worth a detour (more so when you're poorly armed)
+    const armed = s.inv.filter((sl) => weaponDef(sl.id)).length;
+    for (const c of bw.chestsNear(s.x, s.z, 55)) {
+      if (b.ignoreLoot.has(-c.id - 10) || Math.abs(c.y - s.y) > 6) continue;
+      const want = c.k === 2 ? 14 : c.k === 1 ? 3 : armed < 2 ? 9 : 5;
+      const score = want / (1 + Math.hypot(c.x - s.x, c.z - s.z) / 10 + Math.abs(c.y - s.y) / 3);
+      if (score > bestScore) { bestScore = score; best = -c.id - 10; }
     }
     if (best !== b.lootId) b.stuckCheck = { x: s.x, z: s.z, at: now };
     b.lootId = best;
   }
-  const it = b.lootId >= 0 ? bw.loot.get(b.lootId) : undefined;
+  const it = b.lootId >= 0 ? bw.loot.get(b.lootId) : b.lootId <= -10 ? chestTarget() : undefined;
   if (it) {
-    const dx = it.x - s.x, dz = it.z - s.z, d = Math.hypot(dx, dz);
+    const to = navStep(bw.w, s, it.x, it.y, it.z);
+    const dx = to.x - s.x, dz = to.z - s.z;
+    const d = Math.hypot(it.x - s.x, it.z - s.z), dy = Math.abs(it.y - s.y);
     cmd.yaw = yawTo(dx, dz);
-    if (d > 1.2) { cmd.keys |= K.F; if (d > 8) cmd.keys |= K.SPRINT; }
-    if (d < 2) { b.firePulse = !b.firePulse; if (b.firePulse) cmd.keys |= K.USE; }
+    if (d > 1.2 || dy > 1.5) { cmd.keys |= K.F; if (d > 8 && Math.hypot(dx, dz) > 6) cmd.keys |= K.SPRINT; }
+    if (d < 2 && dy < 1.5) { b.firePulse = !b.firePulse; if (b.firePulse) cmd.keys |= K.USE; }
     // give up on loot we can't reach (behind a wall, on a roof)
     if (now - b.stuckCheck.at > 6000) {
-      if (Math.hypot(s.x - b.stuckCheck.x, s.z - b.stuckCheck.z) < 4 || d > 3) { b.ignoreLoot.add(it.id); b.lootId = -1; }
+      if (Math.hypot(s.x - b.stuckCheck.x, s.z - b.stuckCheck.z) < 4 || d > 3) { b.ignoreLoot.add(b.lootId); b.lootId = -1; }
       b.stuckCheck = { x: s.x, z: s.z, at: now };
     }
     if (s.grounded && b.rnd() < 0.01) cmd.keys |= K.JUMP;

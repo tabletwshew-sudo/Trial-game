@@ -1,14 +1,14 @@
 import {
-  ACT, AMMO_ITEM, CAR, ENT_BYTES, EF, ITEMS, K, MAP, PM, SIM_DT, SIM_HZ, SPAWN_ISLAND, TEAM_SIZE,
+  ACT, AMMO_ITEM, CAR, CHEST_KIND, SUPPLY_FALL, ENT_BYTES, EF, ITEMS, K, MAP, PM, SIM_DT, SIM_HZ, SPAWN_ISLAND, TEAM_SIZE,
   addToInventory, applyDamage, blastDamage, busPos, decodeInputs, emptySlot, encodeEnt, encodeSnapshot, falloff, getWorld,
   makeRoute, mulberry32, newPlayerState, rayPlayer, raycastWorld, seatWorld, stepCar, stepPlayer, stepProjectile, surfaceAt, terrainAt,
   weaponDamage, weaponDef, throwableDef, collideBoxes,
   type BusRoute, type CarBody, type FeedCause, type GameEvent, type GameInit, type GamePhase, type InputCmd, type LootView,
-  type PlayerState, type Projectile, type ServerMsg, type ShotEvent, type SimEvents, type ThrowEvent, type Vec3, type VehSnap, type World,
+  type ChestView, type PlayerState, type Projectile, type ServerMsg, type ShotEvent, type SimEvents, type ThrowEvent, type Vec3, type VehSnap, type World,
 } from '@dropzone/shared';
 import type { Match } from '../hub.js';
 import { botInput, newBrain, planDrop, type BotBrain, type BotTarget, type BotWorld } from './bots.js';
-import { LootStore, rollWeapon, spawnFloorLoot, spawnWarmupLoot, type LootItem } from './loot.js';
+import { LootStore, rollContainer, rollWeapon, spawnIslandLoot, spawnWarmupLoot, type ChestEnt, type LootItem } from './loot.js';
 
 export interface Sock { json: (m: ServerMsg) => void; bin: (b: ArrayBuffer) => void }
 
@@ -65,6 +65,12 @@ export class MatchInstance {
   private rnd: () => number;
   private projectiles: Projectile[] = [];
   private nextProj = 1;
+  readonly chests = new Map<number, ChestEnt>();
+  private nextChest = 1;
+  private chestAdds: ChestView[] = [];
+  private chestOpens: number[] = [];
+  private playAt = 0;
+  private supplyDrops = 0;
   private hist: { t: number; pos: Float32Array }[] = [];
   private endAt = 0;
   private dbno: boolean;
@@ -92,6 +98,13 @@ export class MatchInstance {
       if (!m.bot) this.byId.set(m.id, p);
     }
     spawnWarmupLoot(this.world, this.loot, this.rnd);
+    // a few chests on the warm-up island to try out
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI * 2 + 0.4, x = SPAWN_ISLAND.x + Math.cos(a) * 26, z = SPAWN_ISLAND.z + Math.sin(a) * 26;
+      if (terrainAt(this.world, x, z) < 1.5) continue;
+      const c: ChestEnt = { id: this.nextChest++, k: CHEST_KIND.Chest, x, y: surfaceAt(this.world, x, z, 50), z, face: Math.abs(Math.cos(a)) > 0.7 ? (Math.cos(a) > 0 ? 3 : 1) : (Math.sin(a) > 0 ? 2 : 0), open: false };
+      this.chests.set(c.id, c);
+    }
     this.loot.flush();
     this.spawnVehicles();
   }
@@ -171,6 +184,7 @@ export class MatchInstance {
       gone: this.players.filter((q) => q.gone || !q.alive).map((q) => q.idx),
       markers: this.players.filter((q) => q.team === p.team && q.marker).map((q) => ({ idx: q.idx, ...q.marker! })),
       loot: this.loot.all(),
+      chests: [...this.chests.values()].map(chestView),
       alive: this.alive, teamsAlive: this.teamsAlive(),
       kills: this.players.map((q) => q.kills),
     };
@@ -444,25 +458,73 @@ export class MatchInstance {
       p.revive = { target: downed.idx, t: 0 }; s.act = ACT.Reviving; s.vx = s.vz = 0;
       return;
     }
-    // 2) get in a car
-    const car = this.vehicles.find((v) => !v.dead && Math.hypot(v.x - s.x, v.z - s.z) < 3.8 && Math.abs(v.y - s.y) < 2.5 && v.seats.includes(-1));
+    // 2) get in a car (bots don't drive: their E presses are for loot and revives)
+    const car = p.bot ? undefined : this.vehicles.find((v) => !v.dead && Math.hypot(v.x - s.x, v.z - s.z) < 3.8 && Math.abs(v.y - s.y) < 2.5 && v.seats.includes(-1));
     if (car) return this.enterVehicle(p, car);
-    // 3) pick up the item you're looking at (or the nearest)
+    // 3) open the chest / pick up the item you're looking at (or the nearest)
     const fx = -Math.sin(s.yaw), fz = -Math.cos(s.yaw);
+    const score = (x: number, z: number) => {
+      const dx = x - s.x, dz = z - s.z, d = Math.hypot(dx, dz);
+      return d + (1 - (d > 0.01 ? (dx * fx + dz * fz) / d : 1)) * 1.5;
+    };
     let best: LootItem | null = null, bestScore = Infinity;
     for (const it of this.loot.near(s.x, s.z, 2.6)) {
       if (Math.abs(it.y - s.y) > 2) continue;
-      const dx = it.x - s.x, dz = it.z - s.z, d = Math.hypot(dx, dz);
-      const facing = d > 0.01 ? (dx * fx + dz * fz) / d : 1;
-      const score = d + (1 - facing) * 1.5;
-      if (score < bestScore) { bestScore = score; best = it; }
+      const sc = score(it.x, it.z);
+      if (sc < bestScore) { bestScore = sc; best = it; }
     }
-    if (best) this.pickUp(p, best);
+    let chest: ChestEnt | null = null;
+    for (const c of this.chests.values()) {
+      if (c.open || (c.k === CHEST_KIND.Supply && c.y !== c.landY)) continue;
+      if (Math.hypot(c.x - s.x, c.z - s.z) > 2.6 || Math.abs(c.y - s.y) > 2) continue;
+      const sc = score(c.x, c.z) - 0.3; // chests win ties
+      if (sc < bestScore) { bestScore = sc; chest = c; best = null; }
+    }
+    if (chest) this.openChest(p, chest);
+    else if (best) this.pickUp(p, best);
+  }
+
+  private openChest(p: P, c: ChestEnt) {
+    c.open = true;
+    this.chestOpens.push(c.id);
+    rollContainer(this.loot, this.rnd, c.k, c.x, c.y, c.z, c.face);
+    this.emitNear(c.x, c.z, 120, { e: 'opened', id: c.id, by: p.idx });
+  }
+
+  private addChest(c: ChestEnt) { this.chests.set(c.id, c); this.chestAdds.push(chestView(c)); }
+
+  /** Supply drops: a few times a match, somewhere near the action. */
+  private stepSupply(now: number) {
+    for (const c of this.chests.values()) {
+      if (c.k !== CHEST_KIND.Supply || c.y === c.landY) continue;
+      c.y = Math.max(c.landY!, c.y0! - (SUPPLY_FALL * (now - c.t0!)) / 1000);
+    }
+    if (this.phase !== 'play' || this.endAt) return;
+    const due = [40_000, 140_000, 240_000][this.supplyDrops];
+    if (due === undefined || now - this.playAt < due) return;
+    this.supplyDrops++;
+    const alive = this.players.filter((q) => q.alive && !q.gone);
+    const cx = alive.reduce((n, q) => n + q.s.x, 0) / Math.max(1, alive.length), cz = alive.reduce((n, q) => n + q.s.z, 0) / Math.max(1, alive.length);
+    for (let t = 0; t < 80; t++) {
+      const x = cx + (this.rnd() - 0.5) * 500, z = cz + (this.rnd() - 0.5) * 500;
+      const g = terrainAt(this.world, x, z), top = surfaceAt(this.world, x, z, 500);
+      if (g < 2 || Math.abs(top - g) > 0.2) continue; // on open ground, not a roof or the sea
+      const c: ChestEnt = { id: this.nextChest++, k: CHEST_KIND.Supply, x, y: 260, z, face: 0, open: false, t0: now, y0: 260, landY: top };
+      this.addChest(c);
+      this.broadcast({ t: 'ev', ev: [{ e: 'supply', id: c.id, x: Math.round(x), z: Math.round(z) }] });
+      break;
+    }
   }
 
   private pickUp(p: P, it: LootItem) {
     const s = p.s, def = ITEMS[it.item];
     if (!def) return;
+    if (def.kind === 'forage') {
+      s.hp = Math.min(100, s.hp + def.heal);
+      s.shield = Math.min(100, s.shield + def.shield);
+      this.loot.remove(it.id);
+      return;
+    }
     if (def.kind === 'ammo') {
       const took = addToInventory(s, it.item, it.r, it.n, 0);
       if (took >= it.n) this.loot.remove(it.id); else if (took > 0) this.loot.setCount(it.id, it.n - took);
@@ -612,7 +674,8 @@ export class MatchInstance {
     const b = busPos(this.route, now);
     // warm-up loot goes away; the island gets its loot
     for (const it of this.loot.all()) this.loot.remove(it.id);
-    spawnFloorLoot(this.world, this.loot, this.rnd);
+    for (const c of this.chests.values()) if (!c.open) { c.open = true; this.chestOpens.push(c.id); }
+    for (const c of spawnIslandLoot(this.world, this.loot, this.rnd, () => this.nextChest++)) this.addChest(c);
     const teamTargets = new Map<number, { x: number; z: number }>();
     for (const p of this.players) {
       if (p.gone) continue;
@@ -712,6 +775,11 @@ export class MatchInstance {
         return out;
       },
       downedMates: () => this.mates(p).filter((q) => q.alive && q.s.mode === PM.Knocked).map((q) => ({ idx: q.idx, x: q.s.x, y: q.s.y, z: q.s.z, knocked: true })),
+      chestsNear: (x, z, r) => {
+        const out: { id: number; x: number; y: number; z: number; k: number }[] = [];
+        for (const c of this.chests.values()) if (!c.open && (c.k !== CHEST_KIND.Supply || c.y === c.landY) && (c.x - x) ** 2 + (c.z - z) ** 2 < r * r) out.push({ id: c.id, x: c.x, y: c.y, z: c.z, k: c.k });
+        return out;
+      },
     };
   }
 
@@ -748,7 +816,7 @@ export class MatchInstance {
       const b = busPos(this.route, now);
       for (const p of this.players) if (p.s.mode === PM.Bus) { p.s.x = b.x; p.s.y = b.y; p.s.z = b.z; }
       if (now >= this.route.ejectAt) for (const p of this.players) if (!p.gone) this.eject(p, now);
-      if (now >= this.route.t1) { this.phase = 'play'; this.broadcast({ t: 'game_phase', phase: 'play', route: null, serverTime: now }); }
+      if (now >= this.route.t1) { this.phase = 'play'; this.playAt = now; this.broadcast({ t: 'game_phase', phase: 'play', route: null, serverTime: now }); }
     }
     if (this.phase === 'warmup') for (const p of this.players) if (p.s.mode === PM.Dead && !p.gone && now >= p.respawnAt) this.spawnOnWarmupIsland(p);
 
@@ -763,6 +831,7 @@ export class MatchInstance {
     this.stepVehicles(botSteps);
     this.stepProjectiles(dt);
     this.stepRevives(dt);
+    this.stepSupply(now);
     for (const p of this.players) if (p.alive && !p.gone) this.autoPickup(p);
     // anyone who swam off the edge of the world
     for (const p of this.players) if (p.alive && p.s.mode === PM.Walk && p.s.y < -20) { p.lastHit = { by: -1, at: now, w: 0, cause: 'water' }; applyDamage(p.s, 999, true); this.checkDown(p); }
@@ -795,6 +864,8 @@ export class MatchInstance {
   private sendSnapshots(now: number) {
     const listeners = this.players.filter((p) => p.sock);
     const deltas = this.loot.flush();
+    const chestAdds = this.chestAdds, chestOpens = this.chestOpens;
+    this.chestAdds = []; this.chestOpens = [];
     if (!listeners.length) { for (const p of this.players) p.ev.length = 0; return; }
     const n = this.players.length;
     const block = new Uint8Array(n * ENT_BYTES);
@@ -828,6 +899,7 @@ export class MatchInstance {
       }
       p.sock!.bin(encodeSnapshot(this.tick, now, p.lastSeq, p.s, sub, k, vehs));
       if (deltas.add.length || deltas.del.length) p.sock!.json({ t: 'loot', add: deltas.add as LootView[], del: deltas.del });
+      if (chestAdds.length || chestOpens.length) p.sock!.json({ t: 'chests', add: chestAdds, open: chestOpens });
       const rp = this.reviveProgress(p);
       if (rp > 0) p.ev.push({ e: 'revived', i: -1, by: Math.round(rp * 100) });
       if (p.ev.length) { p.sock!.json({ t: 'ev', ev: p.ev }); p.ev = []; }
@@ -844,6 +916,7 @@ export class MatchInstance {
 }
 
 const r1 = (v: number) => Math.round(v * 10) / 10;
+const chestView = (c: ChestEnt): ChestView => ({ id: c.id, k: c.k, x: c.x, y: c.k === CHEST_KIND.Supply ? c.landY! : c.y, z: c.z, face: c.face, open: c.open, t0: c.t0, y0: c.y0 });
 const r2 = (v: number) => Math.round(v * 100) / 100;
 
 /** Owns every running match and routes player traffic to the right one. */
