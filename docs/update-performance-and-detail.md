@@ -34,6 +34,7 @@ Measured on High, 1280×720 at 2× pixel density:
 - **Resolution:**
   - High renders at up to 1.5× (was 1.75×), Medium at 1.1× (was 1.25×), Low at 1×.
   - Dynamic resolution still lowers this when the frame rate drops.
+- **Flicker fix:** when dynamic resolution stepped up or down, one frame showed flat blue (the canvas was resized after drawing, which clears it). The change now happens just before drawing.
 - **Sky and water:** their noise is baked into small textures once at load, so each pixel reads a texture instead of computing noise.
 - **Grass and shadows:**
   - Grass blades no longer receive shadows.

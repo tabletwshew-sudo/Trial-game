@@ -369,7 +369,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
     const sound = new Soundscape(world, roster.length);
     let prevReload = 0, prevSlot = -1, prevItems = -1, prevAmmo = -1, landedOnce = false;
     input.onSpec = (dir) => net.send({ t: 'spec_next', dir });
-    let acc = 0, last = performance.now(), time = 0, fps = 60, slowFor = 0, fastFor = 0, resTimer = 0;
+    let acc = 0, last = performance.now(), time = 0, fps = 60, slowFor = 0, fastFor = 0, resTimer = 0, resizePending = false;
     let debugCam: { x: number; y: number; z: number; yaw: number; pitch: number } | null = null;
 
     function resize() {
@@ -391,6 +391,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
 
     function frame() {
       const nowMs = performance.now();
+      if (resizePending) { resizePending = false; renderer.setPixelRatio(pixelRatio); resize(); }
       renderer.info.reset();
       const dt = Math.min(0.1, (nowMs - last) / 1000);
       last = nowMs; time += dt;
@@ -655,7 +656,9 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
         if (fps < 48 && pixelRatio > minRatio) next = Math.max(minRatio, pixelRatio - (fps < 30 ? 0.2 : 0.1));
         else if (fps > 58) { fastFor += 0.75; if (fastFor > 3 && pixelRatio < maxRatio) { next = Math.min(maxRatio, pixelRatio + 0.1); fastFor = 0; } }
         else fastFor = 0;
-        if (Math.abs(next - pixelRatio) > 0.01) { pixelRatio = next; renderer.setPixelRatio(pixelRatio); resize(); }
+        // applied at the start of the next frame, just before drawing: resizing the canvas clears it,
+        // and doing it after this frame's draw showed one blank frame (a flash of the background)
+        if (Math.abs(next - pixelRatio) > 0.01) { pixelRatio = next; resizePending = true; }
       }
       // still slow at the lowest resolution? quietly drop to cheaper settings
       if (time > 6 && fps < 26 && pixelRatio <= Math.min(maxRatio, 0.6) + 0.01) { slowFor += dt; } else slowFor = 0;
