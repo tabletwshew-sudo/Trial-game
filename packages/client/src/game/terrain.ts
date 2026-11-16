@@ -195,7 +195,8 @@ export function makeWater(w: World) {
         // colour by depth: clear turquoise shallows, then blue, then deep ocean
         vec3 shallow = vec3(0.06, 0.62, 0.66), midC = vec3(0.012, 0.30, 0.62), deep = vec3(0.004, 0.09, 0.30);
         vec3 col = mix(shallow, midC, smoothstep(0.4, 4.0, d));
-        col = mix(col, deep, smoothstep(4.0, 18.0, d));
+        // (the depth map tops out at 14 m, so reach full ocean blue before that: no seam at its edge)
+        col = mix(col, deep, smoothstep(4.0, 12.5, d));
         // ripples: a normal from the wave height, calmer far away (no shimmer from the air)
         float near = smoothstep(500.0, 40.0, dist);
         float e = 0.6, w0 = waves(p), wx = waves(p + vec2(e, 0.0)), wz = waves(p + vec2(0.0, e));

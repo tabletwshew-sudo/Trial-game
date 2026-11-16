@@ -437,6 +437,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
         const span = Math.max(0.001, (B.t - A.t) / 1000);
         const sp = Math.hypot(B.x - A.x, B.z - A.z) / span;
         s.vy = (B.y - A.y) / span;
+        s.vx += ((B.x - A.x) / span - s.vx) * 0.3; s.vz += ((B.z - A.z) / span - s.vz) * 0.3;
         s.speed += (sp - s.speed) * 0.25;
         s.dive = clamp((-(B.y - A.y) / span - DROP.freefallMinSpeed) / (DROP.freefallMaxSpeed - DROP.freefallMinSpeed), 0, 1);
         if (s.mode === PM.Bus) s.visible = false;
@@ -451,7 +452,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
         err.multiplyScalar(Math.exp(-dt * 12));
         selfPos.set(prevPos.x + (pred.x - prevPos.x) * alpha, prevPos.y + (pred.y - prevPos.y) * alpha, prevPos.z + (pred.z - prevPos.z) * alpha).add(err);
         me.x = selfPos.x; me.y = selfPos.y; me.z = selfPos.z;
-        me.yaw = input.yaw; me.pitch = input.pitch; me.mode = pred.mode; me.grounded = pred.grounded; me.mv = pred.mv; me.mt = pred.mt; me.vy = pred.vy;
+        me.yaw = input.yaw; me.pitch = input.pitch; me.mode = pred.mode; me.grounded = pred.grounded; me.mv = pred.mv; me.mt = pred.mt; me.vy = pred.vy; me.vx = pred.vx; me.vz = pred.vz;
         me.speed = Math.hypot(pred.vx, pred.vz);
         me.dive = clamp((-input.pitch - 0.2) / 0.9, 0, 1);
         const held = pred.inv[pred.slot];

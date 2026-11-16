@@ -6,6 +6,7 @@ import { lobbyScreen } from './ui/lobby';
 import { gameScreen } from './game/game';
 import { h } from './ui/dom';
 import { audio } from './audio';
+import { charSheet } from './lobby/charsheet';
 
 // browsers only allow sound after a click or key press
 const unlock = () => audio.unlock();
@@ -49,7 +50,8 @@ function showLobby(user: UserView, playAgain = false) {
   show(lobby.el, lobby.destroy);
 }
 
-auth.me().then(
+if (new URLSearchParams(location.search).has('charsheet')) charSheet(app);
+else auth.me().then(
   (u) => (u ? enterLobby(u) : showLogin()),
   () => show(h('div.screen.login', h('div.login-card', h('div.logo.big', h('span', 'DROP'), h('span.accent', 'ZONE')),
     h('div.form-error', "Can't reach the game server."), h('button.btn.btn-primary.wide', { onclick: () => location.reload() }, 'RETRY')))),
