@@ -15,6 +15,20 @@ export const SHOULDER = 0.75;
 export function aimOrigin(x: number, y: number, z: number, yaw: number, crouch = false): Vec3 {
   return { x: x + Math.cos(yaw) * SHOULDER, y: y + (crouch ? 1.15 : EYE_HEIGHT), z: z - Math.sin(yaw) * SHOULDER };
 }
+/**
+ * Where shots really start: the over-the-shoulder point, pulled back toward your body if a wall
+ * is in the way. Without this, standing with your shoulder against a wall (or peeking a door
+ * frame) put the start of the shot on the far side of the wall, and bullets went through it.
+ */
+export function shotOrigin(w: World, x: number, y: number, z: number, yaw: number, crouch = false): Vec3 {
+  const o = aimOrigin(x, y, z, yaw, crouch);
+  const base = { x, y: o.y, z };
+  const d = { x: Math.cos(yaw), y: 0, z: -Math.sin(yaw) };
+  const hit = raycastWorld(w, base, d, SHOULDER + 0.1, false);
+  if (hit.kind === 'none') return o;
+  const t = Math.max(0, hit.t - 0.12);
+  return { x: x + d.x * t, y: o.y, z: z + d.z * t };
+}
 export function aimDir(yaw: number, pitch: number): Vec3 {
   const cp = Math.cos(pitch);
   return { x: -Math.sin(yaw) * cp, y: Math.sin(pitch), z: -Math.cos(yaw) * cp };

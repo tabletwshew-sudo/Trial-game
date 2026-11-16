@@ -3,7 +3,7 @@ import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeom
 import { outlineMaterial, part, softRamp, toonVertex } from './toon';
 import { GeoBuilder, mergeColored, type Piece } from '../game/geo';
 import { itemMesh, muzzleOffset } from '../game/items3d';
-import { weaponDef } from '@dropzone/shared';
+import { meleeDef, weaponDef } from '@dropzone/shared';
 
 /**
  * The Dropzone crew: original stylised characters with a proper rig (hips, chest, shoulders,
@@ -84,9 +84,9 @@ function put(g: THREE.Group, geo: THREE.BufferGeometry, color: string, p: [numbe
   return m;
 }
 
-export type PoseMode = 'idle' | 'run' | 'air' | 'fall' | 'glide' | 'swim' | 'knocked' | 'drive' | 'sit' | 'slide' | 'mantle' | 'hurdle' | 'climb' | 'zip' | 'launch';
+export type PoseMode = 'idle' | 'run' | 'air' | 'fall' | 'glide' | 'swim' | 'knocked' | 'drive' | 'sit' | 'slide' | 'mantle' | 'hurdle' | 'climb' | 'zip' | 'launch' | 'roll';
 export interface Pose {
-  mode: PoseMode; speed: number; dive: number; hold?: 'none' | 'gun' | 'item'; pitch: number; sprint?: boolean; crouch?: boolean; using?: boolean; emote?: number;
+  mode: PoseMode; speed: number; dive: number; hold?: 'none' | 'gun' | 'item' | 'melee'; pitch: number; sprint?: boolean; crouch?: boolean; using?: boolean; emote?: number;
   /** 0..1 through a mantle or hurdle. */
   phase?: number;
   /** Vertical speed (ladders). */
@@ -129,6 +129,12 @@ export class Character {
   private hop = 0;
   private wave = 0;
   private squash = 0;
+  /** Pickaxe swing in progress: 1 at the start, counts down to 0. */
+  private swingT = 0;
+  /** Forward roll: how far round the body has turned (radians). */
+  private tumble = 0;
+  /** Wall kick pose, counts down from 1. */
+  private kickT = 0;
   private roll = 0;
   private cur = restRig();
   /** The little trolley you hang from on a zipline. */
@@ -150,6 +156,10 @@ export class Character {
 
   /** Hit the ground hard: squash down for a moment (0..1). */
   land(intensity: number) { this.squash = Math.max(this.squash, Math.min(1, intensity)); }
+  /** Start a pickaxe swing (wind up over the shoulder, chop down, recover). */
+  swing() { this.swingT = 1; }
+  /** Push off a wall: one leg kicked back, arms thrown up. */
+  kick() { this.kickT = 1; }
 
   setSkin(i: number) {
     if (i === this.skinIndex) return;
@@ -410,8 +420,10 @@ export class Character {
     if (!item) return;
     const m = itemMesh(item, rarity);
     const isWeapon = !!weaponDef(item);
-    // weapon barrels run along the forearm; small items sit in the palm
+    // weapon barrels run along the forearm; a pickaxe sticks out of the fist like a hammer;
+    // small items sit in the palm
     if (isWeapon) { m.rotation.set(-Math.PI / 2, 0, Math.PI, 'XYZ'); m.position.set(0, -0.02, 0.02); }
+    else if (meleeDef(item)) { m.rotation.set(0, Math.PI, 0); m.position.set(0, -0.06, 0.0); }
     else { m.position.set(0, -0.05, 0.08); m.scale.setScalar(0.9); }
     this.held.add(m);
   }
@@ -530,6 +542,13 @@ export class Character {
         this.roll = damp(this.roll, sway * 0.06, k);
         break;
       }
+      case 'roll': {
+        // tucked into a ball, the whole body turning once forward
+        const ph = p.phase ?? 0;
+        r.by = -0.32; r.hipL = r.hipR = -1.7; r.kneeL = r.kneeR = 2.2; r.shLx = r.shRx = -1.25; r.elL = r.elR = -1.7; r.shLz = -0.3; r.shRz = 0.3; r.headX = 0.6;
+        this.tumble = ph * Math.PI * 2;
+        break;
+      }
       case 'launch':
         r.lean = -0.12; r.shLx = r.shRx = -0.3; r.shLz = -2.45; r.shRz = 2.45; r.elL = r.elR = -0.2; r.hipL = 0.1; r.hipR = -0.15; r.kneeL = 0.15; r.kneeR = 0.3; r.headX = -0.3;
         break;
@@ -547,9 +566,29 @@ export class Character {
       if (p.mode === 'run') r.lean = Math.min(r.lean, 0.06);
     } else if (canAim && p.sprint) { r.shRx = -0.55; r.elR = -1.15; r.shRy = 0; r.shLx = -0.6; r.elL = -1.2; r.shLy = 0.55; r.shRz = 0.15; }
     if (p.using) { r.shRx = -1.15; r.elR = -1.85; r.shRz = -0.15; r.shRy = 0.35; r.headX = 0.2; }
+    // pickaxe: carried up and ready; a swing winds back over the shoulder and chops down
+    const melee = p.hold === 'melee' && (p.mode === 'idle' || p.mode === 'run' || p.mode === 'air' || p.mode === 'slide');
+    if (melee) {
+      // carried low at your side, the head angled up and forward, clear of your face
+      if (!p.sprint || this.swingT > 0) { r.shRx = -0.3; r.elR = -0.55; r.shRy = 0; r.shRz = 0.28; r.shLx = -0.15; r.elL = -0.45; r.shLz = -0.12; }
+      if (this.swingT > 0) {
+        const u = 1 - this.swingT; // 0 -> 1
+        if (u < 0.3) { const a = u / 0.3; r.shRx = -0.75 - a * 2.0; r.elR = -1.25 - a * 0.6; r.twist = 0.35 * a; r.lean -= 0.08 * a; }
+        else if (u < 0.6) { const a = (u - 0.3) / 0.3; r.shRx = -2.75 + a * 2.55; r.elR = -1.85 + a * 1.6; r.twist = 0.35 - a * 0.7; r.lean += 0.18 * a; r.shLx = -0.3; r.elL = -0.6; }
+        else { const a = (u - 0.6) / 0.4; r.shRx = -0.2 - a * 0.55; r.elR = -0.25 - a * 1.0; r.twist = -0.35 * (1 - a); r.lean += 0.18 * (1 - a); }
+        this.swingT = Math.max(0, this.swingT - dt / 0.42);
+      }
+    } else this.swingT = 0;
     if (p.crouch && (p.mode === 'idle' || p.mode === 'run')) {
       // a real crouch: thighs forward, shins back, body low
       r.by -= 0.19; r.hipL -= 0.75; r.hipR -= 0.75; r.kneeL += 1.35; r.kneeR += 1.35; r.lean += 0.22;
+    }
+    if (p.mode !== 'roll') this.tumble = 0;
+    // wall kick: one leg driving back, arms up
+    if (this.kickT > 0) {
+      const q = this.kickT;
+      r.hipL = -1.0 * q; r.kneeL = 0.5 * q; r.hipR = 0.9 * q; r.kneeR = 0.2; r.shLx = r.shRx = -2.4 * q; r.elL = r.elR = -0.3; r.lean -= 0.25 * q;
+      this.kickT = Math.max(0, this.kickT - dt * 3);
     }
     // landing squash
     if (this.squash > 0.01) {
@@ -579,7 +618,7 @@ export class Character {
     if (this.hop > 0) { r.by += Math.max(0, Math.sin((1 - this.hop) * Math.PI)) * 0.3; this.hop = Math.max(0, this.hop - dt * 1.8); }
     if (this.wave > 0) { this.wave -= dt; r.shRx = -0.2; r.shRz = 2.6 + Math.sin(t * 14) * 0.3; r.elR = -0.35 - Math.sin(t * 14) * 0.25; }
 
-    this.apply(r, dt, k, gun, spin);
+    this.apply(r, dt, k, gun || melee, spin);
     this.held.visible = !p.emote && p.mode !== 'fall' && p.mode !== 'glide' && p.mode !== 'swim' && p.mode !== 'knocked' && p.mode !== 'drive' && p.mode !== 'climb' && p.mode !== 'mantle' && p.mode !== 'launch';
     this.trolley.visible = p.mode === 'zip';
     // glider pops open / folds away
@@ -599,10 +638,13 @@ export class Character {
     }
     const B = this.body;
     B.rotation.y = spin ? spin : damp(B.rotation.y % (Math.PI * 2), 0, k);
-    B.rotation.x = c.lean; B.rotation.z = this.roll;
+    B.rotation.x = c.lean + this.tumble; B.rotation.z = this.roll;
     // keep the body's centre in place when it tips over (the pivot is at the feet)
     const pivot = 1.05;
     B.position.set(0, c.by + pivot * (1 - Math.cos(c.lean)), -pivot * Math.sin(c.lean));
+    // a forward roll turns round the middle of the tucked body, not the feet
+    // (the tucked body's centre is about 1 m up its axis; keep that centre ~0.6 m off the ground)
+    if (this.tumble) { const cl = 1.0, cy = 0.6; B.position.set(0, cy - cl * Math.cos(this.tumble), -cl * Math.sin(this.tumble)); }
     this.root.rotation.z = 0;
     this.hips.rotation.set(0, c.hipsYaw, c.roll);
     // the chest keeps facing where you look, turning only a little with the legs

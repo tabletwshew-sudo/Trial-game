@@ -45,6 +45,15 @@ export const MOVEMENT = {
   jumpBufferTicks: 9,
   fallDamageMinHeight: 10,
   fallDamagePerMetre: 3.5,
+  /** Roll landing: dropping at least this far while moving rolls you forward... */
+  rollMinHeight: 4,
+  /** ...which soaks up this many metres of the fall (so damage starts at 18 m instead of 10). */
+  rollSave: 8,
+  rollSpeed: 8.2,
+  /** Wall kick: jump off a wall in front of you while in the air (once per jump). */
+  wallKickUp: 7.4,
+  wallKickPush: 5.2,
+  wallKickReach: 0.5,
 } as const;
 
 export const DROP = {

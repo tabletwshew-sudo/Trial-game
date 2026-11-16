@@ -289,6 +289,14 @@ export class AudioEngine {
     else if (kind === 'knock') { this.tone(to, t, 'square', 220, 110, 0.25, 0.18); this.noise(to, t, 0.15, 0.3, 'lowpass', 600, 1); }
     else this.noise(to, t, 0.03, 0.3, 'bandpass', 2600, 2, 0.001);
   }
+  /** Pickaxe: the swing through the air, a clank off stone or metal, a dull thud on a player. */
+  melee(kind: 'swing' | 'wall' | 'flesh', pos: V3 | null) {
+    const to = this.dest(pos, 4, 1.0); if (!to) return;
+    const t = this.ctx!.currentTime, j = 0.9 + Math.random() * 0.2;
+    if (kind === 'swing') this.noise(to, t, 0.22, 0.28, 'bandpass', 700 * j, 0.9, 0.06, 2200 * j);
+    else if (kind === 'wall') { this.tone(to, t + 0.12, 'triangle', 1500 * j, 1350 * j, 0.18, 0.22); this.tone(to, t + 0.12, 'sine', 2350 * j, 2300 * j, 0.12, 0.1); this.noise(to, t + 0.12, 0.06, 0.35, 'bandpass', 3200, 2, 0.001); }
+    else { this.tone(to, t + 0.12, 'sine', 150 * j, 70, 0.14, 0.45); this.noise(to, t + 0.12, 0.08, 0.3, 'lowpass', 900, 1, 0.002); }
+  }
   /** You took damage. */
   hurt(shield: boolean) {
     const to = this.dest(null, 1, 0.4, true); if (!to) return;

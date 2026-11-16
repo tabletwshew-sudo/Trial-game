@@ -1,8 +1,10 @@
 import {
-  AMMO_COLORS, AMMO_NAMES, ITEMS, PM, RARITIES, RARITY_COLOR, SIM_HZ, consumableDef, itemName, itemRarity, weaponDef,
+  AMMO_COLORS, AMMO_NAMES, ITEM, ITEMS, PICK_SLOT, PM, RARITIES, RARITY_COLOR, SIM_HZ, consumableDef, itemName, itemRarity, weaponDef,
   type GameResult, type PlayerState, type RosterEntry,
 } from '@dropzone/shared';
 import { h } from '../ui/dom';
+import { itemIconSvg } from '../ui/icons';
+import { keyName, settings } from '../settings';
 
 /** Short labels for the hotbar tiles. */
 const SHORT: Record<number, string> = {};
@@ -11,15 +13,7 @@ ITEMS.forEach((d, i) => {
   SHORT[i] = d.kind === 'weapon' ? ({ pistol: 'PISTOL', smg: 'SMG', ar: 'AR', burst: 'BURST', shotgun: 'PUMP', autoshotgun: 'AUTO SG', dmr: 'DMR', sniper: 'SNIPER', rocket: 'ROCKET' } as const)[d.cls]
     : ({ 'Frag Grenade': 'FRAG', 'Bandage Roll': 'BANDAGE', 'Med Pack': 'MEDPACK', 'Shield Sip': 'SIP', 'Shield Jug': 'JUG', 'Fizz Can': 'FIZZ' } as Record<string, string>)[d.name] ?? d.name.toUpperCase();
 });
-const ICON: Record<string, string> = { pistol: '🔫', smg: '🔫', ar: '🔫', burst: '🔫', shotgun: '🔫', autoshotgun: '🔫', dmr: '🔭', sniper: '🔭', rocket: '🚀' };
-const itemIcon = (id: number) => {
-  const d = ITEMS[id];
-  if (!d || d.kind === 'forage') return '';
-  if (d.kind === 'weapon') return ICON[d.cls];
-  if (d.kind === 'throwable') return '💣';
-  if (d.kind === 'consumable') return d.shield && d.heal ? '🥤' : d.shield ? '🛡️' : '🩹';
-  return '';
-};
+SHORT[ITEM.pickaxe] = 'PICKAXE';
 
 const fmtDur = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 
@@ -29,6 +23,8 @@ export interface CombatView {
   fov: number;
   prompt: string | null;
   promptRarity: number;
+  /** Item the prompt is about (shows its icon), 0 for none. */
+  promptItem?: number;
   revive: number;          // 0..1
   reviveLabel: string;
   scoped: boolean;
@@ -42,7 +38,8 @@ export class CombatHud {
   readonly el: HTMLElement;
   private hpFill = h('div.bar-fill.hp'); private hpText = h('b');
   private shFill = h('div.bar-fill.sh'); private shText = h('b');
-  private slots: { tile: HTMLElement; name: HTMLElement; count: HTMLElement; icon: HTMLElement }[] = [];
+  private slots: { tile: HTMLElement; name: HTMLElement; count: HTMLElement; icon: HTMLElement; id: number }[] = [];
+  private pickKey = h('span.s-key');
   private ammoEl = h('div.ammo');
   private cross = h('div.xhair');
   private hit = h('div.hitmark');
@@ -63,6 +60,7 @@ export class CombatHud {
   private bossUntil = 0;
   private cardsEl = h('div.cards-ui');
   private confetti: HTMLCanvasElement | null = null;
+  private pickTile!: HTMLElement;
   private lastHp = 100;
   private hitTimer = 0;
   private resultShown = false;
@@ -72,10 +70,14 @@ export class CombatHud {
       h('div.bar.shield', this.shFill, h('div.bar-label', h('span', '🛡'), this.shText)),
       h('div.bar.health', this.hpFill, h('div.bar-label', h('span', '✚'), this.hpText)));
     const hotbar = h('div.hotbar');
+    // the pickaxe sits in its own tile in front of the five slots
+    const pick = h('div.slot-tile.pick', this.pickKey, h('span.s-icon', { html: itemIconSvg(ITEM.pickaxe) }), h('span.s-name', 'PICKAXE'));
+    this.pickTile = pick;
+    hotbar.append(pick);
     for (let i = 0; i < 5; i++) {
       const name = h('span.s-name'), count = h('span.s-count'), icon = h('span.s-icon');
       const tile = h('div.slot-tile', h('span.s-key', String(i + 1)), icon, name, count);
-      this.slots.push({ tile, name, count, icon });
+      this.slots.push({ tile, name, count, icon, id: -1 });
       hotbar.append(tile);
     }
     this.ring.append(this.ringLabel);
@@ -118,7 +120,7 @@ export class CombatHud {
       killer >= 0 && killer !== victim && !how ? h('span.verb', knock ? ` knocked ` : ` eliminated `) : null,
       h('b', { class: ally(victim) ? 'ally' : '' }, name(victim)),
       how ? h('span.verb', ` ${how}`) : null,
-      weapon && !how ? h('span.wpn', ` · ${weapon}`) : null);
+      weapon && !how ? h('span.wpn', { title: weapon, html: itemIconSvg(item) || ` · ${weapon}` }) : null);
     this.feed.prepend(line);
     while (this.feed.children.length > 6) this.feed.lastElementChild!.remove();
     setTimeout(() => line.classList.add('fade'), 6000);
@@ -204,20 +206,23 @@ export class CombatHud {
     if (knocked) (this.knocked.querySelector('.k-bar span') as HTMLElement).style.width = `${s.knock}%`;
 
     // hotbar
-    if (this.frame % 3 === 0) this.slots.forEach((sl, i) => {
-      const it = s.inv[i];
-      const r = itemRarity(it.id, it.r);
-      sl.tile.classList.toggle('sel', i === s.slot);
-      sl.tile.classList.toggle('empty', !it.id);
-      sl.tile.style.setProperty('--rc', it.id ? RARITY_COLOR[RARITIES[r]] : 'transparent');
-      sl.name.textContent = it.id ? SHORT[it.id] : '';
-      sl.icon.textContent = itemIcon(it.id);
-      const w = weaponDef(it.id);
-      sl.count.textContent = !it.id ? '' : w ? String(it.mag) : String(it.n);
-    });
+    if (this.frame % 3 === 0) {
+      this.slots.forEach((sl, i) => {
+        const it = s.inv[i];
+        const r = itemRarity(it.id, it.r);
+        sl.tile.classList.toggle('sel', i === s.slot);
+        sl.tile.classList.toggle('empty', !it.id);
+        sl.tile.style.setProperty('--rc', it.id ? RARITY_COLOR[RARITIES[r]] : 'transparent');
+        if (sl.id !== it.id) { sl.id = it.id; sl.name.textContent = it.id ? SHORT[it.id] : ''; sl.icon.innerHTML = itemIconSvg(it.id); }
+        const w = weaponDef(it.id);
+        sl.count.textContent = !it.id ? '' : w ? String(it.mag) : String(it.n);
+      });
+      this.pickTile.classList.toggle('sel', s.slot === PICK_SLOT);
+      this.pickKey.textContent = keyName(settings.keys.pickaxe);
+    }
 
     // ammo readout for the held weapon
-    const held = s.inv[s.slot], w = weaponDef(held.id);
+    const held = s.inv[s.slot] ?? { id: 0, r: 0, n: 0, mag: 0 }, w = weaponDef(held.id);
     if (w) {
       this.ammoEl.replaceChildren(h('b', { class: held.mag === 0 ? 'empty' : '' }, String(held.mag)), h('span', ' / '), h('span.reserve', { style: { color: AMMO_COLORS[w.ammo] } }, String(s.ammo[w.ammo])), h('small', AMMO_NAMES[w.ammo]));
       this.ammoEl.style.display = '';
@@ -236,7 +241,8 @@ export class CombatHud {
     this.prompt.classList.toggle('show', !!v.prompt);
     if (v.prompt && this.prompt.dataset.t !== v.prompt) {
       this.prompt.dataset.t = v.prompt;
-      this.prompt.replaceChildren(h('kbd', 'E'), h('span', { style: { color: RARITY_COLOR[RARITIES[v.promptRarity]] } }, v.prompt));
+      const icon = v.promptItem ? h('span.p-icon', { html: itemIconSvg(v.promptItem), style: { '--rc': RARITY_COLOR[RARITIES[v.promptRarity]] } }) : null;
+      this.prompt.replaceChildren(...[h('kbd', 'E'), icon, h('span', { style: { color: RARITY_COLOR[RARITIES[v.promptRarity]] } }, v.prompt)].filter((x): x is HTMLElement => !!x));
     }
 
     // progress ring: reload, heal, revive

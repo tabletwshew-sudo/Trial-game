@@ -11,7 +11,9 @@ export function h<K extends keyof HTMLElementTagNameMap>(sel: K | string, props?
     if (v == null || v === false) continue;
     if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
     else if (k === 'class') el.className += ' ' + v;
-    else if (k === 'style' && typeof v === 'object') Object.assign(el.style, v);
+    else if (k === 'style' && typeof v === 'object') for (const [sk, sv] of Object.entries(v)) { if (sk.startsWith('--')) el.style.setProperty(sk, String(sv)); else (el.style as any)[sk] = sv; }
+    // trusted markup only (our own SVG icons), never text that came from players or the server
+    else if (k === 'html') el.innerHTML = String(v);
     else if (k in el && k !== 'list') (el as any)[k] = v;
     else el.setAttribute(k, v === true ? '' : String(v));
   }

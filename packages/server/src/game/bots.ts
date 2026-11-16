@@ -1,5 +1,5 @@
 import {
-  ITEMS, K, MV, PM, SPAWN_ISLAND, aimOrigin, consumableDef, layoutAt, raycastWorld, routeParamNear, weaponDef,
+  ITEM, ITEMS, K, MV, PICK_SLOT, PM, SPAWN_ISLAND, shotOrigin, consumableDef, layoutAt, raycastWorld, routeParamNear, surfaceAt, throwableDef, weaponDef,
   type BusRoute, type InputCmd, type Layout, type PlayerState, type StormState, type World,
 } from '@dropzone/shared';
 import type { LootStore } from './loot.js';
@@ -11,11 +11,16 @@ import type { LootStore } from './loot.js';
  * Fight behaviour is built to feel like casual human opponents:
  *  - a reaction delay before the first shot, longer for weaker bots
  *  - aim error that grows with distance and shrinks the longer the fight lasts
- *  - strafing, the odd jump/crouch, and switching weapon for the range
+ *  - strafing (side to side, crouching and jumping more for skilled bots), switching weapon for the range
+ *  - breaking line of sight to reload or heal behind cover, then peeking back out
+ *  - pushing a target they've hurt badly or knocked, chasing around corners to where it was last seen
+ *  - grenades over cover, the pickaxe when they've nothing to shoot
+ *  - turning toward footsteps and gunshots, and going to look when they're healthy
  *  - healing when it's safe, picking up better loot, reviving teammates
+ * They only see what a player could: line of sight comes from their own side of any wall.
  */
 
-export interface BotTarget { idx: number; x: number; y: number; z: number; knocked: boolean }
+export interface BotTarget { idx: number; x: number; y: number; z: number; knocked: boolean; /** horizontal speed (loud when sprinting) */ speed?: number }
 
 export interface BotBrain {
   rnd: () => number;
@@ -57,6 +62,17 @@ export interface BotBrain {
   prog: { x: number; z: number; at: number } | null;
   unstickUntil: number;
   unstickYaw: number;
+  /** Damage done to the current enemy, and when it was last added to (pushes when it's a lot). */
+  dealt: number;
+  dealtAt: number;
+  /** A spot out of the enemy's sight to heal or reload behind, and when to give up on it. */
+  cover: { x: number; z: number; until: number } | null;
+  coverCheck: number;
+  /** When the next grenade may be thrown. */
+  nadeAt: number;
+  crouchUntil: number;
+  /** Going to look at where a noise came from. */
+  investigate: { x: number; z: number; until: number } | null;
 }
 
 export function newBrain(rnd: () => number): BotBrain {
@@ -69,6 +85,7 @@ export function newBrain(rnd: () => number): BotBrain {
     aimYaw: 0, aimPitch: 0, errYaw: 0, errPitch: 0, errUntil: 0,
     lootId: -1, lootUntil: 0, ignoreLoot: new Set(), firePulse: false, stuckCheck: { x: 0, z: 0, at: 0 },
     blocked: 0, slideUntil: 0, prog: null, unstickUntil: 0, unstickYaw: 0,
+    dealt: 0, dealtAt: 0, cover: null, coverCheck: 0, nadeAt: 0, crouchUntil: 0, investigate: null,
   };
 }
 
@@ -241,13 +258,40 @@ function wanderCmd(s: PlayerState, b: BotBrain, now: number, home: { x: number; 
 
 /** Can this bot see a point? (eye to chest, world geometry only) */
 function canSee(w: World, s: PlayerState, t: { x: number; y: number; z: number }) {
-  const o = aimOrigin(s.x, s.y, s.z, s.yaw);
+  const o = shotOrigin(w, s.x, s.y, s.z, s.yaw);
   const dx = t.x - o.x, dy = t.y + 1.2 - o.y, dz = t.z - o.z;
   const dist = Math.hypot(dx, dy, dz);
   if (dist < 1) return true;
   const hit = raycastWorld(w, o, { x: dx / dist, y: dy / dist, z: dz / dist }, dist, false);
   return hit.kind === 'none';
 }
+
+/**
+ * A nearby spot the enemy can't see (a wall, a tree, a rock between you), reachable in a straight
+ * line on about the same level. Prefers close spots that put distance between you and them.
+ */
+export function findCover(w: World, s: PlayerState, e: { x: number; y: number; z: number }): { x: number; z: number } | null {
+  let best: { x: number; z: number } | null = null, bestScore = Infinity;
+  const eye = { x: e.x, y: e.y + 1.6, z: e.z };
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    const dx = Math.cos(a), dz = Math.sin(a);
+    for (const r of [3, 5.5, 8.5]) {
+      const x = s.x + dx * r, z = s.z + dz * r;
+      const y = surfaceAt(w, x, z, s.y + 1.5);
+      if (Math.abs(y - s.y) > 1.2) continue;
+      if (raycastWorld(w, { x: s.x, y: s.y + 0.7, z: s.z }, { x: dx, y: 0, z: dz }, r, false).kind !== 'none') continue;
+      const tx = x - eye.x, ty = y + 1.2 - eye.y, tz = z - eye.z, tl = Math.hypot(tx, ty, tz);
+      if (tl < 4) continue;
+      if (raycastWorld(w, eye, { x: tx / tl, y: ty / tl, z: tz / tl }, tl, false).kind === 'none') continue;
+      const score = r - Math.hypot(x - e.x, z - e.z) * 0.25;
+      if (score < bestScore) { bestScore = score; best = { x, z }; }
+    }
+  }
+  return best;
+}
+
+const grenadeSlot = (s: PlayerState) => s.inv.findIndex((sl) => !!throwableDef(sl.id) && sl.n > 0);
 
 /**
  * One decision for one bot. Returns the command to run this tick and whether it wants
@@ -322,9 +366,12 @@ function decide(s: PlayerState, b: BotBrain, bw: BotWorld, home: { x: number; z:
       if (canSee(bw.w, s, c)) { found = c.idx; b.lastPos = { x: c.x, y: c.y, z: c.z }; break; }
     }
     if (found >= 0) {
-      if (found !== b.enemy) { b.enemyFirstSeen = now; b.enemy = found; }
+      if (found !== b.enemy) { b.enemyFirstSeen = now; b.enemy = found; b.dealt = 0; b.cover = null; }
       b.enemySeenAt = now;
-    } else if (b.enemy >= 0 && now - b.enemySeenAt > 4000) b.enemy = -1;
+      b.investigate = null;
+    } else if (b.enemy >= 0 && now - b.enemySeenAt > 4000) { b.enemy = -1; b.cover = null; }
+    // footsteps: someone sprinting nearby is heard even when they can't be seen
+    if (found < 0) for (const c of cands) if ((c.speed ?? 0) > 6 && (c.x - s.x) ** 2 + (c.z - s.z) ** 2 < 22 * 22) { b.heardFrom = { x: c.x, z: c.z, at: now }; break; }
   }
 
   // ------------------------------------------------ fight
@@ -333,11 +380,15 @@ function decide(s: PlayerState, b: BotBrain, bw: BotWorld, home: { x: number; z:
     const live = bw.enemiesNear(b.lastPos.x, b.lastPos.z, 12).find((e) => e.idx === b.enemy);
     const t = live && now - b.enemySeenAt < 600 ? live : null;
     if (t) b.lastPos = { x: t.x, y: t.y, z: t.z };
-    const tx = b.lastPos.x, ty = b.lastPos.y + (t?.knocked ? 0.4 : 1.15), tz = b.lastPos.z;
-    const o = aimOrigin(s.x, s.y, s.z, s.yaw);
+    const knocked = !!live?.knocked;
+    const tx = b.lastPos.x, ty = b.lastPos.y + (knocked ? 0.4 : 1.15), tz = b.lastPos.z;
+    const o = shotOrigin(bw.w, s.x, s.y, s.z, s.yaw);
     const dx = tx - o.x, dy = ty - o.y, dz = tz - o.z, dist = Math.hypot(dx, dz);
-    const slot = pickWeaponSlot(s, dist);
-    if (slot >= 0 && slot !== s.slot) cmd.slot = slot + 1;
+    const gunSlot = pickWeaponSlot(s, dist);
+    const health = s.hp + s.shield;
+    const healAt = healSlot(s);
+    const pushing = knocked || (b.dealt >= 70 && now - b.dealtAt < 5000);
+    const weak = health < 45 + (1 - b.skill) * 25 && !pushing;
 
     // aim: smooth turn toward the target plus an error that shrinks over the fight
     if (now > b.errUntil) {
@@ -353,30 +404,94 @@ function decide(s: PlayerState, b: BotBrain, bw: BotWorld, home: { x: number; z:
     cmd.yaw = s.yaw + Math.max(-turn, Math.min(turn, dyaw));
     cmd.pitch = s.pitch + Math.max(-turn, Math.min(turn, wantPitch - s.pitch));
 
-    const reacted = now - b.enemyFirstSeen > 900 - b.skill * 550;
-    const lined = Math.abs(dyaw) < 0.12 + 2 / Math.max(dist, 4);
-    const def = weaponDef(s.inv[s.slot]?.id ?? 0);
-    if (t && reacted && lined && def && s.cd === 0 && s.reload === 0) {
-      if (def.auto) cmd.keys |= K.FIRE;
-      else { b.firePulse = !b.firePulse; if (b.firePulse) cmd.keys |= K.FIRE; }
-      if (dist > 25 && def.cls !== 'shotgun' && def.cls !== 'autoshotgun') cmd.keys |= K.ADS;
-    }
-    if (def && s.inv[s.slot].mag === 0) cmd.keys |= K.RELOAD;
+    // nothing to shoot with: swing the pickaxe if they're close, otherwise go and find a gun
+    if (gunSlot < 0) {
+      if (dist < 10 || knocked) {
+        if (s.slot !== PICK_SLOT) cmd.slot = PICK_SLOT + 1;
+        moveToward(cmd, cmd.yaw, dx, dz); cmd.keys |= K.SPRINT;
+        if (t && dist < 2.4 && Math.abs(dyaw) < 0.6) cmd.keys |= K.FIRE;
+        if (s.grounded && dist > 4 && b.rnd() < 0.02) cmd.keys |= K.JUMP;
+        return cmd;
+      }
+      b.enemy = -1; b.cover = null;
+    } else {
+      const held = weaponDef(s.inv[s.slot]?.id ?? 0);
+      const reloading = !!held && (s.reload > 0 || s.inv[s.slot].mag === 0);
 
-    // movement: close in with shotguns, hold range with rifles, always strafe
-    if (now > b.strafeUntil) { b.strafe = b.rnd() < 0.5 ? -1 : 1; b.strafeUntil = now + 500 + b.rnd() * 1100; }
-    const ideal = def?.cls === 'shotgun' || def?.cls === 'autoshotgun' ? 6 : def?.cls === 'smg' ? 14 : def?.cls === 'sniper' ? 90 : 30;
-    if (dist > ideal + 6) cmd.keys |= K.F; else if (dist < ideal - 6) cmd.keys |= K.B;
-    cmd.keys |= b.strafe > 0 ? K.R : K.L;
-    if (s.grounded && b.rnd() < 0.015 + b.skill * 0.02) cmd.keys |= K.JUMP;
-    if (b.rnd() < 0.004) cmd.keys |= K.CROUCH;
-    if (!t && dist > 4) { cmd.keys |= K.F; cmd.keys &= ~K.FIRE; } // chase the last known spot
-    // caught in the storm: keep shooting but move toward safety
-    const sg = stormGoal(s, bw, now);
-    if (sg?.urgent && dist > 12) { moveToward(cmd, cmd.yaw, sg.x - s.x, sg.z - s.z); cmd.keys |= K.SPRINT; }
-    // guards stay near their post
-    if (b.post && Math.hypot(s.x - b.post.x, s.z - b.post.z) > 18) moveToward(cmd, cmd.yaw, b.post.x - s.x, b.post.z - s.z);
-    return cmd;
+      // ---- break line of sight to heal or reload, then peek back out
+      const wantCover = (weak && healAt >= 0) || (reloading && dist > 10 && (held?.mag ?? 0) > 6 && b.skill > 0.3);
+      if (wantCover && !b.cover && now > b.coverCheck) {
+        b.coverCheck = now + 1500;
+        const c = findCover(bw.w, s, b.lastPos);
+        if (c) b.cover = { ...c, until: now + 7000 };
+      }
+      if (b.cover && (now > b.cover.until || (!wantCover && !(weak && healAt >= 0)))) b.cover = null;
+      if (b.cover) {
+        const cdx = b.cover.x - s.x, cdz = b.cover.z - s.z, cd = Math.hypot(cdx, cdz);
+        if (cd > 0.8) {
+          cmd.yaw = yawTo(cdx, cdz); cmd.pitch = 0;
+          cmd.keys = (cmd.keys & ~(K.B | K.L | K.R)) | K.F | K.SPRINT;
+          if (reloading) cmd.keys |= K.RELOAD;
+        } else {
+          cmd.keys |= K.CROUCH;
+          if (weak && healAt >= 0 && !t) { if (healAt !== s.slot) cmd.slot = healAt + 1; else cmd.keys |= K.FIRE; }
+          else if (held && s.inv[s.slot].mag < held.mag) cmd.keys |= K.RELOAD;
+        }
+        return cmd;
+      }
+      if (gunSlot !== s.slot) cmd.slot = gunSlot + 1;
+
+      // ---- shoot
+      const reacted = now - b.enemyFirstSeen > 900 - b.skill * 550;
+      const lined = Math.abs(dyaw) < 0.12 + 2 / Math.max(dist, 4);
+      const def = held;
+      if (t && reacted && lined && def && s.cd === 0 && s.reload === 0) {
+        // automatics at long range: tap so the spread settles between shots
+        const tap = def.auto && dist > 45 && def.cls !== 'smg';
+        if (def.auto && !tap) cmd.keys |= K.FIRE;
+        else { b.firePulse = !b.firePulse; if (b.firePulse) cmd.keys |= K.FIRE; }
+        if (dist > 25 && def.cls !== 'shotgun' && def.cls !== 'autoshotgun') cmd.keys |= K.ADS;
+      }
+      if (def && s.inv[s.slot].mag === 0) cmd.keys |= K.RELOAD;
+
+      // ---- move: hold a range for the weapon, close in on a hurt or knocked target, always strafe
+      if (now > b.strafeUntil) { b.strafe = b.rnd() < 0.5 ? -1 : 1; b.strafeUntil = now + 250 + (1 - b.skill) * 650 + b.rnd() * 800; }
+      const close = def?.cls === 'shotgun' || def?.cls === 'autoshotgun';
+      const ideal = pushing ? (knocked ? 2.5 : close ? 4 : 8) : close ? 6 : def?.cls === 'smg' ? 14 : def?.cls === 'sniper' ? 90 : 30;
+      if (dist > ideal + 6) { cmd.keys |= K.F; if (pushing && dist > 10) cmd.keys |= K.SPRINT; }
+      else if (dist < ideal - 6) cmd.keys |= K.B;
+      if (!(pushing && dist > 10)) cmd.keys |= b.strafe > 0 ? K.R : K.L;
+      if (s.grounded && b.rnd() < (dist < 15 ? 0.025 : 0.01) + b.skill * 0.02) cmd.keys |= K.JUMP;
+      // skilled bots crouch now and then mid-fight to throw off your aim
+      if (b.skill > 0.4 && t && dist > 12 && b.rnd() < 0.006) b.crouchUntil = now + 350 + b.rnd() * 700;
+      if (now < b.crouchUntil) cmd.keys |= K.CROUCH;
+
+      // ---- they ducked behind something: lob a grenade over it
+      const gs = grenadeSlot(s);
+      const hidden = now - b.enemySeenAt;
+      if (!t && gs >= 0 && now > b.nadeAt && hidden > 900 && hidden < 5000 && dist > 7 && dist < 26) {
+        if (s.slot !== gs) cmd.slot = gs + 1;
+        else if (s.cd === 0 && !(s.keys & K.FIRE)) {
+          cmd.yaw = yawTo(tx - s.x, tz - s.z); cmd.pitch = Math.min(0.6, 0.12 + dist * 0.014);
+          cmd.keys = K.FIRE; b.nadeAt = now + 9000;
+        }
+        return cmd;
+      }
+
+      // ---- lost sight: go to where they were, the way a player would (doors, stairs)
+      if (!t && dist > 3) {
+        const to = navStep(bw.w, s, b.lastPos.x, b.lastPos.y, b.lastPos.z);
+        cmd.keys &= ~(K.FIRE | K.F | K.B | K.L | K.R);
+        if (dist > 12) { cmd.yaw = yawTo(to.x - s.x, to.z - s.z); cmd.pitch = 0; cmd.keys |= K.F; }
+        else moveToward(cmd, cmd.yaw, to.x - s.x, to.z - s.z);
+      }
+      // caught in the storm: keep shooting but move toward safety
+      const sg = stormGoal(s, bw, now);
+      if (sg?.urgent && dist > 12) { moveToward(cmd, cmd.yaw, sg.x - s.x, sg.z - s.z); cmd.keys |= K.SPRINT; }
+      // guards stay near their post
+      if (b.post && Math.hypot(s.x - b.post.x, s.z - b.post.z) > 18) moveToward(cmd, cmd.yaw, b.post.x - s.x, b.post.z - s.z);
+      return cmd;
+    }
   }
   if (b.post) return wanderCmd(s, b, now, b.post, 6, cmd);
 
@@ -418,6 +533,27 @@ function decide(s: PlayerState, b: BotBrain, bw: BotWorld, home: { x: number; z:
     cmd.yaw = yawTo(dx, dz);
     if (d > 1.8) { cmd.keys |= K.F; if (d > 6) cmd.keys |= K.SPRINT; } else cmd.keys |= K.USE;
     return cmd;
+  }
+
+  // ------------------------------------------------ a noise (gunfire, footsteps): turn to look, and go see if we're in good shape
+  if (b.heardFrom && now - b.heardFrom.at < 2500 && !b.post) {
+    const hx = b.heardFrom.x - s.x, hz = b.heardFrom.z - s.z, hd = Math.hypot(hx, hz);
+    if (hd > 2) {
+      cmd.yaw = s.yaw + Math.max(-0.2, Math.min(0.2, wrap(yawTo(hx, hz) - s.yaw)));
+      if (!b.investigate && hd < 70 && s.hp + s.shield > 80 && pickWeaponSlot(s, hd) >= 0 && b.rnd() < 0.02 + b.skill * 0.04) b.investigate = { x: b.heardFrom.x, z: b.heardFrom.z, until: now + 9000 };
+      if (!b.investigate) return cmd;
+    }
+  }
+  if (b.investigate) {
+    const d = Math.hypot(b.investigate.x - s.x, b.investigate.z - s.z);
+    if (now > b.investigate.until || d < 4) b.investigate = null;
+    else {
+      const to = navStep(bw.w, s, b.investigate.x, s.y, b.investigate.z);
+      cmd.yaw = yawTo(to.x - s.x, to.z - s.z);
+      cmd.keys |= K.F;
+      if (d > 30) cmd.keys |= K.SPRINT; // close in quietly once near
+      return cmd;
+    }
   }
 
   const chestTarget = () => (b.lootId <= -10 ? bw.chestsNear(s.x, s.z, 60).find((c) => c.id === -b.lootId - 10) : undefined);

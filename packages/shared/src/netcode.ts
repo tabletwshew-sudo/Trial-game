@@ -28,7 +28,7 @@ export function decodeInputs(v: DataView): { firstSeq: number; cmds: InputCmd[];
   for (let i = 0; i < n; i++) {
     const o = INPUT_HEAD + i * CMD_BYTES;
     const yaw = v.getFloat32(o + 3, true), pitch = v.getFloat32(o + 7, true), slot = v.getUint8(o + 2);
-    if (!Number.isFinite(yaw) || !Number.isFinite(pitch) || Math.abs(yaw) > 1e4 || slot > 5) return null;
+    if (!Number.isFinite(yaw) || !Number.isFinite(pitch) || Math.abs(yaw) > 1e4 || slot > 6) return null; // 1..5 slots, 6 = pickaxe
     cmds.push({ keys: v.getUint16(o, true) & 0xfff, yaw, pitch: Math.max(-1.55, Math.min(1.55, pitch)), slot });
   }
   return { firstSeq: v.getUint32(1, true), cmds, viewTime };
@@ -68,7 +68,7 @@ function encodeVeh(e: VehSnap, v: DataView, o: number) {
 
 // ------------------------------------------------------------------ snapshot
 export interface Snapshot { tick: number; time: number; ack: number; self: PlayerState | null; ents: EntSnap[]; vehs: VehSnap[] }
-const SELF_BYTES = 133;
+const SELF_BYTES = 134;
 
 function writeSelf(v: DataView, o: number, s: PlayerState) {
   for (const f of [s.x, s.y, s.z, s.vx, s.vy, s.vz]) { v.setFloat32(o, f, true); o += 4; }
@@ -85,7 +85,7 @@ function writeSelf(v: DataView, o: number, s: PlayerState) {
   v.setUint8(o++, s.mv); v.setUint8(o++, s.mt);
   for (const f of [s.tx, s.ty, s.tz, s.my, s.mh]) { v.setFloat32(o, f, true); o += 4; }
   v.setUint8(o++, s.air); v.setUint8(o++, s.jbuf); v.setInt16(o, s.li, true); o += 2;
-  v.setFloat32(o, s.zt, true); o += 4; v.setFloat32(o, s.zv, true); o += 4; v.setUint8(o++, s.scd);
+  v.setFloat32(o, s.zt, true); o += 4; v.setFloat32(o, s.zv, true); o += 4; v.setUint8(o++, s.scd); v.setUint8(o++, s.wk);
   return o;
 }
 function readSelf(v: DataView, o: number): PlayerState {
@@ -100,8 +100,8 @@ function readSelf(v: DataView, o: number): PlayerState {
   const yaw = f(), pitch = f(), emote = u8();
   const mv = u8(), mt = u8(), tx = f(), ty = f(), tz = f(), my = f(), mh = f(), air = u8(), jbuf = u8();
   const li = v.getInt16(o, true); o += 2;
-  const zt = f(), zv = f(), scd = u8();
-  return { mv, mt, tx, ty, tz, my, mh, air, jbuf, li, zt, zv, scd, emote, x, y, z, vx, vy, vz, yaw, pitch, mode, grounded, keys, hp, shield, knock, slot, inv, ammo, cd, burst, reload, use, bloom, shots, seed, act, veh, seat, vh, vs };
+  const zt = f(), zv = f(), scd = u8(), wk = u8();
+  return { wk, mv, mt, tx, ty, tz, my, mh, air, jbuf, li, zt, zv, scd, emote, x, y, z, vx, vy, vz, yaw, pitch, mode, grounded, keys, hp, shield, knock, slot, inv, ammo, cd, burst, reload, use, bloom, shots, seed, act, veh, seat, vh, vs };
 }
 
 /**

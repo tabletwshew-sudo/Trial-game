@@ -108,6 +108,25 @@ function itemPieces(id: number, rarity: number): Piece[] {
       { geo: new THREE.CylinderGeometry(0.045, 0.06, 0.02, 12), color: '#c0c0c0', matrix: mat4(0, 0.21, 0) },
     ];
   }
+  if (id === ITEM.pickaxe) {
+    // an original pick: ash handle with a wrapped grip and a brass end cap, a steel head with a
+    // curved spike on one side and a broad blade on the other, and a teal collar. Like the
+    // weapons, it points down -Z from the grip at the origin.
+    const steel = '#c9d3dc', edge = '#eef3f7';
+    return [
+      { geo: CYL(0.03, 0.86, 7), color: '#a0703f', matrix: mat4(0, 0, -0.33) },
+      { geo: CYL(0.036, 0.24, 7), color: '#2b2d42', matrix: mat4(0, 0, 0.0) },
+      { geo: CYL(0.042, 0.05, 7), color: '#d9a441', matrix: mat4(0, 0, 0.12) },
+      { geo: CYL(0.034, 0.03, 7), color: '#2b2d42', matrix: mat4(0, 0, -0.2) },
+      // head: collar, spike (up, curving back), blade (down)
+      { geo: B(0.09, 0.14, 0.11), color: '#2a9d8f', matrix: mat4(0, 0, -0.72) },
+      { geo: B(0.07, 0.2, 0.08), color: steel, matrix: mat4(0, 0.16, -0.71, 0.18, 0, 0) },
+      { geo: new THREE.ConeGeometry(0.04, 0.24, 6), color: steel, matrix: mat4(0, 0.36, -0.66, 0.42, 0, 0) },
+      { geo: new THREE.ConeGeometry(0.018, 0.08, 5), color: edge, matrix: mat4(0, 0.5, -0.6, 0.55, 0, 0) },
+      { geo: B(0.06, 0.18, 0.1), color: steel, matrix: mat4(0, -0.15, -0.72, -0.1, 0, 0) },
+      { geo: B(0.065, 0.06, 0.2), color: edge, matrix: mat4(0, -0.26, -0.73, -0.1, 0, 0) },
+    ];
+  }
   if (id === ITEM.card || id === ITEM.keycard) {
     const gold = id === ITEM.keycard;
     return [

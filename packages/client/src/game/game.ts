@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import {
-  ACT, DROP, EF, EF_EMOTE_SHIFT, ITEM, ITEMS, K, MV, consumableDef, PM, SIM_DT, WATER_FLOAT_Y, isLow, zipNear, busPos, clamp, currentSpread, decodeSnapshot, encodeInputs, getWorld, raycastWorld, seatWorld, stepPlayer, surfaceAt, terrainAt, weaponDef,
+  ACT, DROP, EF, EF_EMOTE_SHIFT, ITEM, ITEMS, K, MV, PICK_SLOT, consumableDef, heldItemId, meleeDef, PM, SIM_DT, WATER_FLOAT_Y, isLow, zipNear, busPos, clamp, currentSpread, decodeSnapshot, encodeInputs, getWorld, raycastWorld, seatWorld, stepPlayer, surfaceAt, terrainAt, weaponDef,
   type EntSnap, type GameEvent, type GameInit, type GamePhase, type InputCmd, type MatchFoundView, type PlayerState, type RouteView, type ServerMsg, type SimEvents, type UserView, type World,
 } from '@dropzone/shared';
 import { STORM_PHASES } from '@dropzone/shared';
@@ -10,6 +10,7 @@ import { h, toast } from '../ui/dom';
 import { Actors } from './actors';
 import { CarRenderer } from './cars';
 import { CombatHud } from './combathud';
+import { InventoryPanel } from './inventory';
 import { Effects } from './effects';
 import { LootRenderer } from './lootview';
 import { StormView } from './storm3d';
@@ -165,7 +166,23 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       onSpecNext: (dir) => net.send({ t: 'spec_next', dir }),
       onSpectate: () => input.lock(),
     });
-    root.append(hud.el, combat.el);
+    // inventory screen (Tab / I): rearrange, inspect and drop things
+    const inv = new InventoryPanel({
+      swap: (a, b) => net.send({ t: 'inv_swap', a, b }),
+      drop: (slot, n) => { net.send(n === undefined ? { t: 'inv_drop', slot } : { t: 'inv_drop', slot, n }); audio.item('swap'); },
+      dropAmmo: (ammo, n) => { net.send({ t: 'ammo_drop', ammo, n }); audio.item('ammo'); },
+      equip: (slot) => { input.pendingSlot = slot + 1; },
+    }, () => toggleInv(false));
+    root.append(hud.el, combat.el, inv.el);
+    function toggleInv(open = !inv.open) {
+      if (open && (!pred || pred.mode === PM.Dead || pred.mode === PM.Bus)) return;
+      if (open && hud.mapOpen) hud.setMap(false);
+      inv.setOpen(open, pred);
+      if (open) input.unlock(); else if (!hud.menuOpen && !hud.mapOpen) input.lock();
+    }
+    // while it's open, number keys pick a card and Q drops it (instead of switching what you hold)
+    const invKeys = (e: KeyboardEvent) => { if (inv.open && inv.key(e.code)) { e.preventDefault(); e.stopPropagation(); } };
+    addEventListener('keydown', invKeys, true);
 
     function toggleMap(open = !hud.mapOpen) {
       hud.setMap(open);
@@ -173,10 +190,12 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
     }
     let lockLostAt = 0;
     input.onAction = (a) => {
-      if (a === 'map') { if (hud.menuOpen || settingsEl) return; toggleMap(); }
+      if (a === 'map') { if (hud.menuOpen || settingsEl) return; if (inv.open) toggleInv(false); toggleMap(); }
+      else if (a === 'inventory') { if (hud.menuOpen || settingsEl) return; toggleInv(); }
       else if (a === 'menu') {
         if (settingsEl) { settingsEl.remove(); settingsEl = null; return; }
         if (hud.mapOpen) return toggleMap(false);
+        if (inv.open) return toggleInv(false);
         if (input.locked) return input.unlock(); // -> onLockChange opens the menu
         // Esc while locked is consumed by the browser (it just unlocks); see onLockChange
         if (!input.locked && performance.now() - lockLostAt > 150) { hud.setMenu(!hud.menuOpen); if (!hud.menuOpen) input.lock(); }
@@ -190,7 +209,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
     input.onLockChange = (locked) => {
       if (locked) { hud.setMenu(false); return; }
       lockLostAt = performance.now();
-      if (!hud.mapOpen && !disposed) hud.setMenu(true); // Esc pressed
+      if (!hud.mapOpen && !inv.open && !disposed) hud.setMenu(true); // Esc pressed
     };
 
     // ---------------------------------------------------------------- state
@@ -254,6 +273,14 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
             if (i < 12 || weaponDef(e.w)?.pellets === 1) fx.tracer(from, tmpB);
             fx.impact(tmpB, e.h[i + 3]);
           }
+          break;
+        }
+        case 'melee': {
+          actors.swing(e.i);
+          const at = { x: e.h[0], y: e.h[1], z: e.h[2] };
+          audio.melee('swing', at);
+          if (e.h[3] === 0 || e.h[3] === 4) { tmpB.set(at.x, at.y, at.z); fx.impact(tmpB, e.h[3] === 4 ? 4 : 0); audio.melee('wall', at); }
+          else if (e.h[3] === 1 || e.h[3] === 2) { tmpB.set(at.x, at.y, at.z); fx.impact(tmpB, e.h[3]); audio.melee('flesh', at); }
           break;
         }
         case 'dmg': {
@@ -338,13 +365,30 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
         input.pitch = Math.min(1.5, input.pitch + kick * ((input.keys & K.ADS) ? 0.6 : 1));
         input.yaw += (Math.random() - 0.5) * kick * 0.3;
       },
+      swing: (e) => {
+        actors.swing(selfIdx);
+        audio.melee('swing', null);
+        // chips off a wall right in front of you (the server decides hits on players)
+        const md = meleeDef(ITEM.pickaxe)!;
+        const hit = raycastWorld(world, e.origin, e.dir, md.range, false);
+        if (hit.kind !== 'none') {
+          tmpB.set(e.origin.x + e.dir.x * hit.t, e.origin.y + e.dir.y * hit.t, e.origin.z + e.dir.z * hit.t);
+          fx.impact(tmpB, 0); fx.burst(tmpB.x, tmpB.y, tmpB.z, 3, '#cbbfa8', 1.5, 1.2, 0.08, 0.35);
+          audio.melee('wall', null);
+        }
+      },
+      kicked: () => {
+        actors.kick(selfIdx);
+        audio.move('jump', null); audio.move('mantle', null);
+        if (pred) fx.burst(pred.x - Math.sin(input.yaw) * 0.7, pred.y + 0.9, pred.z - Math.cos(input.yaw) * 0.7, 5, '#e6dcc6', 1.2, 1, 0.14, 0.45);
+      },
       reloaded: () => audio.reload('end'),
       used: (item) => audio.item(consumableDef(item)?.shield ? 'shield' : 'heal'),
     };
 
     function simStep() {
       const frozen = hud.menuOpen || hud.mapOpen || combat.resultOpen;
-      const slot = pred ? input.takeSlot(pred.slot, (i) => pred!.inv[i].id !== 0) : 0;
+      const slot = pred ? input.takeSlot(pred.slot, (i) => i === PICK_SLOT || pred!.inv[i].id !== 0) : 0;
       const cmd: InputCmd = { keys: frozen ? 0 : input.keys, yaw: Math.fround(input.yaw), pitch: Math.fround(input.pitch), slot };
       input.consumeTaps();
       seq++;
@@ -455,8 +499,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
         me.yaw = input.yaw; me.pitch = input.pitch; me.mode = pred.mode; me.grounded = pred.grounded; me.mv = pred.mv; me.mt = pred.mt; me.vy = pred.vy; me.vx = pred.vx; me.vz = pred.vz;
         me.speed = Math.hypot(pred.vx, pred.vz);
         me.dive = clamp((-input.pitch - 0.2) / 0.9, 0, 1);
-        const held = pred.inv[pred.slot];
-        me.item = held.id; me.rarity = held.r;
+        me.item = heldItemId(pred); me.rarity = pred.slot === PICK_SLOT ? 0 : pred.inv[pred.slot].r;
         me.flags = (pred.keys & K.SPRINT && me.speed > 6 ? EF.SPRINT : 0) | (pred.keys & K.CROUCH ? EF.CROUCH : 0) | (pred.use > 0 ? EF.USING : 0) | (pred.keys & K.ADS ? EF.ADS : 0) | ((pred.emote & 3) << EF_EMOTE_SHIFT);
         me.visible = true;
         if (pred.mode === PM.Drive) {
@@ -486,7 +529,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       dir.set(-Math.sin(camYaw) * cp, Math.sin(camPitch), -Math.cos(camYaw) * cp);
       const air = !inBus && (me.mode === PM.Fall || me.mode === PM.Glide);
       const driving = !!pred && (pred.mode === PM.Drive || pred.mode === PM.Ride);
-      const heldDef = pred ? weaponDef(pred.inv[pred.slot].id) : null;
+      const heldDef = pred ? weaponDef(heldItemId(pred)) : null;
       const ads = !!pred && !!heldDef && (input.keys & K.ADS) !== 0 && (pred.mode === PM.Walk || pred.mode === PM.Ride) && pred.act === ACT.None;
       const kCam = 1 - Math.exp(-dt * (ads ? 14 : 6));
       camDist += ((inBus ? 46 : air ? 8.5 : driving ? 8 : ads ? 2.2 : dead ? 5 : 4.3) - camDist) * kCam;
@@ -546,6 +589,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
           if (s.mv === MV.Slide) audio.move('slide', at);
           else if (s.mv === MV.Mantle || s.mv === MV.Hurdle) audio.move('mantle', at);
           else if (s.mv === MV.Launch) audio.move('pad', at);
+          else if (s.mv === MV.Roll) { audio.move('land', at, 0.4); audio.move('slide', at); }
         }
         if (s.mode === PM.Zip && !zipPrev[i]) audio.move('zipgrab', at);
         zipPrev[i] = s.mode === PM.Zip;
@@ -557,6 +601,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
           fx.burst(s.x + fx2 * 0.5, s.y + 0.12, s.z + fz2 * 0.5, 1, s.y < 2.5 ? '#eadcb5' : '#d2c4a0', 1.4, 1.4, 0.18, 0.55, 2.2);
         }
         if (s.mv === MV.Launch && mvPrev[i] !== MV.Launch) fx.burst(s.x, s.y + 0.3, s.z, 14, '#7dffd2', 5, 3, 0.2, 0.6, 1.2);
+        if (s.mv === MV.Roll && mvPrev[i] !== MV.Roll) fx.burst(s.x, s.y + 0.15, s.z, 8, s.y < 2.5 ? '#eadcb5' : '#d6c9a8', 2.5, 0.8, 0.22, 0.6);
         if ((s.mv === MV.Mantle || s.mv === MV.Hurdle) && mvPrev[i] !== s.mv) fx.burst(s.x - Math.sin(s.yaw) * 0.6, s.y + 0.9, s.z - Math.cos(s.yaw) * 0.6, 3, '#e6dcc6', 0.8, 0.8, 0.12, 0.4);
         wetPrev[i] = wet; mvPrev[i] = s.mv;
       }
@@ -616,7 +661,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       hud.update(view, dt);
       if (pred) {
         // what would E do right now?
-        let prompt: string | null = null, promptRarity = 0;
+        let prompt: string | null = null, promptRarity = 0, promptItem = 0;
         if (pred.mode === PM.Drive || pred.mode === PM.Ride) prompt = 'Get out';
         else if (pred.mode === PM.Walk && pred.act === ACT.None) {
           const downed = team.find((i) => i !== selfIdx && st[i].visible && st[i].mode === PM.Knocked && Math.hypot(st[i].x - pred!.x, st[i].z - pred!.z) < 2.8);
@@ -636,12 +681,20 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
           else if (bi >= 0 && cards.length) { prompt = serverNow >= beaconReady[bi] ? `Hold to recall ${cards.map((c) => roster[c].name).join(', ')}` : `Beacon recharging (${Math.ceil((beaconReady[bi] - serverNow) / 1000)}s)`; promptRarity = 3; }
           else if (it && it.item === ITEM.card) { prompt = `Pick up ${roster[it.r]?.name}'s recall card`; promptRarity = 3; }
           else if (chestWins) { prompt = chest!.k === 0 ? 'Open Chest' : chest!.k === 1 ? 'Search Ammo Box' : 'Open Supply Drop'; promptRarity = chest!.k === 2 ? 3 : chest!.k === 0 ? 4 : 0; }
-          else if (it) { prompt = ITEMS[it.item]?.kind === 'forage' ? `Eat ${ITEMS[it.item]!.name}` : CombatHud.label(it.item, it.r, it.n); promptRarity = ITEMS[it.item]?.kind === 'weapon' ? it.r : 0; }
+          else if (it) {
+            const kind = ITEMS[it.item]?.kind;
+            prompt = kind === 'forage' ? `Eat ${ITEMS[it.item]!.name}` : CombatHud.label(it.item, it.r, it.n);
+            promptRarity = kind === 'weapon' ? it.r : 0; promptItem = it.item;
+            // no free slot and nothing in your hands to swap it for
+            if (kind !== 'forage' && kind !== 'ammo' && pred.slot === PICK_SLOT && pred.inv.every((sl) => sl.id !== 0) && !pred.inv.some((sl) => sl.id === it!.item && kind !== 'weapon')) prompt += '  ·  inventory full: hold an item to swap';
+          }
           else if (pred.mv === MV.None && zipNear(world, pred.x, pred.y, pred.z)) prompt = 'Ride zipline';
         }
         const rp = performance.now() - revive.at < 200 ? revive.p : 0;
+        if (inv.open && (pred.mode === PM.Dead || pred.mode === PM.Bus)) toggleInv(false);
+        inv.update(pred);
         combat.update({
-          s: pred, spread: heldDef ? currentSpread(pred, heldDef) : 0, fov, prompt, promptRarity,
+          s: pred, spread: heldDef ? currentSpread(pred, heldDef) : 0, fov, prompt, promptRarity, promptItem,
           revive: rp, reviveLabel: pred.act === ACT.Reviving ? 'REVIVING' : 'BEING REVIVED', scoped,
           spectating: watching ? roster[specIdx].name : null, kills: kills[selfIdx] ?? 0, cards: cards.map((c) => roster[c]?.name ?? '?'),
         }, dt);
@@ -688,7 +741,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       onMsg, onSnapshot, resync,
       dispose() {
         renderer.setAnimationLoop(null);
-        removeEventListener('resize', resize); removeEventListener('beforeunload', leaveGuard);
+        removeEventListener('resize', resize); removeEventListener('beforeunload', leaveGuard); removeEventListener('keydown', invKeys, true);
         input.dispose(); actors.dispose(); lootR.clear(); offSettings();
         scene.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh || (o as THREE.InstancedMesh).isInstancedMesh) m.geometry?.dispose(); });
         post.dispose(); renderer.dispose(); renderer.domElement.remove();

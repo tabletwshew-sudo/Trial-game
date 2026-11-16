@@ -57,6 +57,8 @@ type V3 = [number, number, number];
 export type GameEvent =
   /** A shot: shooter, weapon, origin, and per pellet the end point + what it hit (0 world, 1 shield, 2 health, 3 water, 4 car, 5 nothing). */
   | { e: 'shot'; i: number; w: number; o: V3; h: number[] }
+  /** A pickaxe swing: who swung, and where it landed + what it hit (same kinds as shots; 5 = only air). */
+  | { e: 'melee'; i: number; h: [number, number, number, number] }
   /** Damage you dealt (for hit markers and damage numbers). */
   | { e: 'dmg'; t: number; d: number; sh: boolean; hd: boolean; p: V3; ko?: boolean }
   /** Damage you took, and the direction it came from. */
@@ -124,7 +126,11 @@ export type ClientMsg =
   | { t: 'sync' }
   | { t: 'game_join' }
   | { t: 'game_marker'; x?: number; z?: number }
-  | { t: 'spec_next'; dir: number };
+  | { t: 'spec_next'; dir: number }
+  /** Inventory: swap two slots (0..4), drop (part of) a slot, or drop some of an ammo type. */
+  | { t: 'inv_swap'; a: number; b: number }
+  | { t: 'inv_drop'; slot: number; n?: number }
+  | { t: 'ammo_drop'; ammo: number; n: number };
 
 // ---------- server -> client ----------
 export type ServerMsg =

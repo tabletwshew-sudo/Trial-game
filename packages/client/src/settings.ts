@@ -5,14 +5,14 @@ import { h } from './ui/dom';
  * Player settings, saved in this browser. Changes apply immediately where they can
  * (sensitivity, FOV, keys, FPS counter, colours) and graphics apply from the next match.
  */
-export type Action = 'forward' | 'back' | 'left' | 'right' | 'jump' | 'sprint' | 'crouch' | 'reload' | 'interact' | 'map' | 'emote' | 'slot1' | 'slot2' | 'slot3' | 'slot4' | 'slot5';
+export type Action = 'forward' | 'back' | 'left' | 'right' | 'jump' | 'sprint' | 'crouch' | 'reload' | 'interact' | 'map' | 'inventory' | 'emote' | 'slot1' | 'slot2' | 'slot3' | 'slot4' | 'slot5' | 'pickaxe';
 export const ACTION_LABELS: Record<Action, string> = {
   forward: 'Move forward', back: 'Move back', left: 'Move left', right: 'Move right', jump: 'Jump / glider', sprint: 'Sprint', crouch: 'Crouch / slide',
-  reload: 'Reload', interact: 'Interact / pick up', map: 'Map', emote: 'Emote', slot1: 'Slot 1', slot2: 'Slot 2', slot3: 'Slot 3', slot4: 'Slot 4', slot5: 'Slot 5',
+  reload: 'Reload', interact: 'Interact / pick up', map: 'Map', inventory: 'Inventory', emote: 'Emote', slot1: 'Slot 1', slot2: 'Slot 2', slot3: 'Slot 3', slot4: 'Slot 4', slot5: 'Slot 5', pickaxe: 'Pickaxe',
 };
 export const DEFAULT_KEYS: Record<Action, string> = {
   forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', jump: 'Space', sprint: 'ShiftLeft', crouch: 'KeyC',
-  reload: 'KeyR', interact: 'KeyE', map: 'KeyM', emote: 'KeyB', slot1: 'Digit1', slot2: 'Digit2', slot3: 'Digit3', slot4: 'Digit4', slot5: 'Digit5',
+  reload: 'KeyR', interact: 'KeyE', map: 'KeyM', inventory: 'KeyI', emote: 'KeyB', slot1: 'Digit1', slot2: 'Digit2', slot3: 'Digit3', slot4: 'Digit4', slot5: 'Digit5', pickaxe: 'KeyF',
 };
 export type ColorMode = 'normal' | 'deuteranopia' | 'protanopia' | 'tritanopia';
 export type Graphics = 'auto' | 'low' | 'medium' | 'high';

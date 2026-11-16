@@ -285,3 +285,61 @@ describe('swimming', () => {
     expect(shots.length).toBe(0);
   });
 });
+
+describe('roll landing and wall kick', () => {
+  const drop = (w: World, height: number, moving: boolean) => {
+    const s = player(w);
+    s.y = FLOOR + height; s.grounded = false; s.air = 255; s.vy = 0;
+    if (moving) s.vz = -MOVEMENT.sprintSpeed;
+    let rolled = false;
+    run(s, w, { keys: moving ? K.F | K.SPRINT : 0, yaw: 0, pitch: 0 }, 140, (q) => { if (q.mv === MV.Roll) rolled = true; });
+    return { s, rolled };
+  };
+  it('dropping from a height while moving rolls you out of it and saves the fall damage', () => {
+    const w = sandbox();
+    const still = drop(w, 16, false), moving = drop(w, 16, true);
+    expect(still.rolled).toBe(false);
+    expect(still.s.hp).toBe(100 - Math.round((16 - MOVEMENT.fallDamageMinHeight) * MOVEMENT.fallDamagePerMetre));
+    expect(moving.rolled).toBe(true);
+    expect(moving.s.hp).toBe(100);
+    expect(moving.s.mv).toBe(MV.None); // the roll ends on its own
+  });
+  it('a small hop does not roll', () => {
+    const w = sandbox();
+    expect(drop(w, 2, true).rolled).toBe(false);
+  });
+  it('the roll carries you forward at rolling speed with a low hitbox and busy hands', () => {
+    const w = sandbox();
+    const s = player(w);
+    s.y = FLOOR + 8; s.grounded = false; s.air = 255; s.vz = -4;
+    let seen = false;
+    run(s, w, { keys: K.F, yaw: 0, pitch: 0 }, 120, (q) => {
+      if (q.mv === MV.Roll && !seen) { seen = true; expect(speed(q)).toBeGreaterThan(MOVEMENT.rollSpeed * 0.55); expect(isLow(q)).toBe(true); }
+    });
+    expect(seen).toBe(true);
+  });
+  it('jumping in the air facing a wall kicks off it, once per jump', () => {
+    const w = sandbox([boxSolid(X, Z - 1.1, 6, 0.4, FLOOR, FLOOR + 8, SK.Block)]); // a tall wall just north
+    const s = player(w);
+    // jump at the wall, then press jump again near the top
+    let kicks = 0, vyAtKick = 0, vzAfter = 0, wkBefore = 0;
+    run(s, w, (i) => ({ keys: K.F | (i === 1 || i === 20 || i === 26 ? K.JUMP : 0), yaw: 0, pitch: 0 }), 22, (q) => {
+      if (q.wk > wkBefore) { kicks++; vyAtKick = q.vy; vzAfter = q.vz; }
+      wkBefore = q.wk;
+    });
+    expect(kicks).toBe(1);
+    expect(vyAtKick).toBeGreaterThan(MOVEMENT.jumpVelocity);
+    expect(vzAfter).toBeGreaterThan(0);  // pushed back, away from the wall (south)
+    run(s, w, (i) => ({ keys: K.F | (i === 4 ? K.JUMP : 0), yaw: 0, pitch: 0 }), 8);
+    expect(s.wk).toBe(1);                 // the second press did not kick again
+    run(s, w, { keys: 0, yaw: 0, pitch: 0 }, 120);
+    expect(s.grounded).toBe(true);
+    expect(s.wk).toBe(0);                 // landing gives the kick back
+  });
+  it('no wall, no kick', () => {
+    const w = sandbox();
+    const s = player(w);
+    run(s, w, (i) => ({ keys: K.F | (i === 1 || i === 20 ? K.JUMP : 0), yaw: 0, pitch: 0 }), 30);
+    expect(s.wk).toBe(0);
+  });
+});

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { EF, EF_EMOTE_SHIFT, HURDLE_TICKS, MANTLE_TICKS, MV, PM, WATER_FLOAT_Y, weaponDef, type RosterEntry, type World } from '@dropzone/shared';
+import { EF, EF_EMOTE_SHIFT, HURDLE_TICKS, MANTLE_TICKS, MV, PM, ROLL_TICKS, WATER_FLOAT_Y, meleeDef, weaponDef, type RosterEntry, type World } from '@dropzone/shared';
 import { Character, SKINS, type PoseMode } from '../lobby/character';
 import { outlineMaterial, softRamp } from '../lobby/toon';
 import { mat4, mergeColored } from './geo';
@@ -93,6 +93,7 @@ export class Actors {
       if (s.mv === MV.Mantle) return 'mantle';
       if (s.mv === MV.Hurdle) return 'hurdle';
       if (s.mv === MV.Climb) return 'climb';
+      if (s.mv === MV.Roll) return 'roll';
       if (s.mv === MV.Launch && s.vy > 0) return 'launch';
     }
     if (s.mode === PM.Drive) return 'drive';
@@ -103,6 +104,11 @@ export class Actors {
     if (!s.grounded) return 'air';
     return s.speed > 0.6 ? 'run' : 'idle';
   }
+
+  /** Play a pickaxe swing on player i (if they're drawn with a full model). */
+  swing(i: number) { this.full.get(i)?.swing(); }
+  /** Kick-off pose on player i (a wall kick). */
+  kick(i: number) { this.full.get(i)?.kick(); }
 
   update(dt: number, t: number, cam: THREE.Vector3) {
     const st = this.states;
@@ -162,8 +168,8 @@ export class Actors {
         ch.animate(dt, t, {
           mode: this.poseOf(s), speed: s.speed, dive: s.dive, pitch: s.pitch, vy: s.vy,
           moveAngle: Math.hypot(s.vx, s.vz) > 0.5 ? wrapAngle(Math.atan2(-s.vx, -s.vz) - s.yaw) : 0,
-          phase: s.mv === MV.Mantle ? Math.min(1, 1 - s.mt / MANTLE_TICKS) : s.mv === MV.Hurdle ? Math.min(1, 1 - s.mt / HURDLE_TICKS) : 0,
-          hold: !s.item ? 'none' : weaponDef(s.item) ? 'gun' : 'item',
+          phase: s.mv === MV.Mantle ? Math.min(1, 1 - s.mt / MANTLE_TICKS) : s.mv === MV.Hurdle ? Math.min(1, 1 - s.mt / HURDLE_TICKS) : s.mv === MV.Roll ? Math.min(1, 1 - s.mt / ROLL_TICKS) : 0,
+          hold: !s.item ? 'none' : weaponDef(s.item) ? 'gun' : meleeDef(s.item) ? 'melee' : 'item',
           sprint: (s.flags & EF.SPRINT) !== 0, crouch: (s.flags & EF.CROUCH) !== 0, using: (s.flags & EF.USING) !== 0, emote: (s.flags >> EF_EMOTE_SHIFT) & 3,
         });
         ch.root.scale.setScalar(this.roster[i].npc === 'boss' ? 1.25 : 1);

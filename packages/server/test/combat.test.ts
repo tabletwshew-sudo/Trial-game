@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ACT, ITEM, K, MV, PM, aimOrigin, decodeSnapshot, encodeInputs, makeStormPlan, raycastWorld, surfaceAt, weaponDef, type InputCmd, type ServerMsg, type Snapshot } from '@dropzone/shared';
+import { ACT, ITEM, K, MV, PICK_SLOT, PM, SK, aimOrigin, decodeSnapshot, encodeInputs, makeStormPlan, raycastWorld, surfaceAt, weaponDef, type InputCmd, type ServerMsg, type Snapshot } from '@dropzone/shared';
 import { MatchInstance, type Sock } from '../src/game/match';
 import type { Match } from '../src/hub';
 
@@ -52,7 +52,64 @@ function inPlay(teamSizes: number[], humanTeams: number[], mode: Match['mode'] =
 // an open, flat spot in the farm fields
 const AT = { x: -640, z: 230 };
 
+describe('pickaxe', () => {
+  it('slot 6 takes out the pickaxe; swings hit the enemy in front for 20, not someone behind', () => {
+    const g = inPlay([1, 1, 1, 1, 1, 1, 1, 1], [0, 1], 'solo');
+    const [a, b] = [g.inst.players[0], g.inst.players[1]];
+    g.place(a.idx, AT.x, AT.z, 0);
+    g.place(b.idx, AT.x, AT.z - 1.6, 0);        // 1.6 m in front (yaw 0 faces -z)
+    const c = g.clients.get(a.id)!;
+    c.send(g.inst, a.id, { keys: 0, yaw: 0, pitch: 0, slot: 6 }); g.step();
+    expect(a.s.slot).toBe(PICK_SLOT);
+    for (let i = 0; i < 12; i++) { c.send(g.inst, a.id, { keys: 0, yaw: 0, pitch: 0 }); g.step(); } // equip delay
+    c.send(g.inst, a.id, { keys: K.FIRE, yaw: 0, pitch: 0 }); g.step();
+    expect(b.s.hp).toBe(80);
+    expect(c.events().some((e) => e.e === 'dmg')).toBe(true);
+    // holding the button keeps swinging, about two a second
+    for (let i = 0; i < 30; i++) { c.send(g.inst, a.id, { keys: K.FIRE, yaw: 0, pitch: 0 }); g.step(); }
+    expect(b.s.hp).toBeGreaterThanOrEqual(20);
+    expect(b.s.hp).toBeLessThanOrEqual(60);
+    // facing away: misses
+    const before = b.s.hp;
+    for (let i = 0; i < 40; i++) { c.send(g.inst, a.id, { keys: K.FIRE, yaw: Math.PI, pitch: 0 }); g.step(); }
+    expect(b.s.hp).toBe(before);
+  });
+  it('a pickaxe cannot hit through a wall', () => {
+    const g = inPlay([1, 1, 1, 1, 1, 1, 1, 1], [0, 1], 'solo');
+    const w = g.inst.world;
+    const wall = w.solids.find((o) => o.k === SK.Wall && !o.inner && o.face === 1 && o.b && o.z1 - o.z0 >= 4 && o.y0 <= o.b.fy + 0.05 && o.y1 >= o.b.fy + 2.6
+      && Math.abs(surfaceAt(w, o.x0 - 0.42, (o.z0 + o.z1) / 2, o.b.fy + 1) - o.b.fy) < 0.3 && Math.abs(surfaceAt(w, o.x1 + 0.5, (o.z0 + o.z1) / 2, o.b.fy + 3) - o.b.fy) < 0.8)!;
+    const [a, b] = [g.inst.players[0], g.inst.players[1]];
+    const z = (wall.z0 + wall.z1) / 2;
+    g.place(a.idx, wall.x0 - 0.42, z, -Math.PI / 2); a.s.y = surfaceAt(w, a.s.x, a.s.z, wall.b!.fy + 1); // facing +x, into the wall
+    g.place(b.idx, wall.x1 + 0.5, z, 0);
+    const c = g.clients.get(a.id)!;
+    c.send(g.inst, a.id, { keys: 0, yaw: -Math.PI / 2, pitch: 0, slot: 6 }); g.step();
+    for (let i = 0; i < 60; i++) { c.send(g.inst, a.id, { keys: K.FIRE, yaw: -Math.PI / 2, pitch: 0 }); g.step(); }
+    expect(b.s.hp).toBe(100);
+  });
+});
+
 describe('shooting', () => {
+  it('a shoulder against a wall cannot shoot someone on the other side', () => {
+    const g = inPlay([1, 1, 1, 1, 1, 1, 1, 1], [0, 1], 'solo');
+    const w = g.inst.world;
+    const wall = w.solids.find((o) => o.k === SK.Wall && !o.inner && o.face === 1 && o.b && o.z1 - o.z0 >= 7 && o.y0 <= o.b.fy + 0.05 && o.y1 >= o.b.fy + 2.6
+      && Math.abs(surfaceAt(w, o.x0 - 0.42, o.z1 - 1.2, o.b.fy + 1) - o.b.fy) < 0.3 && Math.abs(surfaceAt(w, o.x1 + 1.2, o.z1 - 6.2, o.b.fy + 3) - o.b.fy) < 1.2)!;
+    const [a, b] = [g.inst.players[0], g.inst.players[1]];
+    g.place(a.idx, wall.x0 - 0.42, wall.z1 - 1.2, 0); // touching the wall
+    g.place(b.idx, wall.x1 + 1.2, wall.z1 - 6.2, 0);
+    a.s.y = surfaceAt(w, a.s.x, a.s.z, wall.b!.fy + 1);
+    a.s.inv[0] = { id: ITEM.ar, r: 0, n: 1, mag: 30 }; a.s.slot = 0; a.s.ammo[1] = 30;
+    // aim from where the camera looks (the shoulder, past the wall) straight at b's chest
+    const o = aimOrigin(a.s.x, a.s.y, a.s.z, 0);
+    const dx = b.s.x - o.x, dy = b.s.y + 1.2 - o.y, dz = b.s.z - o.z;
+    const yaw = Math.atan2(-dx, -dz), pitch = Math.atan2(dy, Math.hypot(dx, dz));
+    const c = g.clients.get(a.id)!;
+    for (let i = 0; i < 20; i++) { c.send(g.inst, a.id, { keys: K.FIRE | K.ADS, yaw, pitch }); g.step(); }
+    expect(b.s.hp).toBe(100);
+    expect(b.s.shield).toBe(0);
+  });
   it('a rifle shot hits, damages shields then health, and the shooter gets a hit marker', () => {
     const g = inPlay([1, 1, 1, 1, 1, 1, 1, 1], [0, 1], 'solo');
     const [a, b] = [g.inst.players[0], g.inst.players[1]];
@@ -164,6 +221,13 @@ describe('loot and cars', () => {
     for (const it of g.inst.loot.near(AT.x, AT.z, 6)) g.inst.loot.remove(it.id);
     for (let i = 0; i < 5; i++) a.s.inv[i] = { id: ITEM.pistol, r: 0, n: 1, mag: 16 };
     const it = g.inst.loot.add(ITEM.sniper, 3, 4, AT.x, a.s.y, AT.z - 1.2);
+    // holding the pickaxe with every slot full: nothing to swap it for
+    a.s.slot = PICK_SLOT;
+    c.send(g.inst, a.id, { keys: K.USE, yaw: 0, pitch: 0 }); g.step();
+    expect(g.inst.loot.get(it.id)).toBeDefined();
+    expect(a.s.inv.every((x) => x.id === ITEM.pistol)).toBe(true);
+    // holding slot 1: swap
+    c.send(g.inst, a.id, { keys: 0, yaw: 0, pitch: 0, slot: 1 }); g.step();
     c.send(g.inst, a.id, { keys: K.USE, yaw: 0, pitch: 0 }); g.step();
     expect(a.s.inv[0]).toMatchObject({ id: ITEM.sniper, r: 3, mag: 4 });
     expect(g.inst.loot.get(it.id)).toBeUndefined();

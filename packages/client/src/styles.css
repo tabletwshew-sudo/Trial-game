@@ -317,9 +317,16 @@ kbd { font-family: var(--body); font-weight: 900; font-size: 11px; padding: 2px 
 .slot-tile.empty { background: rgba(20,18,58,.5); }
 .slot-tile.sel { border-color: #fff; transform: translateY(-6px) scale(1.06); box-shadow: 0 0 0 2px var(--rc), 0 8px 18px rgba(0,0,0,.4); }
 .s-key { position: absolute; top: 3px; left: 6px; font-size: 11px; font-weight: 900; opacity: .7; }
-.s-icon { font-size: 22px; line-height: 1; }
+.s-icon { font-size: 22px; line-height: 1; display: grid; place-items: center; }
+.s-icon .ico { width: 58px; height: 29px; color: #fff; filter: drop-shadow(0 1px 0 rgba(0,0,0,.6)) drop-shadow(0 0 1px rgba(0,0,0,.5)); }
+.slot-tile.empty .s-icon .ico { opacity: .25; }
+.slot-tile.pick { --rc: #2a9d8f; width: 60px; }
+.slot-tile.pick .s-icon .ico { width: 46px; height: 23px; }
+.slot-tile.pick .s-name { font-size: 9px; opacity: .8; }
+.prompt .p-icon .ico { width: 44px; height: 22px; display: block; color: #fff; filter: drop-shadow(0 1px 0 rgba(0,0,0,.6)); }
+.feed-line .wpn .ico { width: 34px; height: 17px; vertical-align: middle; margin: 0 2px; color: #fff; --rc: #fff; opacity: .9; }
 .s-name { font-family: var(--display); font-size: 12px; letter-spacing: .4px; margin-top: 2px; }
-.s-count { position: absolute; bottom: 3px; right: 6px; font-weight: 900; font-size: 12px; }
+.s-count { position: absolute; top: 3px; right: 6px; font-weight: 900; font-size: 12px; }
 .xhair { --gap: 6px; position: absolute; left: 50%; top: 50%; width: 0; height: 0; }
 .xhair::before, .xhair::after { content: ''; position: absolute; background: #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.45); border-radius: 1px; }
 .xhair::before { width: 2px; height: 9px; left: -1px; top: calc(-9px - var(--gap)); box-shadow: 0 calc(18px + var(--gap) * 2) 0 #fff, 0 0 0 1px rgba(0,0,0,.45); }
@@ -397,7 +404,7 @@ kbd { font-family: var(--body); font-weight: 900; font-size: 11px; padding: 2px 
 .r-stats small { font-size: 10px; font-weight: 900; color: var(--muted); letter-spacing: 1px; }
 .r-actions { display: flex; gap: 8px; justify-content: center; }
 .r-actions .btn { font-size: 16px; padding: 12px 18px; }
-@media (max-width: 860px) { .vitals { width: 200px; } .slot-tile { width: 54px; height: 54px; } .s-icon { font-size: 16px; } .s-name { font-size: 9px; } .feed { top: 190px; } }
+@media (max-width: 860px) { .vitals { width: 200px; } .slot-tile { width: 54px; height: 54px; } .slot-tile.pick { width: 44px; } .s-icon { font-size: 16px; } .s-icon .ico { width: 44px; height: 22px; } .s-name { font-size: 9px; } .feed { top: 190px; } }
 
 /* ================================================================== Phase 6: storm, settings, results, bosses */
 .fps { display: none; }
@@ -472,3 +479,55 @@ kbd { font-family: var(--body); font-weight: 900; font-size: 11px; padding: 2px 
 /* in-match connection warning */
 .conn-pill { position: absolute; left: 50%; top: 38%; transform: translateX(-50%); padding: 10px 20px; border-radius: 999px; background: rgba(20,18,58,.88); border: 1px solid var(--sun); color: var(--sun); font-weight: 900; letter-spacing: .5px; display: none; z-index: 20; animation: pulse 1.2s infinite; }
 .conn-pill.show { display: block; }
+
+/* ---------------------------------------------------------------- inventory screen */
+.inv-panel { position: absolute; inset: 0; display: none; place-items: center; z-index: 21; background: rgba(10,8,30,.5); backdrop-filter: blur(2px); pointer-events: auto; }
+.inv-panel.open { display: grid; animation: fade .15s; }
+.inv-card { width: min(860px, calc(100vw - 32px)); max-height: calc(100vh - 40px); overflow: auto; background: linear-gradient(170deg, rgba(40,34,110,.94), rgba(18,15,52,.96)); border: 1px solid var(--line); border-radius: 18px; padding: 16px 18px 18px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+.inv-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.inv-head b { font-family: var(--display); font-size: 26px; letter-spacing: 1px; }
+.inv-hint { color: var(--muted); font-size: 12px; font-weight: 700; flex: 1; }
+.inv-x { width: 34px; height: 34px; border-radius: 10px; background: rgba(255,255,255,.08); font-weight: 900; }
+.inv-slots { display: flex; gap: 8px; align-items: stretch; }
+.inv-gap { width: 6px; }
+.inv-slot { --rc: transparent; position: relative; flex: 1; min-width: 0; height: 96px; border-radius: 14px; cursor: pointer; display: grid; place-items: center; background: linear-gradient(160deg, color-mix(in srgb, var(--rc) 55%, #14123a), rgba(20,18,58,.85) 72%); border: 2px solid rgba(255,255,255,.16); transition: transform .1s, border-color .1s; }
+.inv-slot.pick { flex: .8; --rc: #2a9d8f; }
+.inv-slot.empty { background: rgba(20,18,58,.55); border-style: dashed; }
+.inv-slot:hover { transform: translateY(-2px); }
+.inv-slot.sel { border-color: #fff; box-shadow: 0 0 0 2px var(--rc); }
+.inv-slot.held::after { content: 'HELD'; position: absolute; top: 5px; right: 7px; font-size: 9px; font-weight: 900; letter-spacing: .5px; color: var(--sun); }
+.inv-slot.over { border-color: var(--sun); transform: scale(1.04); }
+.inv-slot.dragging { opacity: .45; }
+.inv-slot .k { position: absolute; top: 5px; left: 8px; font-size: 11px; font-weight: 900; opacity: .7; }
+.inv-slot .i .ico { width: 84px; height: 42px; color: #fff; filter: drop-shadow(0 1px 0 rgba(0,0,0,.6)); }
+.inv-slot .c { position: absolute; bottom: 5px; right: 8px; font-weight: 900; font-size: 13px; }
+.inv-body { display: grid; grid-template-columns: 1fr 250px; gap: 16px; margin-top: 14px; }
+.inv-detail { background: rgba(255,255,255,.05); border: 1px solid var(--line); border-radius: 14px; padding: 14px; min-height: 230px; }
+.inv-empty { color: var(--muted); font-weight: 800; font-size: 16px; display: grid; gap: 6px; }
+.inv-empty small { font-size: 12px; font-weight: 700; }
+.inv-title { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
+.inv-title small { font-weight: 900; font-size: 11px; letter-spacing: 1px; }
+.inv-title b { display: block; font-family: var(--display); font-size: 22px; }
+.inv-big { width: 120px; height: 60px; border-radius: 12px; display: grid; place-items: center; background: linear-gradient(160deg, color-mix(in srgb, var(--rc) 60%, #14123a), rgba(20,18,58,.7)); }
+.inv-big .ico { width: 108px; height: 54px; color: #fff; filter: drop-shadow(0 1px 0 rgba(0,0,0,.6)); }
+.inv-stats { display: grid; gap: 6px; }
+.inv-stat { display: grid; grid-template-columns: 90px 1fr auto; gap: 10px; align-items: center; font-size: 13px; font-weight: 800; }
+.inv-stat span { color: var(--muted); }
+.inv-stat i { height: 6px; border-radius: 4px; background: rgba(255,255,255,.1); overflow: hidden; }
+.inv-stat i em { display: block; height: 100%; background: linear-gradient(90deg, var(--cyan), var(--sun)); border-radius: 4px; }
+.inv-stat b { text-align: right; white-space: nowrap; }
+.inv-blurb { color: var(--muted); font-size: 12px; font-weight: 700; margin: 10px 0 0; }
+.inv-actions { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
+.inv-held { font-size: 11px; font-weight: 900; letter-spacing: .6px; color: var(--sun); padding: 0 6px; }
+.btn.btn-danger { background: rgba(255,77,109,.18); border: 1px solid rgba(255,77,109,.6); color: #ffd3dc; }
+.inv-side { display: grid; align-content: start; gap: 6px; }
+.inv-sub { font-weight: 900; font-size: 12px; letter-spacing: 1px; color: var(--muted); }
+.inv-ammo { display: grid; gap: 6px; }
+.inv-ammo-row { --rc: #fff; display: grid; grid-template-columns: 54px 1fr auto auto; gap: 6px; align-items: center; padding: 6px 8px; border-radius: 10px; background: rgba(255,255,255,.05); border: 1px solid var(--line); }
+.inv-ammo-row.none { opacity: .45; }
+.inv-ammo-row.used { border-color: color-mix(in srgb, var(--rc) 60%, transparent); }
+.inv-ammo-row .ai .ico { width: 52px; height: 26px; color: #fff; }
+.inv-ammo-row b { display: block; font-size: 16px; }
+.inv-ammo-row small { color: var(--muted); font-size: 11px; font-weight: 800; }
+.btn.small { padding: 4px 8px; font-size: 12px; min-width: 0; }
+@media (max-width: 700px) { .inv-body { grid-template-columns: 1fr; } .inv-slot { height: 72px; } .inv-slot .i .ico { width: 58px; height: 29px; } }

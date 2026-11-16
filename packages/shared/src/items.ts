@@ -80,9 +80,15 @@ export interface AmmoDef { kind: 'ammo'; name: string; ammo: number; rarity: Rar
 /** Eaten on the spot when picked up. */
 export interface ForageDef { kind: 'forage'; name: string; heal: number; shield: number; rarity: Rarity }
 
+/**
+ * The pickaxe: always carried, never dropped, in its own slot. A short swing that hits the
+ * nearest enemy in front of you (and chips sparks off walls).
+ */
+export interface MeleeDef { kind: 'melee'; name: string; damage: number; /** ticks between swings */ interval: number; range: number; rarity: Rarity }
+
 /** Special items: a teammate's recall card (picked up into a pocket, not a slot) and the vault keycard (takes a slot). */
 export interface SpecialDef { kind: 'card' | 'keycard'; name: string; rarity: Rarity }
-export type ItemDef = WeaponDef | ConsumableDef | ThrowableDef | AmmoDef | ForageDef | SpecialDef;
+export type ItemDef = WeaponDef | ConsumableDef | ThrowableDef | AmmoDef | ForageDef | SpecialDef | MeleeDef;
 
 const ALL: Rarity[] = ['common', 'uncommon', 'rare', 'epic', 'legendary'];
 const W = (d: Omit<WeaponDef, 'kind'>): WeaponDef => ({ kind: 'weapon', ...d });
@@ -113,12 +119,15 @@ export const ITEMS: (ItemDef | null)[] = [
   { kind: 'forage', name: 'Glow Cap', heal: 0, shield: 5, rarity: 'rare' },
   { kind: 'card', name: 'Recall Card', rarity: 'epic' },
   { kind: 'keycard', name: 'Vault Keycard', rarity: 'legendary' },
+  { kind: 'melee', name: 'Pickaxe', damage: 20, interval: 33, range: 2.5, rarity: 'common' },
 ];
 
 export const ITEM = {
   pistol: 1, smg: 2, ar: 3, burst: 4, pump: 5, autoshotgun: 6, dmr: 7, sniper: 8, rocket: 9, grenade: 10,
-  bandage: 11, medpack: 12, shieldSip: 13, shieldJug: 14, fizz: 15, ammoLight: 16, ammoMedium: 17, ammoHeavy: 18, ammoShells: 19, ammoRockets: 20, apple: 21, glowcap: 22, card: 23, keycard: 24,
+  bandage: 11, medpack: 12, shieldSip: 13, shieldJug: 14, fizz: 15, ammoLight: 16, ammoMedium: 17, ammoHeavy: 18, ammoShells: 19, ammoRockets: 20, apple: 21, glowcap: 22, card: 23, keycard: 24, pickaxe: 25,
 } as const;
+/** The pickaxe's slot index (after the five inventory slots); key 6 / F selects it. */
+export const PICK_SLOT = 5;
 export const AMMO_ITEM = [ITEM.ammoLight, ITEM.ammoMedium, ITEM.ammoHeavy, ITEM.ammoShells, ITEM.ammoRockets];
 /** How much ammo a pickup or a reload-fresh weapon carries. */
 export const AMMO_PICKUP = [30, 24, 8, 8, 2];
@@ -126,6 +135,7 @@ export const AMMO_PICKUP = [30, 24, 8, 8, 2];
 export const weaponDef = (id: number) => { const d = ITEMS[id]; return d && d.kind === 'weapon' ? d : null; };
 export const consumableDef = (id: number) => { const d = ITEMS[id]; return d && d.kind === 'consumable' ? d : null; };
 export const throwableDef = (id: number) => { const d = ITEMS[id]; return d && d.kind === 'throwable' ? d : null; };
+export const meleeDef = (id: number) => { const d = ITEMS[id]; return d && d.kind === 'melee' ? d : null; };
 
 export const rarityIndex = (r: Rarity) => RARITIES.indexOf(r);
 export const RARITY_RELOAD_MUL = [1, 0.95, 0.9, 0.85, 0.8];

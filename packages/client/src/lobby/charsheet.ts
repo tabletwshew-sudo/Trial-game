@@ -1,3 +1,4 @@
+import { meleeDef } from '@dropzone/shared';
 import * as THREE from 'three';
 import { Character, SKINS, type PoseMode } from './character';
 
@@ -39,7 +40,14 @@ export function charSheet(host: HTMLElement) {
   const dist = Number(q.get('dist') ?? 15.5);
   camera.position.set(0, 1.5 + dist * 0.05, dist); camera.lookAt(0, 1.1, 0);
   // run the animation forward to time `at`, then hold that frame
-  for (let t = 0; t < at; t += 1 / 60) for (const c of chars) c.animate(1 / 60, t, { mode: pose, speed: pose === 'run' ? 7 : 0, dive: 0.5, pitch: 0.1, hold: item ? 'gun' : 'none', crouch: q.get('crouch') === '1', phase: 0.4, vy: 2 });
+  // &swing=<0..1>: show a pickaxe swing that far through
+  const swing = q.has('swing') ? Number(q.get('swing')) : -1;
+  const hold = !item ? 'none' : meleeDef(item) ? 'melee' : 'gun';
+  for (let t = 0; t < at; t += 1 / 60) {
+    if (swing >= 0 && Math.abs(t - (at - swing * 0.42)) < 0.5 / 60) for (const c of chars) c.swing();
+    for (const c of chars) c.animate(1 / 60, t, { mode: pose, speed: pose === 'run' ? 7 : 0, dive: 0.5, pitch: 0.1, hold, crouch: q.get('crouch') === '1', phase: 0.4, vy: 2 });
+  }
   renderer.render(scene, camera);
+  (window as unknown as { __sheet: boolean; __chars: Character[] }).__chars = chars;
   (window as unknown as { __sheet: boolean }).__sheet = true;
 }

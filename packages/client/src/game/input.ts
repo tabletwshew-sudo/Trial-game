@@ -23,11 +23,11 @@ export class Input {
   /** Current zoom factor (FOV ratio) so aiming with a scope isn't twitchy. */
   zoom = 1;
   locked = false;
-  /** 1..5 when a slot key was pressed this frame (consumed by the game). */
+  /** 1..5 when a slot key was pressed this frame, 6 for the pickaxe (consumed by the game). */
   pendingSlot = 0;
   /** Accumulated wheel notches (+1 = next slot). */
   wheel = 0;
-  onAction?: (a: 'map' | 'menu' | 'ping' | 'spec') => void;
+  onAction?: (a: 'map' | 'menu' | 'ping' | 'spec' | 'inventory') => void;
   /** After you're eliminated: left/right click cycles who you watch. */
   spectating = false;
   onSpec?: (dir: number) => void;
@@ -61,7 +61,9 @@ export class Input {
       if (bit) { this.held |= bit; if (!e.repeat) this.tapped |= bit; e.preventDefault(); }
       if (e.repeat) return;
       for (let i = 1; i <= 5; i++) if (settings.keys[`slot${i}` as Action] === e.code) this.pendingSlot = i;
-      if (e.code === settings.keys.map || e.code === 'Tab') { e.preventDefault(); this.onAction?.('map'); }
+      if (e.code === settings.keys.pickaxe || e.code === 'Digit6') this.pendingSlot = 6;
+      if (e.code === settings.keys.map) { e.preventDefault(); this.onAction?.('map'); }
+      if (e.code === settings.keys.inventory || e.code === 'Tab') { e.preventDefault(); this.onAction?.('inventory'); }
       if (e.code === 'Escape') this.onAction?.('menu');
       if (this.spectating && (e.code === 'ArrowRight' || e.code === 'ArrowLeft')) this.onSpec?.(e.code === 'ArrowRight' ? 1 : -1);
     });
@@ -100,15 +102,18 @@ export class Input {
     on(el, 'wheel', (e) => { if (this.locked) { e.preventDefault(); this.wheel += Math.sign(e.deltaY); } }, { passive: false });
   }
 
-  /** Take the slot change requested since last frame (absolute 1..5), resolving wheel scrolls from the current slot. */
+  /**
+   * Take the slot change requested since last frame (absolute 1..5, 6 = pickaxe), resolving wheel
+   * scrolls from the current slot: the wheel goes round the five slots and the pickaxe.
+   */
   takeSlot(current: number, usable: (slot: number) => boolean): number {
     if (this.pendingSlot) { const s = this.pendingSlot; this.pendingSlot = 0; this.wheel = 0; return s; }
     if (!this.wheel) return 0;
     const dir = Math.sign(this.wheel);
     this.wheel = 0;
-    for (let i = 1; i <= 5; i++) {
-      const s = (((current + dir * i) % 5) + 5) % 5;
-      if (usable(s)) return s + 1;
+    for (let i = 1; i <= 6; i++) {
+      const s = (((current + dir * i) % 6) + 6) % 6;
+      if (s === 5 || usable(s)) return s + 1;
     }
     return 0;
   }

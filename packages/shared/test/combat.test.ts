@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ACT, CAR, ITEM, ITEMS, K, PM, SIM_HZ, SPAWN_ISLAND, addToInventory, aimDir, applyDamage, blastDamage, falloff, getWorld, newPlayerState,
+  ACT, CAR, ITEM, ITEMS, K, PM, SIM_HZ, SK, SPAWN_ISLAND, addToInventory, aimDir, aimOrigin, shotOrigin, applyDamage, blastDamage, falloff, getWorld, newPlayerState,
   rayPlayer, raycastWorld, spreadDir, stepCar, stepPlayer, surfaceAt, weaponDef, type InputCmd, type ShotEvent,
 } from '../src/index';
 
@@ -124,6 +124,52 @@ describe('health, shields, items', () => {
     const t = fresh();
     run(t, { keys: K.JUMP, yaw: 0, pitch: 0 }, 2 * SIM_HZ);
     expect(t.hp).toBe(100);
+  });
+});
+
+/**
+ * An outside wall (outside facing +x) at least 7 m long, standing on the ground floor, with a
+ * spot just inside it: standing there facing north puts your right shoulder against the wall.
+ */
+export function shoulderToWall() {
+  for (const o of w.solids) {
+    if (o.k !== SK.Wall || o.inner || o.face !== 1 || !o.b || o.z1 - o.z0 < 7 || o.y0 > o.b.fy + 0.05 || o.y1 < o.b.fy + 2.6) continue;
+    const x = o.x0 - 0.42, z = o.z1 - 1.2; // touching the wall (player radius)
+    const y = surfaceAt(w, x, z, o.b.fy + 1);
+    if (Math.abs(y - o.b.fy) > 0.3) continue;
+    // somewhere open outside, ahead and to the right, on the ground
+    const tx = o.x1 + 1.2, tz = z - 5;
+    const ty = surfaceAt(w, tx, tz, o.b.fy + 3);
+    if (Math.abs(ty - o.b.fy) > 1.2 || raycastWorld(w, { x: tx, y: ty + 1, z: tz }, { x: 0, y: 1, z: 0 }, 6).kind !== 'none') continue;
+    return { wall: o, x, y, z, tx, ty, tz };
+  }
+  throw new Error('no suitable wall');
+}
+
+describe('shots and walls', () => {
+  it('a shoulder pressed against a wall does not put the shot on the other side', () => {
+    const c = shoulderToWall();
+    const raw = aimOrigin(c.x, c.y, c.z, 0), safe = shotOrigin(w, c.x, c.y, c.z, 0);
+    expect(raw.x).toBeGreaterThan(c.wall.x0);          // the old start point was in or past the wall
+    expect(safe.x).toBeLessThan(c.wall.x0);            // the new one stays on your side
+    // aiming at someone outside: the wall stops it from the safe origin
+    const toT = (o: { x: number; y: number; z: number }) => { const d = { x: c.tx - o.x, y: c.ty + 1.2 - o.y, z: c.tz - o.z }; const l = Math.hypot(d.x, d.y, d.z); return { d: { x: d.x / l, y: d.y / l, z: d.z / l }, l }; };
+    const a = toT(safe);
+    expect(raycastWorld(w, safe, a.d, a.l).kind).toBe('building');
+  });
+  it('shots fired in the open start at the shoulder as before', () => {
+    const s = fresh();
+    const raw = aimOrigin(s.x, s.y, s.z, 1.1), safe = shotOrigin(w, s.x, s.y, s.z, 1.1);
+    expect(safe.x).toBeCloseTo(raw.x, 6); expect(safe.z).toBeCloseTo(raw.z, 6);
+  });
+  it('a player firing with their shoulder on a wall emits the shot from their side of it', () => {
+    const c = shoulderToWall();
+    const s = newPlayerState(); s.x = c.x; s.y = c.y; s.z = c.z; s.yaw = 0;
+    addToInventory(s, ITEM.ar, 0, 1, 30); s.ammo[1] = 30;
+    const shots: ShotEvent[] = [];
+    run(s, { keys: K.FIRE, yaw: 0, pitch: 0 }, 2, shots);
+    expect(shots.length).toBe(1);
+    expect(shots[0].origin.x).toBeLessThan(c.wall.x0);
   });
 });
 

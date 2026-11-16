@@ -2,8 +2,8 @@ import { MOVEMENT } from './constants.js';
 import { PLAYER_HEIGHT, PLAYER_RADIUS, SOLID_CELL, STEP_UP, isOpenDoor, solidKey, solidTop, surfaceAt, terrainAt, type World } from './world.js';
 
 /** Movement sub-states (on top of the player mode). */
-export const MV = { None: 0, Slide: 1, Mantle: 2, Hurdle: 3, Climb: 4, Launch: 5 } as const;
-export const MANTLE_TICKS = 22, HURDLE_TICKS = 24;
+export const MV = { None: 0, Slide: 1, Mantle: 2, Hurdle: 3, Climb: 4, Launch: 5, Roll: 6 } as const;
+export const MANTLE_TICKS = 22, HURDLE_TICKS = 24, ROLL_TICKS = 30;
 
 /** Is a vertical column (a player-sized box) free of solids and above the terrain? */
 export function clearColumn(w: World, x: number, z: number, y0: number, y1: number, r = 0.3): boolean {

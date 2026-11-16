@@ -2,11 +2,13 @@ import {
   ACT, AMMO_ITEM, CAR, CHEST_KIND, SUPPLY_FALL, RECALL, ITEM, EF_EMOTE_SHIFT, makeStormPlan, stormAt, inStorm, consumableDef, ENT_BYTES, EF, ITEMS, K, MAP, PM, SIM_DT, SIM_HZ, SPAWN_ISLAND, TEAM_SIZE,
   addToInventory, applyDamage, blastDamage, busPos, decodeInputs, emptySlot, encodeEnt, encodeSnapshot, falloff, getWorld,
   MV, POSE, isLow, makeRoute, resetMove, mulberry32, newPlayerState, rayPlayer, raycastWorld, seatWorld, stepCar, stepPlayer, stepProjectile, surfaceAt, terrainAt,
-  weaponDamage, weaponDef, throwableDef, collideBoxes,
+  weaponDamage, weaponDef, throwableDef, collideBoxes, meleeDef, heldItemId, BODY_R, PICK_SLOT,
   type BusRoute, type CarBody, type FeedCause, type GameEvent, type GameInit, type GamePhase, type InputCmd, type LootView,
-  type ChestView, type MatchStats, type StormPlan, type PlayerState, type Projectile, type ServerMsg, type ShotEvent, type SimEvents, type ThrowEvent, type Vec3, type VehSnap, type World,
+  type ChestView, type ClientMsg, type MatchStats, type StormPlan, type PlayerState, type Projectile, type ServerMsg, type ShotEvent, type SimEvents, type SwingEvent, type ThrowEvent, type Vec3, type VehSnap, type World,
 } from '@dropzone/shared';
 import type { Match } from '../hub.js';
+
+type InventoryMsg = Extract<ClientMsg, { t: 'inv_swap' | 'inv_drop' | 'ammo_drop' }>;
 import { botInput, newBrain, planDrop, type BotBrain, type BotTarget, type BotWorld } from './bots.js';
 import { LootStore, rollContainer, rollWeapon, spawnIslandLoot, spawnWarmupLoot, type ChestEnt, type LootItem } from './loot.js';
 
@@ -93,6 +95,8 @@ export class MatchInstance {
   private stormAcc = 0;
   private bossAcc = 0;
   private beaconReady: number[];
+  /** Things players dropped from their inventory: who, and until when they won't auto-collect it. */
+  private droppedBy = new Map<number, { idx: number; until: number }>();
   private cardExpiry = new Map<number, number>();
   ended = false;
 
@@ -178,7 +182,7 @@ export class MatchInstance {
   private resetInventory(s: PlayerState) {
     s.inv = [emptySlot(), emptySlot(), emptySlot(), emptySlot(), emptySlot()];
     s.ammo = [0, 0, 0, 0, 0];
-    s.slot = 0; s.cd = 0; s.burst = 0; s.reload = 0; s.use = 0; s.bloom = 0;
+    s.slot = PICK_SLOT; s.cd = 0; s.burst = 0; s.reload = 0; s.use = 0; s.bloom = 0;
   }
 
   private spawnVehicles() {
@@ -287,6 +291,50 @@ export class MatchInstance {
     this.broadcast(ok ? { t: 'game_marker', idx: p.idx, x, z } : { t: 'game_marker', idx: p.idx }, p.team);
   }
 
+  /**
+   * Inventory screen actions. Swapping keeps whatever you were holding in your hands (the
+   * selection follows it). Dropped things land just in front of you, like a death drop.
+   */
+  onInventory(userId: string, msg: InventoryMsg) {
+    const p = this.byId.get(userId);
+    if (!p || p.gone || !p.alive) return;
+    const s = p.s;
+    if (s.mode !== PM.Walk || s.act !== ACT.None) return;
+    const ok = (i: unknown): i is number => Number.isInteger(i) && (i as number) >= 0 && (i as number) < 5;
+    if (msg.t === 'inv_swap') {
+      if (!ok(msg.a) || !ok(msg.b) || msg.a === msg.b) return;
+      [s.inv[msg.a], s.inv[msg.b]] = [s.inv[msg.b], s.inv[msg.a]];
+      if (s.slot === msg.a) s.slot = msg.b; else if (s.slot === msg.b) s.slot = msg.a;
+      return;
+    }
+    if (this.droppedBy.size > 300) for (const [id, d] of this.droppedBy) if (this.now > d.until) this.droppedBy.delete(id);
+    const fx = -Math.sin(s.yaw), fz = -Math.cos(s.yaw);
+    const at = { x: s.x + fx * 1.3, z: s.z + fz * 1.3 };
+    // don't push it through a wall: drop at your feet if something's in the way
+    if (raycastWorld(this.world, { x: s.x, y: s.y + 0.8, z: s.z }, { x: fx, y: 0, z: fz }, 1.5, false).kind !== 'none') { at.x = s.x; at.z = s.z; }
+    const y = surfaceAt(this.world, at.x, at.z, s.y + 1.5);
+    if (msg.t === 'inv_drop') {
+      if (!ok(msg.slot)) return;
+      const sl = s.inv[msg.slot];
+      if (!sl.id) return;
+      const isWeapon = !!weaponDef(sl.id);
+      const n = isWeapon ? 1 : Math.max(1, Math.min(sl.n, Number.isInteger(msg.n) ? (msg.n as number) : sl.n));
+      const it = this.loot.add(sl.id, sl.r, isWeapon ? sl.mag : n, at.x, y, at.z);
+      this.droppedBy.set(it.id, { idx: p.idx, until: this.now + 3000 });
+      if (isWeapon || n >= sl.n) s.inv[msg.slot] = emptySlot(); else sl.n -= n;
+      if (s.slot === msg.slot) { s.reload = 0; s.use = 0; s.burst = 0; }
+      return;
+    }
+    if (msg.t === 'ammo_drop') {
+      if (!Number.isInteger(msg.ammo) || msg.ammo < 0 || msg.ammo > 4) return;
+      const n = Math.max(0, Math.min(s.ammo[msg.ammo], Math.floor(Number(msg.n) || 0)));
+      if (!n) return;
+      s.ammo[msg.ammo] -= n;
+      const it = this.loot.add(AMMO_ITEM[msg.ammo], 0, n, at.x, y, at.z);
+      this.droppedBy.set(it.id, { idx: p.idx, until: this.now + 3000 });
+    }
+  }
+
   // ------------------------------------------------------------ lag compensation
   private record() {
     const pos = new Float32Array(this.players.length * HS);
@@ -318,7 +366,10 @@ export class MatchInstance {
     if (!def) return;
     if (def.projectile) {
       const d = e.dirs[0];
-      this.spawnProjectile(p, e.weapon, { x: e.origin.x + d.x, y: e.origin.y + d.y, z: e.origin.z + d.z }, { x: d.x * def.projectile.speed, y: d.y * def.projectile.speed, z: d.z * def.projectile.speed }, 0, true);
+      // start a metre ahead, or just short of a wall that's closer (so it can't appear beyond it)
+      const near = raycastWorld(this.world, e.origin, d, 1, false);
+      const k = near.kind === 'none' ? 1 : Math.max(0.02, near.t - 0.1);
+      this.spawnProjectile(p, e.weapon, { x: e.origin.x + d.x * k, y: e.origin.y + d.y * k, z: e.origin.z + d.z * k }, { x: d.x * def.projectile.speed, y: d.y * def.projectile.speed, z: d.z * def.projectile.speed }, 0, true);
       return;
     }
     const t = p.bot ? this.now : Math.max(this.now - MAX_REWIND_MS, Math.min(this.now, viewTime));
@@ -372,6 +423,46 @@ export class MatchInstance {
     for (const q of this.players) if (q.brain && q.alive && (q.s.x - o.x) ** 2 + (q.s.z - o.z) ** 2 < 60 * 60) q.brain.heardFrom = { x: o.x, z: o.z, at: this.now };
   }
 
+  /**
+   * A pickaxe swing hits the nearest enemy in front of you within reach (never through a wall),
+   * or else a car, or else chips the wall or ground it lands on.
+   */
+  private resolveMelee(p: P, e: SwingEvent, viewTime: number) {
+    const def = meleeDef(ITEM.pickaxe)!;
+    const s = p.s, o = e.origin, d = e.dir;
+    const t = p.bot ? this.now : Math.max(this.now - MAX_REWIND_MS, Math.min(this.now, viewTime));
+    const hl = Math.hypot(d.x, d.z) || 1, fx = d.x / hl, fz = d.z / hl;
+    const chest = { x: s.x, y: s.y + 1.2, z: s.z };
+    let best: { q: P; at: Vec3 } | null = null, bestD = Infinity;
+    for (const q of this.players) {
+      if (!this.hittable(q, p)) continue;
+      const at = this.posAt(q.idx, t);
+      const dx = at.x - chest.x, dz = at.z - chest.z, dist = Math.hypot(dx, dz);
+      if (dist > def.range + BODY_R || Math.abs(at.y - s.y) > 1.9) continue;
+      if (dist > 0.35 && (dx * fx + dz * fz) / dist < 0.6) continue; // in front of you (about ±53°)
+      const ty = at.y + (q.s.mode === PM.Knocked ? 0.4 : 1.1);
+      const lx = at.x - chest.x, ly = ty - chest.y, lz = at.z - chest.z, ll = Math.hypot(lx, ly, lz) || 1;
+      if (raycastWorld(this.world, chest, { x: lx / ll, y: ly / ll, z: lz / ll }, ll, false).kind !== 'none') continue;
+      if (dist < bestD) { bestD = dist; best = { q, at: { x: at.x - (dx / (dist || 1)) * BODY_R, y: ty, z: at.z - (dz / (dist || 1)) * BODY_R } }; }
+    }
+    let kind = 5, hit: Vec3 = { x: o.x + d.x * def.range, y: o.y + d.y * def.range, z: o.z + d.z * def.range };
+    if (best) {
+      kind = best.q.s.shield > 0 && best.q.s.mode !== PM.Knocked ? 1 : 2;
+      hit = best.at;
+      this.damage(best.q, def.damage, p, 'gun', ITEM.pickaxe, false, best.at);
+    } else {
+      const car = this.vehicles.find((v) => !v.dead && !v.seats.includes(p.idx) && Math.hypot(v.x - chest.x, v.z - chest.z) < def.range + 1.8
+        && ((v.x - chest.x) * fx + (v.z - chest.z) * fz) > 0);
+      if (car) { kind = 4; hit = { x: car.x, y: car.y + 0.9, z: car.z }; this.damageCar(car, def.damage, p.idx); }
+      else {
+        const wh = raycastWorld(this.world, o, d, def.range, false);
+        if (wh.kind !== 'none') { kind = 0; hit = { x: o.x + d.x * wh.t, y: o.y + d.y * wh.t, z: o.z + d.z * wh.t }; }
+      }
+    }
+    this.emitNear(o.x, o.z, 120, { e: 'melee', i: p.idx, h: [r1(hit.x), r1(hit.y), r1(hit.z), kind] }, p.bot ? undefined : p);
+    for (const q of this.players) if (q.brain && q.alive && (q.s.x - o.x) ** 2 + (q.s.z - o.z) ** 2 < 25 * 25) q.brain.heardFrom = { x: o.x, z: o.z, at: this.now };
+  }
+
   private damage(q: P, amount: number, by: P | null, cause: FeedCause, weapon: number, head = false, at?: Vec3) {
     if (!q.alive || q.s.mode === PM.Dead || q.s.mode === PM.Bus) return;
     const knockedBefore = q.s.mode === PM.Knocked;
@@ -379,6 +470,8 @@ export class MatchInstance {
     const [sh, hp] = applyDamage(q.s, amount, cause === 'fall' || cause === 'water' || cause === 'storm');
     q.stats.taken += sh + hp;
     if (by && by !== q && by.team !== q.team) by.stats.damage += sh + hp;
+    // a bot keeps count of how hard it has hit its target (it pushes when it's a lot)
+    if (by?.brain && by.brain.enemy === q.idx) { by.brain.dealt += sh + hp; by.brain.dealtAt = this.now; }
     if (sh + hp <= 0) return;
     q.lastHit = { by: by ? by.idx : -1, at: this.now, w: weapon, cause };
     if (by && by !== q) {
@@ -667,11 +760,16 @@ export class MatchInstance {
       return;
     }
     const isWeapon = def.kind === 'weapon';
+    const freeAt = s.inv.findIndex((sl) => sl.id === 0);
     const took = addToInventory(s, it.item, it.r, isWeapon ? 1 : it.n, isWeapon ? it.n : 0);
     if (took > 0) {
       if (isWeapon || took >= it.n) this.loot.remove(it.id); else this.loot.setCount(it.id, it.n - took);
+      // picked up a gun while swinging the pickaxe: it goes straight into your hands
+      if (isWeapon && s.slot === PICK_SLOT && freeAt >= 0 && s.inv[freeAt].id === it.item) { s.slot = freeAt; s.cd = Math.max(s.cd, 14); }
       return;
     }
+    // full while holding the pickaxe: nothing to swap with (select an item first)
+    if (s.slot === PICK_SLOT) return;
     // full: swap with what's in your hands
     const cur = s.inv[s.slot];
     if (cur.id) this.loot.drop(cur.id, cur.r, ITEMS[cur.id]?.kind === 'weapon' ? cur.mag : cur.n, s.x, s.y, s.z, 1);
@@ -686,6 +784,9 @@ export class MatchInstance {
     for (const it of this.loot.near(s.x, s.z, 1.5)) {
       const def = ITEMS[it.item];
       if (def?.kind !== 'ammo' || Math.abs(it.y - s.y) > 1.5) continue;
+      // ammo you just dropped doesn't jump straight back into your pockets
+      const dropped = this.droppedBy.get(it.id);
+      if (dropped && dropped.idx === p.idx && this.now < dropped.until) continue;
       const took = addToInventory(s, it.item, 0, it.n, 0);
       if (took >= it.n) this.loot.remove(it.id); else if (took > 0) this.loot.setCount(it.id, it.n - took);
     }
@@ -867,6 +968,7 @@ export class MatchInstance {
   private events(p: P, view: number): SimEvents {
     return {
       shot: (e) => this.resolveShot(p, e, view),
+      swing: (e) => this.resolveMelee(p, e, view),
       thrown: (e) => this.onThrow(p, e),
       used: (item) => { const d = consumableDef(item); if (d) p.stats.healed += d.heal + d.shield; },
       fallDamage: (dmg) => {
@@ -955,7 +1057,7 @@ export class MatchInstance {
         for (const q of this.players) {
           if (!this.hittable(q, p)) continue;
           if ((q.s.x - x) ** 2 + (q.s.z - z) ** 2 > r * r) continue;
-          out.push({ idx: q.idx, x: q.s.x, y: q.s.y, z: q.s.z, knocked: q.s.mode === PM.Knocked });
+          out.push({ idx: q.idx, x: q.s.x, y: q.s.y, z: q.s.z, knocked: q.s.mode === PM.Knocked, speed: Math.hypot(q.s.vx, q.s.vz) });
         }
         return out;
       },
@@ -1081,7 +1183,7 @@ export class MatchInstance {
       const show = !q.gone && s.mode !== PM.Dead;
       visible.push(show);
       if (!show) continue;
-      const held = s.inv[s.slot];
+      const held = s.slot === PICK_SLOT ? { id: heldItemId(s), r: 0 } : s.inv[s.slot];
       const flags = (s.grounded ? EF.GROUNDED : 0) | (s.keys & K.ADS ? EF.ADS : 0) | (s.keys & K.CROUCH ? EF.CROUCH : 0) | (s.use > 0 ? EF.USING : 0) | (s.reload > 0 ? EF.RELOADING : 0) | (s.keys & K.SPRINT && Math.hypot(s.vx, s.vz) > 6 ? EF.SPRINT : 0) | ((s.emote & 3) << EF_EMOTE_SHIFT);
       encodeEnt({ idx: q.idx, x: s.x, y: s.y, z: s.z, yaw: s.mode === PM.Drive ? s.vh : s.yaw, pitch: s.pitch, mode: s.mode, flags, item: held?.id ?? 0, rarity: held?.r ?? 0, mv: s.mv, mt: s.mt }, block, count * ENT_BYTES);
       count++;
@@ -1177,4 +1279,5 @@ export class Games {
   onBinary(userId: string, view: DataView) { this.byUser.get(userId)?.onBinary(userId, view); }
   onMarker(userId: string, x?: number, z?: number) { this.byUser.get(userId)?.onMarker(userId, x, z); }
   onSpecNext(userId: string, dir: number) { this.byUser.get(userId)?.onSpecNext(userId, dir); }
+  onInventory(userId: string, msg: InventoryMsg) { this.byUser.get(userId)?.onInventory(userId, msg); }
 }

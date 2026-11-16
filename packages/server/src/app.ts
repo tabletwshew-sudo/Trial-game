@@ -163,6 +163,7 @@ export function createApp(opts: AppOptions) {
       if (msg.t === 'game_join') return games.join(userId);
       if (msg.t === 'game_marker') return games.onMarker(userId, msg.x, msg.z);
       if (msg.t === 'spec_next') return games.onSpecNext(userId, Number(msg.dir) || 1);
+      if (msg.t === 'inv_swap' || msg.t === 'inv_drop' || msg.t === 'ammo_drop') return games.onInventory(userId, msg);
       if (msg.t === 'leave_match') games.leave(userId);
       hub.handle(userId, msg);
     });
