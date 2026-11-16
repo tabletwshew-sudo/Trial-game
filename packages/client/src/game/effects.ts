@@ -25,7 +25,8 @@ export class Effects {
   tracer(a: THREE.Vector3, b: THREE.Vector3, color = '#fff3b0', strong = false) {
     const len = a.distanceTo(b);
     if (len < 0.5) return;
-    const m = new THREE.Mesh(this.tracerGeo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: strong ? 1 : 0.8, depthWrite: false, fog: false }));
+    // HDR colours (above 1) so tracers, flashes and fire bloom in the post pipeline
+    const m = new THREE.Mesh(this.tracerGeo, new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(strong ? 5 : 3.5), transparent: true, opacity: strong ? 1 : 0.8, depthWrite: false, fog: false }));
     m.position.copy(a);
     m.lookAt(b);
     m.scale.set(strong ? 1.6 : 1, strong ? 1.6 : 1, len);
@@ -35,7 +36,7 @@ export class Effects {
   }
 
   muzzle(at: THREE.Vector3, big = false) {
-    const m = new THREE.Mesh(this.flashGeo, new THREE.MeshBasicMaterial({ color: '#ffe08a', transparent: true, opacity: 0.95, depthWrite: false, fog: false }));
+    const m = new THREE.Mesh(this.flashGeo, new THREE.MeshBasicMaterial({ color: new THREE.Color('#ffe08a').multiplyScalar(8), transparent: true, opacity: 0.95, depthWrite: false, fog: false }));
     m.position.copy(at); m.scale.setScalar(big ? 0.32 : 0.18); m.rotation.set(Math.random() * 3, Math.random() * 3, 0);
     this.scene.add(m);
     this.flashes.push({ mesh: m, life: 0.05 });
@@ -66,7 +67,7 @@ export class Effects {
 
   private puff(at: THREE.Vector3, vel: THREE.Vector3, color: string, size: number, life: number, grow: number, glow: number) {
     const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, depthWrite: false });
-    if (glow > 0.3) mat.fog = false;
+    if (glow > 0.3) { mat.fog = false; mat.color.multiplyScalar(1 + glow * 4.5); }
     const m = new THREE.Mesh(this.puffGeo, mat);
     m.position.copy(at); m.scale.setScalar(size);
     this.scene.add(m);
@@ -98,7 +99,7 @@ export class Effects {
     const g = new THREE.Group();
     const body = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.5, 8).rotateX(Math.PI / 2), new THREE.MeshBasicMaterial({ color: '#e9ecef' }));
     const tip = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.18, 8).rotateX(-Math.PI / 2).translate(0, 0, -0.33), new THREE.MeshBasicMaterial({ color: '#e63946' }));
-    const glow = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 6).translate(0, 0, 0.3), new THREE.MeshBasicMaterial({ color: '#ffb347', fog: false }));
+    const glow = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 6).translate(0, 0, 0.3), new THREE.MeshBasicMaterial({ color: new THREE.Color('#ffb347').multiplyScalar(6), fog: false }));
     g.add(body, tip, glow);
     return g;
   }

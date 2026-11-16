@@ -13,7 +13,7 @@ export class LootRenderer {
   private meshes = new Map<number, THREE.Group>();
   private ringGeo = new THREE.RingGeometry(0.34, 0.58, 28).rotateX(-Math.PI / 2);
   private beamGeo = new THREE.CylinderGeometry(0.05, 0.22, 2.6, 10, 1, true).translate(0, 1.3, 0);
-  private ringMats = RARITIES.map((r) => new THREE.MeshBasicMaterial({ color: RARITY_COLOR[r], transparent: true, opacity: 1, depthWrite: false, side: THREE.DoubleSide, fog: false }));
+  private ringMats = RARITIES.map((r) => new THREE.MeshBasicMaterial({ color: new THREE.Color(RARITY_COLOR[r]).multiplyScalar(2.2 + RARITIES.indexOf(r) * 0.5), transparent: true, opacity: 1, depthWrite: false, side: THREE.DoubleSide, fog: false }));
   private beamMats = RARITIES.map((r) => new THREE.MeshBasicMaterial({ color: RARITY_COLOR[r], transparent: true, opacity: 0.32, depthWrite: false, side: THREE.DoubleSide, fog: false, blending: THREE.AdditiveBlending }));
   private timer = 0;
 

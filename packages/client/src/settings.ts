@@ -28,13 +28,14 @@ export interface Settings {
   autoSprint: boolean;   // sprint by default (Shift walks)
   toggleAds: boolean;
   colorMode: ColorMode;
-  master: number; effects: number; music: number; // 0..1, used by audio in Phase 8
+  master: number; effects: number; music: number; // 0..1
+  hudScale: number;      // 0.6 .. 1.2: size of the in-game HUD
   keys: Record<Action, string>;
 }
 
 const DEFAULTS: Settings = {
   sensitivity: 1, adsMul: 0.7, scopeMul: 0.55, invertY: false, fov: 75, graphics: 'high', showFps: false,
-  autoSprint: false, toggleAds: false, colorMode: 'normal', master: 0.8, effects: 0.9, music: 0.6, keys: { ...DEFAULT_KEYS },
+  autoSprint: false, toggleAds: false, colorMode: 'normal', master: 0.8, effects: 0.9, music: 0.6, hudScale: 0.8, keys: { ...DEFAULT_KEYS },
 };
 
 const KEY = 'dz.settings';
@@ -66,6 +67,7 @@ export const rarityColor = (r: number) => PALETTES[settings.colorMode][Math.max(
 export const teamColors = () => (settings.colorMode === 'normal' ? ['#ffd23f', '#3ee6ff', '#ff5fa2', '#4ade80'] : ['#ffd23f', '#3ee6ff', '#ffffff', '#ff9f1c']);
 function applyColorMode() {
   RARITIES.forEach((r, i) => document.documentElement.style.setProperty(`--rarity-${i}`, rarityColor(i)));
+  document.documentElement.style.setProperty('--hud', String(Math.max(0.6, Math.min(1.2, settings.hudScale || 0.8))));
 }
 applyColorMode();
 
@@ -108,6 +110,7 @@ export function settingsPanel(onClose: () => void): HTMLElement {
     );
     if (tab === 'video') body.replaceChildren(
       slider('Field of view', 'fov', 60, 100, 1, (v) => `${v}°`),
+      slider('HUD size', 'hudScale', 0.6, 1.2, 0.05, (v) => `${Math.round(v * 100)}%`),
       choice('Graphics', 'graphics', [['low', 'LOW'], ['medium', 'MEDIUM'], ['high', 'HIGH']], 'Low suits older laptops; applies next match'),
       toggle('Show FPS', 'showFps'),
       choice('Colour-blind mode', 'colorMode', [['normal', 'OFF'], ['deuteranopia', 'DEUTER.'], ['protanopia', 'PROTAN.'], ['tritanopia', 'TRITAN.']], 'Changes rarity and team colours'),

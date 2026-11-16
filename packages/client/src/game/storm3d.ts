@@ -28,7 +28,13 @@ export class StormView {
           vec2 uv = vec2(ang * radius * 0.02, vWorld.y * 0.03);
           float n = noise(uv + vec2(time * 0.6, -time * 0.9)) * 0.6 + noise(uv * 2.3 - vec2(time * 1.1, time * 0.4)) * 0.4;
           float bands = smoothstep(0.45, 0.55, n);
-          vec3 col = mix(vec3(0.38, 0.12, 0.72), vec3(0.78, 0.45, 1.0), bands);
+          vec3 col = mix(vec3(0.12, 0.012, 0.48), vec3(0.58, 0.18, 1.0), bands);
+          // crackling energy: thin bright veins that flicker (bright enough to bloom)
+          float vein = noise(uv * 3.1 + vec2(-time * 2.2, time * 1.3));
+          float crack = smoothstep(0.035, 0.0, abs(vein - 0.5)) * (0.55 + 0.45 * sin(time * 9.0 + uv.x * 0.3));
+          col += vec3(1.1, 0.7, 2.4) * crack * 2.2;
+          // a hot glowing seam where the wall meets the ground
+          col += vec3(1.4, 0.6, 2.6) * smoothstep(30.0, 0.0, abs(vWorld.y - 2.0)) * 1.4;
           float edge = smoothstep(0.0, 40.0, vWorld.y + 40.0) * (1.0 - smoothstep(300.0, 480.0, vWorld.y));
           // the far side of the circle fades back so the sky stays blue until the storm is close
           float d = length(vWorld.xz - cameraPosition.xz);

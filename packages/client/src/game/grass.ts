@@ -1,6 +1,6 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { fbm, hash2, layoutAt, poiAt, roadEdgeDist, surfaceAt, terrainAt, type World } from '@dropzone/shared';
-import { softRamp } from '../lobby/toon';
 import { groundColor } from './terrain';
 
 /** Shared wind clock for grass and trees. */
@@ -26,19 +26,32 @@ export function addWind(m: THREE.Material, strength: number, from: number) {
   return m;
 }
 
+/**
+ * A clump of nine thin, curved blades (two segments each). Base dark, tips light and a little
+ * yellow; normals point up so the clump lights like the ground it grows from.
+ */
 function tuftGeo() {
-  // five tapered blades fanned around the centre; base dark, tips light
   const pos: number[] = [], col: number[] = [], nor: number[] = [];
-  for (let i = 0; i < 5; i++) {
-    const a = (i / 5) * Math.PI * 2 + 0.4, lean = 0.12 + (i % 2) * 0.08;
-    const cx = Math.cos(a) * 0.06, cz = Math.sin(a) * 0.06;
-    const px = -Math.sin(a) * 0.045, pz = Math.cos(a) * 0.045;
-    const h = 0.42 + (i % 3) * 0.12;
+  const blades = 9;
+  for (let i = 0; i < blades; i++) {
+    const a = (i / blades) * Math.PI * 2 + (i % 3) * 0.7, r = 0.03 + (i % 4) * 0.025;
+    const cx = Math.cos(a) * r, cz = Math.sin(a) * r;
+    const px = -Math.sin(a) * 0.022, pz = Math.cos(a) * 0.022;   // half width at the base
+    const h = 0.26 + ((i * 7) % 5) * 0.06;
+    const lean = 0.08 + (i % 3) * 0.06;
+    const mx = cx + Math.cos(a) * lean * 0.35, mz = cz + Math.sin(a) * lean * 0.35, my = h * 0.55;
     const tx = cx + Math.cos(a) * lean, tz = cz + Math.sin(a) * lean;
-    pos.push(cx - px, 0, cz - pz, cx + px, 0, cz + pz, tx, h, tz);
-    col.push(0.55, 0.62, 0.5, 0.55, 0.62, 0.5, 1.15, 1.18, 1.0);
-    for (let k = 0; k < 3; k++) nor.push(0, 1, 0);
+    const base = [0.42, 0.5, 0.36], mid = [0.82, 0.9, 0.7], tip = [1.18, 1.2, 0.92];
+    const quad = (ax: number, ay: number, az: number, w0: number, bx: number, by: number, bz: number, w1: number, c0: number[], c1: number[]) => {
+      pos.push(ax - px * w0, ay, az - pz * w0, ax + px * w0, ay, az + pz * w0, bx + px * w1, by, bz + pz * w1);
+      pos.push(ax - px * w0, ay, az - pz * w0, bx + px * w1, by, bz + pz * w1, bx - px * w1, by, bz - pz * w1);
+      col.push(...c0, ...c0, ...c1, ...c0, ...c1, ...c1);
+    };
+    quad(cx, 0, cz, 1, mx, my, mz, 0.7, base, mid);
+    pos.push(mx - px * 0.7, my, mz - pz * 0.7, mx + px * 0.7, my, mz + pz * 0.7, tx, h, tz);
+    col.push(...mid, ...mid, ...tip);
   }
+  for (let k = 0; k < pos.length / 3; k++) nor.push(0, 1, 0);
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
@@ -46,22 +59,48 @@ function tuftGeo() {
   return g;
 }
 
+/** Grass blades shrink into the ground near the edge of the grass radius, so rebuilding never pops. */
+const grassRadius = { value: 30 };
+function grassMaterial() {
+  const m = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+  m.onBeforeCompile = (sh) => {
+    sh.uniforms.uWind = wind; sh.uniforms.uR = grassRadius;
+    sh.vertexShader = 'uniform float uWind, uR;\n' + sh.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
+      {
+        vec3 root = (instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+        float d = distance(root.xz, cameraPosition.xz);
+        transformed *= smoothstep(uR, uR * 0.72, d);
+        float h = max(position.y, 0.0);
+        float s = sin(uWind * 1.9 + root.x * 0.31 + root.z * 0.23) + 0.5 * sin(uWind * 3.7 + root.x * 0.83 - root.z * 0.61);
+        float gust = 0.6 + 0.4 * sin(uWind * 0.45 + root.x * 0.02);
+        transformed.x += s * h * h * 0.55 * gust;
+        transformed.z += s * h * h * 0.33 * gust;
+      }`);
+  };
+  m.customProgramCacheKey = () => 'grass2';
+  return m;
+}
+
 export class Grass {
   private mesh: THREE.InstancedMesh;
   private flowers: THREE.InstancedMesh;
   private cx = Infinity; private cz = Infinity;
   private readonly radius: number;
-  private readonly cell = 0.85;
+  private readonly cell = 0.62;
 
   constructor(private w: World, scene: THREE.Object3D, private max: number) {
-    const mat = addWind(new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: softRamp, side: THREE.DoubleSide }), 0.16, 0);
-    this.mesh = new THREE.InstancedMesh(tuftGeo(), mat, max);
+    this.mesh = new THREE.InstancedMesh(tuftGeo(), grassMaterial(), max);
+    this.mesh.receiveShadow = true;
     this.mesh.frustumCulled = false; this.mesh.count = 0;
-    const fGeo = new THREE.IcosahedronGeometry(0.07, 0).translate(0, 0.5, 0);
-    const fMat = addWind(new THREE.MeshBasicMaterial({ color: '#ffffff' }), 0.16, 0);
+    // a little flower: a ring of petals round a yellow middle, on top of a stem-high clump
+    const petals: THREE.BufferGeometry[] = [];
+    for (let k = 0; k < 5; k++) petals.push(new THREE.SphereGeometry(0.028, 5, 3).scale(1, 0.4, 1.6).translate(0, 0, 0.035).rotateY((k / 5) * Math.PI * 2));
+    const fGeo = mergeGeometries(petals).translate(0, 0.36, 0);
+    const fMat = addWind(new THREE.MeshLambertMaterial({ color: '#ffffff' }), 0.16, 0);
     this.flowers = new THREE.InstancedMesh(fGeo, fMat, Math.ceil(max / 8));
     this.flowers.frustumCulled = false; this.flowers.count = 0;
     this.radius = Math.sqrt(max * this.cell * this.cell / Math.PI) * 0.95;
+    grassRadius.value = this.radius;
     scene.add(this.mesh, this.flowers);
   }
 
@@ -90,13 +129,15 @@ export class Grass {
       groundColor(w, x, z, h, slope / 4, col);
       const field = poi?.kind === 'farm';
       col.multiplyScalar(field ? 1.15 : 1.05);
-      const k = (field ? 1.5 : 0.75) + hash2(i, j, 14) * 0.6 + patch * 0.4;
+      // tall in fields and lush patches, short and sparse elsewhere; colour varies a little per clump
+      const k = (field ? 1.9 : 0.85) + hash2(i, j, 14) * 0.5 + patch * 0.6;
+      col.offsetHSL((hash2(i, j, 19) - 0.5) * 0.03, (hash2(i, j, 20) - 0.5) * 0.12, (hash2(i, j, 21) - 0.5) * 0.06);
       q.setFromAxisAngle(up, hash2(i, j, 15) * 6.28);
       this.mesh.setMatrixAt(n, m.compose(p.set(x, h - 0.02, z), q, s.set(k, k * (0.8 + hash2(i, j, 16) * 0.5), k)));
       this.mesh.setColorAt(n, col);
       n++;
       if (!field && nf < this.flowers.instanceMatrix.count && hash2(i, j, 17) > 0.93 && patch > 0.5) {
-        this.flowers.setMatrixAt(nf, m.compose(p.set(x, h - 0.02, z), q, s.set(k, k, k)));
+        this.flowers.setMatrixAt(nf, m.compose(p.set(x, h - 0.02, z), q, s.set(k * 0.8, k * 0.8, k * 0.8)));
         this.flowers.setColorAt(nf, FL[Math.floor(hash2(i, j, 18) * 4)]);
         nf++;
       }

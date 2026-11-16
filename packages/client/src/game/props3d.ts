@@ -9,6 +9,10 @@ import { mat4, mergeColored, type Piece } from './geo';
  */
 const mat = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: softRamp });
 const glowMat = new THREE.MeshBasicMaterial({ vertexColors: true });
+glowMat.color.setScalar(1.6);
+/** Hot glow (crystals, pads, signs): bright enough to bloom. */
+const hotGlowMat = new THREE.MeshBasicMaterial({ vertexColors: true });
+hotGlowMat.color.setScalar(5);
 
 const B = (w: number, h: number, d: number) => new THREE.BoxGeometry(w, h, d);
 const CY = (r0: number, r1: number, h: number, seg = 10) => new THREE.CylinderGeometry(r1, r0, h, seg);
@@ -214,7 +218,7 @@ export function buildProps(w: World, scene: THREE.Group): PropsView {
   const bobbers: { o: THREE.Object3D; phase: number; y: number }[] = [];
   const smokeSources: THREE.Vector3[] = [];
   const add = (o: THREE.Object3D, p: Prop) => { o.position.set(p.x, p.y, p.z); o.rotation.y = p.rot; scene.add(o); return o; };
-  const mesh = (pieces: Piece[], glow = false) => { const me = new THREE.Mesh(mergeColored(pieces), glow ? glowMat : mat); me.castShadow = !glow; return me; };
+  const mesh = (pieces: Piece[], glow = false) => { const me = new THREE.Mesh(mergeColored(pieces), glow ? hotGlowMat : mat); me.castShadow = !glow; return me; };
 
   for (const p of byType.get('windmill') ?? []) {
     const hub = new THREE.Group();
@@ -233,7 +237,7 @@ export function buildProps(w: World, scene: THREE.Group): PropsView {
   }
   // beacon crystals and vault doors change during the match
   const beaconLights = (byType.get('beacon') ?? []).map((p) => {
-    const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.45, 0), new THREE.MeshBasicMaterial({ color: '#4ade80' }));
+    const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.45, 0), new THREE.MeshBasicMaterial({ color: new THREE.Color('#4ade80').multiplyScalar(5) }));
     gem.position.set(p.x, p.y + 4.9, p.z);
     scene.add(gem);
     spinners.push({ o: gem, axis: 'y', speed: 1.4 });
@@ -270,7 +274,7 @@ export function buildProps(w: World, scene: THREE.Group): PropsView {
     for (let k = 0; k < 6; k++) bands.push({ geo: CY(2.4 - k * 0.14, 2.4 - (k + 1) * 0.14, 3.3, 14), color: k % 2 ? '#e63946' : '#f8f9fa', matrix: mat4(0, 1.65 + k * 3.3, 0) });
     bands.push({ geo: CY(2.0, 2.0, 0.3, 14), color: DARK, matrix: mat4(0, 20, 0) }, { geo: CY(1.3, 1.3, 2.2, 10), color: '#9ad7ee', matrix: mat4(0, 21.3, 0) }, { geo: new THREE.ConeGeometry(1.6, 1.6, 10), color: '#e63946', matrix: mat4(0, 23.2, 0) }, { geo: B(1.1, 2.0, 0.1), color: '#7b3f00', matrix: mat4(0, 1.0, -2.35) });
     g.add(mesh(bands));
-    const beam = new THREE.Mesh(new THREE.ConeGeometry(4.5, 60, 16, 1, true).translate(0, -30, 0).rotateZ(Math.PI / 2), new THREE.MeshBasicMaterial({ color: '#fff5c0', transparent: true, opacity: 0.22, depthWrite: false, side: THREE.DoubleSide, fog: false }));
+    const beam = new THREE.Mesh(new THREE.ConeGeometry(4.5, 60, 16, 1, true).translate(0, -30, 0).rotateZ(Math.PI / 2), new THREE.MeshBasicMaterial({ color: '#fff5c0', transparent: true, opacity: 0.07, depthWrite: false, side: THREE.DoubleSide, fog: false }));
     const pivot = new THREE.Group(); pivot.position.y = 21.3; pivot.add(beam);
     g.add(pivot, mesh([{ geo: new THREE.SphereGeometry(0.7, 10, 8), color: '#fff3b0', matrix: mat4(0, 21.3, 0) }], true));
     add(g, p);
@@ -386,7 +390,7 @@ export function buildProps(w: World, scene: THREE.Group): PropsView {
       { geo: CY(0.8, 0.8, 0.04, 20), color: '#38f8b8', matrix: mat4(0, 0.13, 0) },
       ...[-0.3, 0.15].map((z) => ({ geo: new THREE.ConeGeometry(0.28, 0.3, 3).rotateX(-Math.PI / 2).scale(1, 0.2, 1), color: '#effff8', matrix: mat4(0, 0.16, z) })),
     ], true));
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.85, 0.05, 6, 24).rotateX(Math.PI / 2), new THREE.MeshBasicMaterial({ color: '#38f8b8', transparent: true, opacity: 0.8, depthWrite: false }));
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.85, 0.05, 6, 24).rotateX(Math.PI / 2), new THREE.MeshBasicMaterial({ color: new THREE.Color('#38f8b8').multiplyScalar(4), transparent: true, opacity: 0.8, depthWrite: false }));
     ring.position.y = 0.2; g.add(ring); padPulses.push(ring);
     add(g, p);
   }
@@ -422,7 +426,7 @@ export function buildProps(w: World, scene: THREE.Group): PropsView {
   let smokeT = 0;
 
   return {
-    setBeacons(ready) { beaconLights.forEach((g, i) => { (g.material as THREE.MeshBasicMaterial).color.set(ready[i] === false ? '#8a8a99' : '#4ade80'); }); },
+    setBeacons(ready) { beaconLights.forEach((g, i) => { (g.material as THREE.MeshBasicMaterial).color.set(ready[i] === false ? '#8a8a99' : '#4ade80').multiplyScalar(ready[i] === false ? 1 : 5); }); },
     setVaults(open) { for (const [id, d] of vaultDoors) d.visible = !open.has(id); },
     update(dt, t, cam) {
       for (const s of spinners) s.o.rotation[s.axis] += s.speed * dt;

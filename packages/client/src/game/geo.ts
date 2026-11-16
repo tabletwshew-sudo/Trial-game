@@ -41,7 +41,18 @@ export class GeoBuilder {
   private col: number[] = [];
   private c = new THREE.Color();
 
-  private push(p: V3, n: V3) { this.pos.push(p[0], p[1], p[2]); this.nor.push(n[0], n[1], n[2]); this.col.push(this.c.r, this.c.g, this.c.b); }
+  /**
+   * Fake ambient occlusion: when set, the sides of things get darker toward `base` (the ground),
+   * which makes buildings look planted instead of pasted on.
+   */
+  ao: { base: number; h: number; k: number } | null = null;
+
+  private push(p: V3, n: V3) {
+    this.pos.push(p[0], p[1], p[2]); this.nor.push(n[0], n[1], n[2]);
+    let f = 1;
+    if (this.ao && n[1] < 0.7) { const t = Math.min(1, Math.max(0, (p[1] - this.ao.base) / this.ao.h)); f = 1 - this.ao.k * (1 - t * t * (3 - 2 * t)); }
+    this.col.push(this.c.r * f, this.c.g * f, this.c.b * f);
+  }
 
   /** Triangle; flipped if needed so its normal agrees with `hint`. */
   tri(a: V3, b: V3, c: V3, color: THREE.ColorRepresentation, hint?: V3) {

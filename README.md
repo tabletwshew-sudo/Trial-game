@@ -6,6 +6,8 @@ fills, bots, bus drop, storm, chests. Built with Three.js + Node WebSockets.
 See [`docs/PLAN.md`](docs/PLAN.md) for the 8-phase roadmap and
 [`docs/RESEARCH.md`](docs/RESEARCH.md) for the mechanics research.
 
+**Put it online for your friends:** follow [`docs/DEPLOY.md`](docs/DEPLOY.md) (Render, about 10 minutes, free).
+
 ## Run locally
 ```bash
 npm install
@@ -32,8 +34,27 @@ Dev mode with hot reload: `npm run dev` (client on :5173, server on :8080).
 | Middle click | Mark the spot you're looking at |
 | Esc | Menu / leave match |
 
+## Settings worth knowing
+- **Video:**
+  - Graphics Low / Medium / High: Low suits older school laptops, and the game also lowers its own resolution when the frame rate dips
+  - HUD size (60–120%)
+  - field of view
+  - colour-blind palettes
+- **Audio:** master, effects and music volume. Sound starts after your first click.
+
 ## Checks
 ```bash
 npm run typecheck
-npm test
+npm test                 # unit + simulation tests
+npm run soak -- 8        # 8 full 80-player matches headless, checking invariants
+```
+Browser end-to-end runs (start a server first with `QUEUE_TIMEOUT_S=2 WARMUP_S=300`):
+
+```bash
+npm run e2e:lobby
+npm run e2e:match
+npm run e2e:combat
+npm run e2e:movement
+npm run e2e:audio
+npm run e2e:reconnect
 ```

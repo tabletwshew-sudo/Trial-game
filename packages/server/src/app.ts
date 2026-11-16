@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize, resolve } from 'node:path';
 import { randomInt } from 'node:crypto';
+import { brotliCompressSync, gzipSync, constants as zc } from 'node:zlib';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { MIN_PASSWORD, NAME_RE, PROTOCOL_VERSION, type AuthResponse, type ClientMsg, type ServerMsg } from '@dropzone/shared';
 import { Store, type UserRecord } from './store.js';
@@ -84,15 +85,33 @@ export function createApp(opts: AppOptions) {
     return json(res, 404, { error: 'Not found' });
   }
 
-  async function serveStatic(res: ServerResponse, pathname: string) {
+  // compressed copies of text files, made once (the game bundle shrinks to about a quarter)
+  const packed = new Map<string, { br: Buffer; gz: Buffer }>();
+  const COMPRESSIBLE = new Set(['.js', '.css', '.html', '.json', '.svg', '.txt']);
+
+  async function serveStatic(req: IncomingMessage, res: ServerResponse, pathname: string) {
     const rel = normalize(decodeURIComponent(pathname));
     let file = join(clientDist, rel === '/' ? 'index.html' : rel);
     if (!file.startsWith(clientDist)) { res.writeHead(403); res.end(); return; }
     try { if (!(await stat(file)).isFile()) throw 0; } catch { file = join(clientDist, 'index.html'); }
     try {
       const body = await readFile(file);
-      const cache = file.includes(`${'/'}assets${'/'}`) ? 'public, max-age=31536000, immutable' : 'no-cache';
-      res.writeHead(200, { 'content-type': MIME[extname(file)] ?? 'application/octet-stream', 'cache-control': cache });
+      const immutable = file.includes(`${'/'}assets${'/'}`);
+      const headers: Record<string, string> = { 'content-type': MIME[extname(file)] ?? 'application/octet-stream', 'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache', vary: 'accept-encoding' };
+      const accept = String(req.headers['accept-encoding'] ?? '');
+      if (COMPRESSIBLE.has(extname(file)) && body.length > 1024 && /\b(br|gzip)\b/.test(accept)) {
+        let p = immutable ? packed.get(file) : undefined;
+        if (!p) {
+          p = { br: brotliCompressSync(body, { params: { [zc.BROTLI_PARAM_QUALITY]: immutable ? 9 : 5 } }), gz: gzipSync(body, { level: 7 }) };
+          if (immutable) packed.set(file, p);
+        }
+        const useBr = /\bbr\b/.test(accept);
+        headers['content-encoding'] = useBr ? 'br' : 'gzip';
+        res.writeHead(200, headers);
+        res.end(useBr ? p.br : p.gz);
+        return;
+      }
+      res.writeHead(200, headers);
       res.end(body);
     } catch { res.writeHead(404); res.end('Client not built. Run `npm run build`.'); }
   }
@@ -102,7 +121,7 @@ export function createApp(opts: AppOptions) {
     try {
       if (url.pathname === '/health') return json(res, 200, { ok: true, protocol: PROTOCOL_VERSION, online: wss.clients.size, matches: games.size });
       if (url.pathname.startsWith('/api/')) return await api(req, res, url.pathname);
-      return await serveStatic(res, url.pathname);
+      return await serveStatic(req, res, url.pathname);
     } catch (e) {
       console.error(e);
       if (!res.headersSent) json(res, 500, { error: 'Server error' });

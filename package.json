@@ -17,12 +17,18 @@
     "e2e:lobby": "node tests/e2e/lobby.e2e.cjs",
     "e2e:match": "node tests/e2e/match.e2e.cjs",
     "e2e:combat": "node tests/e2e/combat.e2e.cjs",
-    "e2e:movement": "node tests/e2e/movement.e2e.cjs"
+    "e2e:movement": "node tests/e2e/movement.e2e.cjs",
+    "e2e:audio": "node tests/e2e/audio.e2e.cjs",
+    "e2e:reconnect": "node tests/e2e/reconnect.e2e.cjs",
+    "soak": "tsx packages/server/test/soak.ts"
   },
   "devDependencies": {
     "typescript": "5.7.2",
     "vitest": "2.1.8",
     "tsx": "4.19.2",
     "@types/node": "22.10.2"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

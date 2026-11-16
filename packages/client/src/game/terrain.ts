@@ -4,20 +4,28 @@ import {
   type Box, type HeightField, type Poi, type PoiKind, type World,
 } from '@dropzone/shared';
 import { softRamp } from '../lobby/toon';
+import { FOG_GLSL } from './atmosphere';
 import { GeoBuilder, mat4, mergeColored } from './geo';
 import { buildBuildingMeshes, buildingMat } from './buildings';
 import { Grass, addWind, wind } from './grass';
 import { buildProps } from './props3d';
 
-export interface Quality { shadows: boolean; treeRange: number; bushes: boolean; pixelRatio: number; grass: number }
-export const QUALITY: Record<'low' | 'high', Quality> = {
-  low: { shadows: false, treeRange: 380, bushes: false, pixelRatio: 1, grass: 2500 },
-  high: { shadows: true, treeRange: 950, bushes: true, pixelRatio: 2, grass: 9000 },
+export interface Quality {
+  shadows: boolean; shadowSize: number; treeRange: number; bushes: boolean; pixelRatio: number; grass: number;
+  /** Post pipeline: bloom, multisampling, FXAA. */
+  bloom: boolean; msaa: number; fxaa: boolean;
+  /** Birds, butterflies, drifting pollen. */
+  life: boolean;
+}
+export const QUALITY: Record<'low' | 'medium' | 'high', Quality> = {
+  low: { shadows: false, shadowSize: 1024, treeRange: 380, bushes: false, pixelRatio: 1, grass: 3500, bloom: false, msaa: 0, fxaa: true, life: false },
+  medium: { shadows: true, shadowSize: 1024, treeRange: 650, bushes: true, pixelRatio: 1.25, grass: 8000, bloom: true, msaa: 0, fxaa: true, life: true },
+  high: { shadows: true, shadowSize: 2048, treeRange: 950, bushes: true, pixelRatio: 1.75, grass: 14000, bloom: true, msaa: 4, fxaa: false, life: true },
 };
 
 const C = (hex: string) => new THREE.Color(hex);
 const COL = {
-  deep: C('#1d7fd0'), shallow: C('#d9c98f'), sand: C('#f3e2a6'), grassA: C('#63c24b'), grassB: C('#4aa83e'), grassC: C('#8fd45c'),
+  deep: C('#1d7fd0'), shallow: C('#d9c98f'), sand: C('#eedfaa'), grassA: C('#5cb646'), grassB: C('#3f9a3b'), grassC: C('#93c95a'), dry: C('#a9b25c'), lush: C('#2f8a3a'),
   high: C('#7fa456'), rock: C('#8f8779'), rockDark: C('#6f6a61'), snow: C('#f6faff'), dirt: C('#b89b68'),
   pave: C('#b8b3a6'), yard: C('#a69c8d'), field: C('#cfae5e'), fieldB: C('#9fbf4f'), quarry: C('#bca78a'), camp: C('#a98d5f'),
 };
@@ -31,6 +39,9 @@ export function groundColor(w: World, x: number, z: number, h: number, slope: nu
   if (h < 2.3) return out.copy(COL.sand).lerp(COL.shallow, smooth(0.3, -0.4, h));
   const n = fbm(x / 55, z / 55, w.seed + 81, 2), n2 = fbm(x / 240, z / 240, w.seed + 82, 2);
   out.copy(COL.grassA).lerp(COL.grassB, smooth(0.35, 0.65, n)).lerp(COL.grassC, smooth(0.55, 0.8, n2) * 0.7);
+  // broad meadows: drier yellow-green slopes and deep green hollows
+  const n3 = fbm(x / 420 + 7.3, z / 420 - 2.1, w.seed + 83, 3);
+  out.lerp(COL.dry, smooth(0.56, 0.74, n3) * 0.45).lerp(COL.lush, smooth(0.42, 0.26, n3) * 0.4);
   out.lerp(COL.high, smooth(40, 75, h));
   out.lerp(COL.sand, smooth(3.4, 2.3, h));
   for (const p of w.pois) {
@@ -133,34 +144,81 @@ function fieldChunks(w: World, f: HeightField, chunkCells: number, group: THREE.
 }
 
 // ---------------------------------------------------------------- water
-export function makeWater(fogColor: THREE.Color, fogNear: number, fogFar: number) {
+/** Depth below sea level baked into a small texture, so the water shader knows where the shallows are. */
+function depthTexture(f: HeightField) {
+  const data = new Uint8Array(f.nx * f.nz);
+  for (let i = 0; i < data.length; i++) data[i] = Math.round(Math.min(1, Math.max(0, (-f.data[i] + 2) / 16)) * 255);
+  const t = new THREE.DataTexture(data, f.nx, f.nz, THREE.RedFormat, THREE.UnsignedByteType);
+  t.minFilter = t.magFilter = THREE.LinearFilter;
+  t.needsUpdate = true;
+  return t;
+}
+
+export function makeWater(w: World) {
+  const rect = (f: HeightField) => new THREE.Vector4(f.ox, f.oz, 1 / (f.maxX - f.ox), 1 / (f.maxZ - f.oz));
   const mat = new THREE.ShaderMaterial({
     transparent: true, depthWrite: false,
-    uniforms: { time: { value: 0 }, fogColor: { value: fogColor }, fogNear: { value: fogNear }, fogFar: { value: fogFar }, sunDir: { value: new THREE.Vector3(0.5, 0.75, 0.35).normalize() } },
+    uniforms: {
+      time: { value: 0 },
+      depthMain: { value: depthTexture(w.main) }, mainRect: { value: rect(w.main) },
+      depthSpawn: { value: depthTexture(w.spawn) }, spawnRect: { value: rect(w.spawn) },
+    },
     vertexShader: /* glsl */ `
-      varying vec3 vWorld; varying float vDist;
-      void main(){ vec4 wp = modelMatrix * vec4(position, 1.0); vWorld = wp.xyz; vec4 mv = viewMatrix * wp; vDist = -mv.z; gl_Position = projectionMatrix * mv; }`,
+      varying vec3 vWorld;
+      void main(){ vec4 wp = modelMatrix * vec4(position, 1.0); vWorld = wp.xyz; gl_Position = projectionMatrix * viewMatrix * wp; }`,
     fragmentShader: /* glsl */ `
-      uniform float time, fogNear, fogFar; uniform vec3 fogColor, sunDir;
-      varying vec3 vWorld; varying float vDist;
+      uniform float time; uniform sampler2D depthMain, depthSpawn; uniform vec4 mainRect, spawnRect;
+      varying vec3 vWorld;
+      ${FOG_GLSL}
       float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
       float noise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
         return mix(mix(hash(i), hash(i+vec2(1,0)), f.x), mix(hash(i+vec2(0,1)), hash(i+vec2(1,1)), f.x), f.y); }
+      float depthIn(sampler2D t, vec4 r, vec2 p, inout bool hit){
+        vec2 uv = (p - r.xy) * r.zw;
+        if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return 40.0;
+        hit = true;
+        return texture2D(t, uv).r * 16.0 - 2.0;
+      }
+      float depthAt(vec2 p){
+        bool hit = false;
+        float d = depthIn(depthMain, mainRect, p, hit);
+        if (hit) return d;
+        return depthIn(depthSpawn, spawnRect, p, hit);
+      }
+      float waves(vec2 p){
+        return noise(p * 0.11 + vec2(time * 0.32, time * 0.21)) * 0.55 + noise(p * 0.29 - vec2(time * 0.47, -time * 0.31)) * 0.3 + noise(p * 0.9 + vec2(time * 0.9, time * 0.4)) * 0.15;
+      }
       void main(){
         vec2 p = vWorld.xz;
-        float n = noise(p * 0.08 + vec2(time * 0.35, time * 0.22)) * 0.6 + noise(p * 0.21 - vec2(time * 0.5, -time * 0.3)) * 0.4;
-        float big = noise(p * 0.012 + vec2(time * 0.05, 0.0));
-        // toon bands up close, fading to broad calm patches far away (no shimmer from the air)
-        float nearK = smoothstep(420.0, 60.0, vDist);
-        float band = (smoothstep(0.46, 0.5, n) * 0.5 + smoothstep(0.66, 0.69, n) * 0.5) * nearK + smoothstep(0.35, 0.75, big) * 0.45 * (1.0 - nearK);
-        vec3 col = mix(vec3(0.07, 0.50, 0.86), vec3(0.20, 0.70, 0.95), band);
-        // small glints near the viewer
-        float sp = smoothstep(0.9, 0.93, noise(p * 2.6 + time * vec2(1.3, 0.8))) * smoothstep(70.0, 8.0, vDist);
-        col += vec3(sp) * 0.3;
-        float fog = smoothstep(fogNear, fogFar, vDist);
-        col = mix(col, fogColor, fog);
-        // see the sandy bottom only when you are close to it
-        gl_FragColor = vec4(col, mix(0.78, 1.0, smoothstep(30.0, 260.0, vDist)));
+        float dist = distance(cameraPosition, vWorld);
+        float d = depthAt(p);
+        // colour by depth: clear turquoise shallows, then blue, then deep ocean
+        vec3 shallow = vec3(0.06, 0.62, 0.66), midC = vec3(0.012, 0.30, 0.62), deep = vec3(0.004, 0.09, 0.30);
+        vec3 col = mix(shallow, midC, smoothstep(0.4, 4.0, d));
+        col = mix(col, deep, smoothstep(4.0, 18.0, d));
+        // ripples: a normal from the wave height, calmer far away (no shimmer from the air)
+        float near = smoothstep(500.0, 40.0, dist);
+        float e = 0.6, w0 = waves(p), wx = waves(p + vec2(e, 0.0)), wz = waves(p + vec2(0.0, e));
+        vec3 N = normalize(vec3((w0 - wx) * 2.2 * near, 1.0, (w0 - wz) * 2.2 * near));
+        vec3 V = normalize(cameraPosition - vWorld);
+        float fres = pow(1.0 - max(dot(N, V), 0.0), 4.0);
+        vec3 R = reflect(-V, N);
+        vec3 sky = mix(DZ_HAZE, vec3(0.10, 0.32, 0.80), clamp(R.y * 1.6, 0.0, 1.0));
+        col = mix(col, sky, clamp(fres * 0.75 + 0.06, 0.0, 1.0));
+        // sun glints (bright enough to bloom into sparkles)
+        float spec = pow(max(dot(reflect(-DZ_SUN, N), V), 0.0), 260.0);
+        col += vec3(1.0, 0.94, 0.82) * spec * (3.0 + 9.0 * near);
+        // shore foam: a line at the water's edge and bands rolling in
+        float n1 = noise(p * 0.45 + time * 0.2), n2 = noise(p * 1.7 - time * 0.35);
+        float edge = 1.0 - smoothstep(0.0, 0.35 + n1 * 0.3, d);
+        float bands = smoothstep(0.72, 0.95, sin(d * 3.2 - time * 1.4 + n1 * 4.0)) * (1.0 - smoothstep(0.2, 2.4, d)) * smoothstep(0.35, 0.7, n2);
+        float foam = clamp(max(edge, bands), 0.0, 1.0) * near;
+        col = mix(col, vec3(1.05, 1.08, 1.08), foam * 0.9);
+        // see the sand through the shallows when you are close
+        float alpha = mix(0.5, 0.97, smoothstep(0.0, 3.5, d));
+        alpha = max(alpha, smoothstep(60.0, 380.0, dist));
+        alpha = max(alpha, foam);
+        gl_FragColor = vec4(dzFog(col, vWorld), alpha);
       }`,
   });
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(12000, 12000, 1, 1).rotateX(-Math.PI / 2), mat);
@@ -237,21 +295,42 @@ function buildRoads(w: World, group: THREE.Group) {
 }
 
 // ---------------------------------------------------------------- trees, rocks, bushes
+/**
+ * Darken the underside and brighten the top of foliage/rocks (vertex colours), which reads as
+ * light filtering through a canopy. Only vertices above `from` are touched (not trunks).
+ */
+function shadeByHeight(g: THREE.BufferGeometry, from: number, y0: number, y1: number, lo: number, hi: number, topTint?: THREE.Color) {
+  const pos = g.getAttribute('position'), col = g.getAttribute('color');
+  for (let i = 0; i < pos.count; i++) {
+    const y = pos.getY(i);
+    if (y < from) continue;
+    const t = Math.min(1, Math.max(0, (y - y0) / (y1 - y0))), k = lo + (hi - lo) * t * t * (3 - 2 * t);
+    let r = col.getX(i) * k, gg = col.getY(i) * k, bb = col.getZ(i) * k;
+    if (topTint && t > 0.7) { const m = (t - 0.7) / 0.3 * 0.5; r += (topTint.r - r) * m; gg += (topTint.g - gg) * m; bb += (topTint.b - bb) * m; }
+    col.setXYZ(i, r, gg, bb);
+  }
+  col.needsUpdate = true;
+  return g;
+}
+
 function scatterGeometries() {
-  const ico = (r: number) => new THREE.IcosahedronGeometry(r, 0);
-  const oak = mergeColored([
-    { geo: new THREE.CylinderGeometry(0.32, 0.5, 3.4, 6), color: '#7a4b2a', matrix: mat4(0, 1.7, 0) },
-    { geo: ico(2.3), color: '#49b04a', matrix: mat4(0, 4.7, 0, 0.3, 0.5, 0, 1, 0.85, 1) },
-    { geo: ico(1.6), color: '#5cc45a', matrix: mat4(1.3, 4.0, 0.5, 1, 2, 0) },
-    { geo: ico(1.5), color: '#3d9a42', matrix: mat4(-1.2, 4.2, -0.6, 2, 1, 0) },
-    { geo: ico(1.3), color: '#66cc5e', matrix: mat4(0.2, 6.1, 0.1, 1, 1, 1) },
-  ]);
-  const pine = mergeColored([
-    { geo: new THREE.CylinderGeometry(0.25, 0.42, 3, 6), color: '#6b4226', matrix: mat4(0, 1.5, 0) },
-    { geo: new THREE.ConeGeometry(2.4, 4, 7), color: '#2d7d46', matrix: mat4(0, 4, 0) },
-    { geo: new THREE.ConeGeometry(1.9, 3.6, 7), color: '#358f50', matrix: mat4(0, 6.2, 0, 0, 0.4, 0) },
-    { geo: new THREE.ConeGeometry(1.3, 3.2, 7), color: '#3fa35c', matrix: mat4(0, 8.3, 0, 0, 0.8, 0) },
-  ]);
+  const ico = (r: number, d = 0) => new THREE.IcosahedronGeometry(r, d);
+  // oak: a trunk with two branches and a full, lumpy crown
+  const oakCrown: [number, number, number, number, string][] = [
+    [0, 4.9, 0, 2.3, '#4aae4a'], [1.4, 4.2, 0.5, 1.6, '#55bd55'], [-1.3, 4.3, -0.6, 1.55, '#3f9d43'], [0.4, 4.1, -1.4, 1.45, '#4cb34c'],
+    [-0.5, 4.0, 1.3, 1.4, '#58c058'], [0.3, 6.2, 0.2, 1.45, '#62c95c'], [1.0, 5.6, -0.6, 1.2, '#5ec45a'], [-1.0, 5.7, 0.6, 1.15, '#50b850'],
+  ];
+  const oak = shadeByHeight(mergeColored([
+    { geo: new THREE.CylinderGeometry(0.3, 0.5, 3.6, 7), color: '#74472a', matrix: mat4(0, 1.8, 0) },
+    { geo: new THREE.CylinderGeometry(0.1, 0.17, 1.6, 5), color: '#74472a', matrix: mat4(0.55, 3.2, 0.2, 0, 0, -0.85) },
+    { geo: new THREE.CylinderGeometry(0.1, 0.16, 1.5, 5), color: '#74472a', matrix: mat4(-0.5, 3.3, -0.25, 0.3, 0, 0.8) },
+    ...oakCrown.map(([x, y, z, r, c], i) => ({ geo: ico(r, 1), color: c, matrix: mat4(x, y, z, i * 0.7, i * 1.3, 0, 1, 0.86, 1) })),
+  ]), 2.8, 2.8, 7.4, 0.55, 1.18, new THREE.Color('#9be06a'));
+  // pine: five tiers, each turned a little
+  const pine = shadeByHeight(mergeColored([
+    { geo: new THREE.CylinderGeometry(0.22, 0.4, 3, 6), color: '#5e3a22', matrix: mat4(0, 1.5, 0) },
+    ...[0, 1, 2, 3, 4].map((k) => ({ geo: new THREE.ConeGeometry(2.5 - k * 0.42, 2.9 - k * 0.15, 8), color: ['#286f3e', '#2f7f46', '#358c4d', '#3d9a56', '#46a85e'][k], matrix: mat4(0, 3.1 + k * 1.55, 0, 0, k * 0.37, 0) })),
+  ]), 1.6, 1.8, 10.5, 0.62, 1.15);
   const palmPieces = [
     { geo: new THREE.CylinderGeometry(0.22, 0.3, 2.4, 6), color: '#a9825a', matrix: mat4(0.15, 1.2, 0, 0, 0, -0.12) },
     { geo: new THREE.CylinderGeometry(0.18, 0.22, 2.4, 6), color: '#b08c63', matrix: mat4(0.55, 3.4, 0, 0, 0, -0.24) },
@@ -265,15 +344,18 @@ function scatterGeometries() {
     palmPieces.push({ geo: frond, color: i % 2 ? '#3fae49' : '#56c45a', matrix: new THREE.Matrix4().makeTranslation(1.5, 6.5, 0).multiply(new THREE.Matrix4().makeRotationY(a)).multiply(new THREE.Matrix4().makeRotationZ(-1.95)).multiply(new THREE.Matrix4().makeTranslation(0, 1.6, 0)) });
   }
   const palm = mergeColored(palmPieces);
-  const rock = mergeColored([
+  // rocks: darker at the base, a little moss on top
+  const rock = shadeByHeight(mergeColored([
     { geo: ico(1), color: '#9a948a', matrix: mat4(0, 0.45, 0, 0.4, 0.2, 0.1, 1.2, 0.75, 1) },
     { geo: ico(0.6), color: '#857f76', matrix: mat4(0.9, 0.25, 0.3, 1, 0.5, 0.3, 1, 0.7, 1.1) },
-  ]);
-  const bush = mergeColored([
-    { geo: ico(0.9), color: '#4fb04a', matrix: mat4(0, 0.55, 0, 0.5, 0, 0.2, 1.15, 0.8, 1) },
-    { geo: ico(0.65), color: '#63c75b', matrix: mat4(0.7, 0.45, 0.25, 1, 1, 0) },
-    { geo: ico(0.55), color: '#3f9a41', matrix: mat4(-0.6, 0.4, -0.2, 0, 2, 1) },
-  ]);
+    { geo: ico(0.45), color: '#8e887e', matrix: mat4(-0.8, 0.2, -0.4, 2, 1, 0.5, 1, 0.8, 1) },
+  ]), -1, -0.1, 1.2, 0.62, 1.12, new THREE.Color('#7fa65a'));
+  const bush = shadeByHeight(mergeColored([
+    { geo: ico(0.9, 1), color: '#4fb04a', matrix: mat4(0, 0.55, 0, 0.5, 0, 0.2, 1.15, 0.8, 1) },
+    { geo: ico(0.65, 1), color: '#63c75b', matrix: mat4(0.7, 0.45, 0.25, 1, 1, 0) },
+    { geo: ico(0.55, 1), color: '#3f9a41', matrix: mat4(-0.6, 0.4, -0.2, 0, 2, 1) },
+    { geo: ico(0.5, 1), color: '#58bd52', matrix: mat4(0.1, 0.85, -0.5, 1, 0, 2) },
+  ]), -1, 0, 1.4, 0.6, 1.15);
   return [oak, pine, palm, rock, bush];
 }
 
@@ -326,7 +408,7 @@ export interface IslandView {
   update(dt: number, cam: THREE.Vector3): void;
 }
 
-export function buildIsland(w: World, q: Quality, fogColor: THREE.Color, fogNear: number, fogFar: number): IslandView {
+export function buildIsland(w: World, q: Quality): IslandView {
   const group = new THREE.Group();
   const mainColors = new Float32Array(w.main.nx * w.main.nz * 3);
   fieldChunks(w, w.main, 60, group, mainColors);
@@ -336,7 +418,7 @@ export function buildIsland(w: World, q: Quality, fogColor: THREE.Color, fogNear
   const chunks = buildScatter(w, group, q);
   const props = buildProps(w, group);
   const grass = new Grass(w, group, q.grass);
-  const water = makeWater(fogColor, fogNear, fogFar);
+  const water = makeWater(w);
   group.add(water.mesh);
   let t = 0;
   return {

@@ -275,6 +275,7 @@ export function buildBuildingMeshes(w: World, group: THREE.Group) {
       const b = w.boxes[i];
       if (b.poi !== poi.id) return;
       const p = paintFor(b, L);
+      g.ao = { base: b.fy - 0.8, h: 3.2, k: 0.34 };
       if (L.type === 'solid') { addContainerOrSilo(g, b); return; }
       const solids = solidsByBox.get(b) ?? [];
       const storeys = L.floors.map((y, k) => ({ y, h: (k + 1 < L.floors.length ? L.floors[k + 1] : b.fy + L.access) - y }));

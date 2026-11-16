@@ -1,27 +1,47 @@
 import * as THREE from 'three';
-import { toon } from '../lobby/toon';
+import { FOG_GLSL, HAZE, SUN_DIR, sceneFog } from './atmosphere';
 
-export const SUN_DIR = new THREE.Vector3(0.5, 0.75, 0.35).normalize();
-export const FOG_COLOR = new THREE.Color('#bfe4ff');
-export const FOG_NEAR = 500, FOG_FAR = 3600;
+export { SUN_DIR } from './atmosphere';
 
-/** Sky dome, sun, drifting clouds and the lights that follow the player. */
-export function buildSky(scene: THREE.Scene, shadows: boolean) {
-  scene.fog = new THREE.Fog(FOG_COLOR, FOG_NEAR, FOG_FAR);
+/**
+ * Sky dome (gradient, sun disc that blooms, warm halo, high streaky clouds), soft shaded
+ * cumulus clouds, and the sun + sky lights that follow the player.
+ */
+export function buildSky(scene: THREE.Scene, shadows: boolean, shadowSize = 2048) {
+  scene.fog = sceneFog();
+  const time = { value: 0 };
   const dome = new THREE.Mesh(
-    new THREE.SphereGeometry(4500, 32, 16),
+    new THREE.SphereGeometry(4500, 48, 24),
     new THREE.ShaderMaterial({
       side: THREE.BackSide, depthWrite: false, fog: false,
-      uniforms: { top: { value: new THREE.Color('#2f6fe0') }, mid: { value: new THREE.Color('#6fbfff') }, low: { value: FOG_COLOR }, sun: { value: SUN_DIR } },
-      vertexShader: `varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-      fragmentShader: `
-        uniform vec3 top, mid, low, sun; varying vec3 vDir;
+      uniforms: { time },
+      vertexShader: /* glsl */ `varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+      fragmentShader: /* glsl */ `
+        uniform float time; varying vec3 vDir;
+        ${FOG_GLSL}
+        float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        float noise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
+          return mix(mix(hash(i), hash(i+vec2(1,0)), f.x), mix(hash(i+vec2(0,1)), hash(i+vec2(1,1)), f.x), f.y); }
+        float fbm(vec2 p){ float v = 0.0, a = 0.5; for (int i = 0; i < 5; i++) { v += a * noise(p); p = p * 2.03 + 17.1; a *= 0.5; } return v; }
         void main(){
-          float h = vDir.y;
-          vec3 c = mix(low, mid, smoothstep(0.0, 0.22, h));
-          c = mix(c, top, smoothstep(0.2, 0.85, h));
-          float s = max(dot(normalize(vDir), sun), 0.0);
-          c += vec3(1.0, 0.95, 0.8) * (smoothstep(0.9992, 0.9996, s) + pow(s, 90.0) * 0.5 + pow(s, 8.0) * 0.12);
+          vec3 d = normalize(vDir);
+          float h = d.y;
+          vec3 zenith = vec3(0.018, 0.11, 0.52), mid = vec3(0.08, 0.30, 0.86);
+          vec3 c = mix(DZ_HAZE, mid, smoothstep(0.0, 0.16, h));
+          c = mix(c, zenith, smoothstep(0.18, 0.9, h));
+          // below the horizon: the haze over the sea
+          c = mix(c, DZ_HAZE * 0.92, smoothstep(0.0, -0.08, h));
+          // high streaks of cloud, drifting
+          vec2 p = d.xz / max(h + 0.12, 0.05) * 1.6 + vec2(time * 0.004, time * 0.0015);
+          float n = fbm(p * vec2(1.0, 3.2));
+          float cirrus = smoothstep(0.52, 0.85, n) * smoothstep(0.03, 0.25, h) * (1.0 - smoothstep(0.75, 1.0, h));
+          c = mix(c, vec3(1.0, 0.99, 0.97), cirrus * 0.42);
+          // warm glow around the sun, and the sun itself (bright enough to bloom)
+          float s = max(dot(d, DZ_SUN), 0.0);
+          c += DZ_SUN_HAZE * (pow(s, 6.0) * 0.28 + pow(s, 64.0) * 0.55 + pow(s, 900.0) * 2.5);
+          c += vec3(1.0, 0.96, 0.86) * smoothstep(0.99955, 0.99975, s) * 26.0;
+          // the sky meets the fog exactly at the horizon
+          c = mix(c, dzFogColor(d), smoothstep(0.06, 0.0, abs(h)) * 0.85);
           gl_FragColor = vec4(c, 1.0);
         }`,
     }),
@@ -30,54 +50,94 @@ export function buildSky(scene: THREE.Scene, shadows: boolean) {
   dome.frustumCulled = false;
   scene.add(dome);
 
-  // clouds: instanced puffs in clusters, above the dropship's flight level
-  const CLOUDS = 46, PUFFS = 6;
-  const puff = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 2), toon('#ffffff', 0.45), CLOUDS * PUFFS);
+  // clouds: clusters of puffs, lit from the sun with grey-blue undersides and bright silver edges
+  const CLOUDS = 64, PUFFS = 9;
+  const cloudMat = new THREE.ShaderMaterial({
+    fog: false,
+    vertexShader: /* glsl */ `
+      varying vec3 vN; varying vec3 vWorld; varying float vBase;
+      void main(){
+        vec4 wp = modelMatrix * instanceMatrix * vec4(position, 1.0);
+        vN = normalize(mat3(modelMatrix) * mat3(instanceMatrix) * normal);
+        vWorld = wp.xyz;
+        vBase = position.y;
+        gl_Position = projectionMatrix * viewMatrix * wp;
+      }`,
+    fragmentShader: /* glsl */ `
+      varying vec3 vN; varying vec3 vWorld; varying float vBase;
+      ${FOG_GLSL}
+      void main(){
+        vec3 n = normalize(vN);
+        float sun = dot(n, DZ_SUN) * 0.5 + 0.5;
+        float up = n.y * 0.5 + 0.5;
+        vec3 shade = mix(vec3(0.56, 0.64, 0.78), vec3(1.0, 0.99, 0.96), smoothstep(0.15, 0.85, sun * 0.6 + up * 0.5));
+        vec3 view = normalize(cameraPosition - vWorld);
+        float rim = pow(1.0 - max(dot(n, view), 0.0), 3.0);
+        float toward = pow(max(dot(-view, DZ_SUN), 0.0), 4.0);
+        shade += vec3(1.0, 0.92, 0.78) * rim * (0.25 + toward * 1.4);
+        gl_FragColor = vec4(dzFog(shade * 1.08, vWorld), 1.0);
+      }`,
+  });
+  const puff = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 3), cloudMat, CLOUDS * PUFFS);
   puff.frustumCulled = false;
   const centers: THREE.Vector3[] = [], offsets: THREE.Vector4[] = [];
   const rnd = (() => { let s = 12345; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 2 ** 32); })();
   for (let c = 0; c < CLOUDS; c++) {
-    centers.push(new THREE.Vector3((rnd() - 0.5) * 6000, 430 + rnd() * 260, (rnd() - 0.5) * 6000));
-    const size = 35 + rnd() * 55;
-    for (let p = 0; p < PUFFS; p++) offsets.push(new THREE.Vector4((p - PUFFS / 2) * size * 0.55 + rnd() * 20, rnd() * size * 0.25, (rnd() - 0.5) * size * 0.8, size * (0.55 + rnd() * 0.5)));
+    centers.push(new THREE.Vector3((rnd() - 0.5) * 7000, 440 + rnd() * 300, (rnd() - 0.5) * 7000));
+    const size = 30 + rnd() * 60;
+    for (let p = 0; p < PUFFS; p++) {
+      // a big middle, smaller shoulders, flat-ish base
+      const t = (p / (PUFFS - 1)) * 2 - 1;
+      const r = size * (1.05 - Math.abs(t) * 0.55) * (0.75 + rnd() * 0.4);
+      offsets.push(new THREE.Vector4(t * size * 1.3 + (rnd() - 0.5) * 12, r * 0.35 + rnd() * size * 0.15, (rnd() - 0.5) * size * 0.9, r));
+    }
   }
   scene.add(puff);
   const m = new THREE.Matrix4();
   const placeClouds = () => {
     for (let c = 0; c < CLOUDS; c++) for (let p = 0; p < PUFFS; p++) {
       const o = offsets[c * PUFFS + p];
-      m.makeScale(o.w, o.w * 0.62, o.w).setPosition(centers[c].x + o.x, centers[c].y + o.y, centers[c].z + o.z);
+      m.makeScale(o.w, o.w * 0.58, o.w * 0.9).setPosition(centers[c].x + o.x, centers[c].y + o.y, centers[c].z + o.z);
       puff.setMatrixAt(c * PUFFS + p, m);
     }
     puff.instanceMatrix.needsUpdate = true;
   };
   placeClouds();
 
-  scene.add(new THREE.HemisphereLight('#e2f1ff', '#c7cbb8', 1.45));
-  const sun = new THREE.DirectionalLight('#fff3da', 2.3);
+  // light: cool sky fill, warm sun. The ground colour of the hemisphere tints shadows.
+  const hemi = new THREE.HemisphereLight('#dcecff', '#b9b08f', 1.35);
+  scene.add(hemi);
+  const sun = new THREE.DirectionalLight('#fff0d2', 2.6);
   sun.castShadow = shadows;
   if (shadows) {
-    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.mapSize.set(shadowSize, shadowSize);
     const c = sun.shadow.camera;
-    c.left = -75; c.right = 75; c.top = 75; c.bottom = -75; c.near = 10; c.far = 520;
-    sun.shadow.bias = -0.0006; sun.shadow.normalBias = 0.06;
+    c.left = -80; c.right = 80; c.top = 80; c.bottom = -80; c.near = 10; c.far = 560;
+    sun.shadow.bias = -0.0005; sun.shadow.normalBias = 0.05;
+    sun.shadow.radius = 2.5;
   }
   scene.add(sun, sun.target);
 
-  let acc = 0;
+  let acc = 0, t = 0;
   return {
+    hemi, sun,
     update(dt: number, cam: THREE.Vector3, focus: THREE.Vector3) {
+      t += dt; time.value = t;
       dome.position.copy(cam);
-      // snap the shadow frustum to whole metres so shadows do not shimmer while moving
-      const fx = Math.round(focus.x), fy = Math.round(focus.y), fz = Math.round(focus.z);
+      // snap the shadow frustum to whole texels so shadows do not shimmer while moving
+      const step = 160 / shadowSize;
+      const fx = Math.round(focus.x / step) * step, fy = Math.round(focus.y / step) * step, fz = Math.round(focus.z / step) * step;
       sun.target.position.set(fx, fy, fz);
-      sun.position.set(fx + SUN_DIR.x * 260, fy + SUN_DIR.y * 260, fz + SUN_DIR.z * 260);
+      sun.position.set(fx + SUN_DIR.x * 280, fy + SUN_DIR.y * 280, fz + SUN_DIR.z * 280);
       acc += dt;
       if (acc > 0.05) {
-        for (const c of centers) { c.x += acc * 5; if (c.x > 3000) c.x -= 6000; }
+        for (const c of centers) { c.x += acc * 5; if (c.x > 3500) c.x -= 7000; }
         acc = 0;
         placeClouds();
       }
     },
   };
 }
+
+/** Kept for code that still asks for the old fog numbers (custom shaders use FOG_GLSL now). */
+export const FOG_COLOR = HAZE;

@@ -53,6 +53,10 @@ export interface BotBrain {
   /** Movement: ticks spent walking into something, and a slide in progress. */
   blocked: number;
   slideUntil: number;
+  /** Where the bot last made progress, and a short "get unstuck" run in a fresh direction. */
+  prog: { x: number; z: number; at: number } | null;
+  unstickUntil: number;
+  unstickYaw: number;
 }
 
 export function newBrain(rnd: () => number): BotBrain {
@@ -64,7 +68,7 @@ export function newBrain(rnd: () => number): BotBrain {
     enemy: -1, enemySeenAt: 0, enemyFirstSeen: 0, lastScan: 0, lastPos: null, strafe: 1, strafeUntil: 0, heardFrom: null,
     aimYaw: 0, aimPitch: 0, errYaw: 0, errPitch: 0, errUntil: 0,
     lootId: -1, lootUntil: 0, ignoreLoot: new Set(), firePulse: false, stuckCheck: { x: 0, z: 0, at: 0 },
-    blocked: 0, slideUntil: 0,
+    blocked: 0, slideUntil: 0, prog: null, unstickUntil: 0, unstickYaw: 0,
   };
 }
 
@@ -138,7 +142,17 @@ export function navStep(w: World, s: PlayerState, tx: number, ty: number, tz: nu
     if (leaving) return lateral < 0.5 && along < 1.7 ? { x: best.x, z: best.z } : { x: best.ix, z: best.iz };
     return lateral < 0.5 && along > -1.7 ? { x: best.ix, z: best.iz } : { x: best.x, z: best.z };
   };
-  if (A && A !== B) return viaDoor(A, true);
+  if (A && A !== B) {
+    // on the roof (climbed a ladder): just head for the target and drop off the edge
+    if (s.y > A.floors[A.floors.length - 1] + 2.6) return { x: tx, z: tz };
+    // upstairs: take the stairs down before making for the door
+    if (A.stairs && s.y > A.floors[0] + 1.5) {
+      const st = A.stairs;
+      const onStairs = s.x > st.x0 - 0.1 && s.x < st.x1 + 0.1 && s.z > st.z0 - 0.1 && s.z < st.z1 + 0.1;
+      return onStairs || Math.hypot(s.x - st.tx, s.z - st.tz) < 0.7 ? { x: st.bx, z: st.bz } : { x: st.tx, z: st.tz };
+    }
+    return viaDoor(A, true);
+  }
   if (B && A !== B) {
     // only bother with the door if the target is on the ground floor or we'll take the stairs after
     return viaDoor(B, false);
@@ -241,7 +255,22 @@ function canSee(w: World, s: PlayerState, t: { x: number; y: number; z: number }
  */
 export function botInput(s: PlayerState, b: BotBrain, bw: BotWorld, home: { x: number; z: number }, roam: number): InputCmd {
   const cmd = decide(s, b, bw, home, roam);
-  if (s.mode !== PM.Walk || s.act) { b.blocked = 0; return cmd; }
+  if (s.mode !== PM.Walk || s.act) { b.blocked = 0; b.prog = null; return cmd; }
+  // no progress for a while (wedged in a corner, a roof, a room it can't path out of)? pick a new way
+  const now = bw.now;
+  if ((cmd.keys & K.F) && b.enemy < 0 && !b.post) {
+    if (!b.prog || Math.hypot(s.x - b.prog.x, s.z - b.prog.z) > 3) b.prog = { x: s.x, z: s.z, at: now };
+    else if (now - b.prog.at > 10_000) {
+      b.unstickUntil = now + 2200; b.unstickYaw = b.rnd() * Math.PI * 2;
+      b.wander = null;
+      if (b.lootId >= 0) { b.ignoreLoot.add(b.lootId); b.lootId = -1; }
+      b.prog = { x: s.x, z: s.z, at: now };
+    }
+  } else b.prog = null;
+  if (now < b.unstickUntil) {
+    cmd.yaw = b.unstickYaw; cmd.keys = (cmd.keys & ~(K.B | K.L | K.R | K.CROUCH)) | K.F | K.SPRINT;
+    if (b.rnd() < 0.08 && !(s.keys & K.JUMP)) cmd.keys |= K.JUMP;
+  }
   const sp = Math.hypot(s.vx, s.vz);
   // walking into something (a crate, fence, low wall)? jump: holding forward turns that into a mantle or vault
   if ((cmd.keys & K.F) && s.grounded && s.mv === MV.None && sp < 1.5) {

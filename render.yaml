@@ -1,0 +1,22 @@
+# One-click deploy on Render (https://render.com): New > Blueprint > pick this repository.
+# Everything (the game page, the lobby API and the match servers) runs in this one web service.
+services:
+  - type: web
+    name: dropzone
+    runtime: node
+    plan: free            # "starter" keeps it awake all day and allows a disk for accounts
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: QUEUE_TIMEOUT_S   # seconds to wait for more players before bots fill the match
+        value: "30"
+      - key: WARMUP_S          # warm-up island countdown, in seconds
+        value: "60"
+      # To keep accounts and friends between deploys, add a disk (paid plans) mounted at
+      # /var/data and uncomment:
+      # - key: DATA_FILE
+      #   value: /var/data/db.json

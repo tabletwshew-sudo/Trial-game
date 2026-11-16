@@ -105,7 +105,7 @@ export class ChestRenderer {
       const bl = new THREE.Mesh(this.supply.balloon, mat); root.add(bl); v.balloon = bl;
     }
     if (c.k !== CHEST_KIND.Ammo) {
-      const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: c.k === CHEST_KIND.Supply ? '#9fd3ff' : '#ffe08a', transparent: true, depthWrite: false, opacity: 0.85 }));
+      const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: new THREE.Color(c.k === CHEST_KIND.Supply ? '#9fd3ff' : '#ffe08a').multiplyScalar(2.6), transparent: true, depthWrite: false, opacity: 0.85 }));
       glow.scale.setScalar(c.k === CHEST_KIND.Supply ? 4.2 : 2.4); glow.position.y = 0.5; glow.name = 'glow';
       root.add(glow);
     }

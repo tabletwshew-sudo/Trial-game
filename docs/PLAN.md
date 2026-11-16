@@ -122,7 +122,7 @@ tests/      e2e (Playwright)
 * Animation: procedural plus authored rig blending, first-person arms option, 3rd-person
   over-the-shoulder camera (default)
 
-### Phase 8 — Audio, test passes, polish, deploy
+### Phase 8 — Audio, test passes, polish, deploy ✅
 * Original spatial audio (footsteps per surface, gunshots by distance, chest hum,
   storm, bus, music stingers) via Web Audio with HRTF panning
 * **Bug-test passes**: unit + simulation (bots fight 80-player headless matches 50×),

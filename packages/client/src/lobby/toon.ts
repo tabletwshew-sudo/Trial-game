@@ -15,15 +15,29 @@ export const softRamp = (() => {
   t.needsUpdate = true;
   return t;
 })();
+/** A crisp, warm rim of light round the silhouette, so characters pop out of busy scenery. */
+function addRim(m: THREE.MeshToonMaterial, strength = 0.38) {
+  m.onBeforeCompile = (sh) => {
+    sh.fragmentShader = sh.fragmentShader.replace('#include <opaque_fragment>', `
+      {
+        float facing = max(dot(normalize(normal), normalize(vViewPosition)), 0.0);
+        outgoingLight += vec3(1.0, 0.94, 0.84) * smoothstep(0.62, 0.86, 1.0 - facing) * ${strength.toFixed(2)};
+      }
+      #include <opaque_fragment>`);
+  };
+  m.customProgramCacheKey = () => `rim${strength}`;
+  return m;
+}
+
 /** Toon material that takes its colour from vertex colours (one draw call for many parts). */
-export const toonVertex = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: ramp });
+export const toonVertex = addRim(new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: ramp }));
 
 const cache = new Map<string, THREE.MeshToonMaterial>();
 export function toon(color: THREE.ColorRepresentation, emissive = 0): THREE.MeshToonMaterial {
   const key = `${new THREE.Color(color).getHexString()}:${emissive}`;
   let m = cache.get(key);
   if (!m) {
-    m = new THREE.MeshToonMaterial({ color, gradientMap: ramp });
+    m = addRim(new THREE.MeshToonMaterial({ color, gradientMap: ramp }), 0.3);
     if (emissive) { m.emissive = new THREE.Color(color); m.emissiveIntensity = emissive; }
     cache.set(key, m);
   }

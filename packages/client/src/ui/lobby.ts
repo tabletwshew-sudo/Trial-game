@@ -3,6 +3,7 @@ import {
   type QueueView, type ServerMsg, type UserView,
 } from '@dropzone/shared';
 import type { Net } from '../net';
+import { audio } from '../audio';
 import { LobbyScene } from '../lobby/scene';
 import { SKINS } from '../lobby/character';
 import { fmtTime, h, toast } from './dom';
@@ -107,7 +108,7 @@ export function lobbyScreen(net: Net, you: UserView, onSignOut: () => void, onMa
         h('span.sub', waiting.length ? `Waiting on ${waiting.length} to ready up` : `${MODE_LABEL[party.mode]} · ${party.fill ? 'Fill' : 'No Fill'}`));
     } else {
       const ready = !!me()?.ready;
-      action = h('button.btn.btn-play', { class: ready ? 'is-ready' : '', onclick: () => net.send({ t: 'ready', ready: !ready }) },
+      action = h('button.btn.btn-play', { class: ready ? 'is-ready' : '', onclick: () => { if (!ready) audio.ui('ready'); net.send({ t: 'ready', ready: !ready }); } },
         h('span.big', ready ? 'READY ✓' : 'READY UP'),
         h('span.sub', ready ? 'Waiting for the leader' : 'Let your leader know'));
     }

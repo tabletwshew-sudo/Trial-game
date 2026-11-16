@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import {
-  ACT, DROP, EF, EF_EMOTE_SHIFT, ITEM, ITEMS, K, MV, PM, SIM_DT, WATER_FLOAT_Y, isLow, zipNear, busPos, clamp, currentSpread, decodeSnapshot, encodeInputs, getWorld, raycastWorld, seatWorld, stepPlayer, surfaceAt, terrainAt, weaponDef,
+  ACT, DROP, EF, EF_EMOTE_SHIFT, ITEM, ITEMS, K, MV, consumableDef, PM, SIM_DT, WATER_FLOAT_Y, isLow, zipNear, busPos, clamp, currentSpread, decodeSnapshot, encodeInputs, getWorld, raycastWorld, seatWorld, stepPlayer, surfaceAt, terrainAt, weaponDef,
   type EntSnap, type GameEvent, type GameInit, type GamePhase, type InputCmd, type MatchFoundView, type PlayerState, type RouteView, type ServerMsg, type SimEvents, type UserView, type World,
 } from '@dropzone/shared';
 import { STORM_PHASES } from '@dropzone/shared';
@@ -18,7 +18,12 @@ import { ChestRenderer } from './chests3d';
 import { buildDropship } from './dropship';
 import { Hud, type HudView } from './hud';
 import { Input } from './input';
-import { FOG_COLOR, FOG_FAR, FOG_NEAR, buildSky } from './sky';
+import { buildSky } from './sky';
+import { installAtmosphere } from './atmosphere';
+import { Post } from './post';
+import { Life } from './life';
+import { audio } from '../audio';
+import { Soundscape } from './soundscape';
 import { QUALITY, buildIsland, type Quality } from './terrain';
 
 const INTERP_MS = 100;
@@ -27,7 +32,7 @@ interface Sample { t: number; x: number; y: number; z: number; yaw: number; pitc
 function pickQuality(): Quality {
   const name = new URLSearchParams(location.search).get('q') ?? settings.graphics;
   if (name === 'low') return { ...QUALITY.low };
-  if (name === 'medium') return { ...QUALITY.high, shadows: false, treeRange: 650, pixelRatio: 1.25, grass: 5000 };
+  if (name === 'medium') return { ...QUALITY.medium };
   return { ...QUALITY.high };
 }
 
@@ -59,6 +64,10 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
     else running?.onMsg(m);
   });
   net.onBinary = (v) => running?.onSnapshot(v);
+  // lost the connection: say so (the client reconnects and rejoins the match on its own)
+  const connPill = h('div.conn-pill', 'Connection lost · reconnecting…');
+  root.append(connPill);
+  net.onStatus = (st) => { connPill.classList.toggle('show', st === 'reconnecting'); if (st === 'signed_out') leave(false); };
   net.send({ t: 'game_join' });
 
   let playAgain = false;
@@ -77,26 +86,34 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
     const roster = init.players, selfIdx = init.you;
     const team = roster.filter((r) => r.team === roster[selfIdx].team).map((r) => r.idx);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-    let pixelRatio = Math.min(devicePixelRatio, q.pixelRatio);
+    // height fog and sun haze for every material (before anything compiles)
+    installAtmosphere();
+    // the frame is rendered into an HDR buffer and finished by the post pipeline (post.ts)
+    const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance', stencil: false });
+    // resolution follows the frame rate (dynamic resolution, see the bottom of frame())
+    const maxRatio = Math.min(devicePixelRatio || 1, q.pixelRatio);
+    let pixelRatio = maxRatio;
     renderer.setPixelRatio(pixelRatio);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 0.95;
+    // neutral tone mapping keeps the bright cartoon colours (ACES dulls them)
+    renderer.toneMapping = THREE.NeutralToneMapping;
+    renderer.toneMappingExposure = 1.0;
     renderer.shadowMap.enabled = q.shadows;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     stage.append(renderer.domElement);
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(70, 1, 0.3, 9000);
-    const sky = buildSky(scene, q.shadows);
-    const island = buildIsland(world, q, FOG_COLOR, FOG_NEAR, FOG_FAR);
+    const sky = buildSky(scene, q.shadows, q.shadowSize);
+    const post = new Post(renderer, scene, camera, { bloom: q.bloom, msaa: q.msaa, fxaa: q.fxaa });
+    const island = buildIsland(world, q);
     scene.add(island.group);
     const ship = buildDropship();
     ship.root.visible = false;
     scene.add(ship.root);
     const actors = new Actors(scene, roster, selfIdx, world);
     const fx = new Effects(scene, world);
+    const life = q.life ? new Life(world, scene) : null;
     const lootR = new LootRenderer(scene);
     lootR.set(init.loot);
     const cars = new CarRenderer(scene, world);
@@ -222,7 +239,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       else if (m.t === 'boss') combat.boss(m.name, m.hp);
       else if (m.t === 'alive') aliveCount = m.alive;
       else if (m.t === 'spec') specIdx = m.idx;
-      else if (m.t === 'result') { input.unlock(); combat.showResult(m.result); }
+      else if (m.t === 'result') { input.unlock(); combat.showResult(m.result); audio.setMusic(null); audio.ui(m.result.win ? 'victory' : 'defeat'); }
       else if (m.t === 'ev') for (const e of m.ev) onEvent(e);
     }
 
@@ -233,6 +250,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
           const ch = actors.character(e.i);
           const from = ch && actors.states[e.i].visible ? ch.muzzleWorld(tmpA, e.w) : tmpA.set(...e.o);
           fx.muzzle(from, weaponDef(e.w)?.cls === 'sniper');
+          if (e.i !== selfIdx) audio.gun(weaponDef(e.w)?.cls ?? 'ar', { x: from.x, y: from.y, z: from.z });
           for (let i = 0; i < e.h.length; i += 4) {
             tmpB.set(e.h[i], e.h[i + 1], e.h[i + 2]);
             if (i < 12 || weaponDef(e.w)?.pellets === 1) fx.tracer(from, tmpB);
@@ -242,28 +260,32 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
         }
         case 'dmg': {
           combat.hitMarker(e.hd, !!e.ko);
+          audio.hit(e.ko ? 'knock' : e.hd ? 'head' : e.sh ? 'shield' : 'body');
           if (e.d > 0) { const p = project(...e.p); if (p.show) combat.damageNumber(p.sx, p.sy, e.d, e.sh, e.hd); }
           break;
         }
         case 'hurt': {
+          audio.hurt((pred?.shield ?? 0) > 0);
           if (!e.from || !pred) { combat.hurtFrom(null); break; }
           const ang = Math.atan2(-(e.from[0] - pred.x), -(e.from[1] - pred.z)) - input.yaw;
           combat.hurtFrom(-ang);
           break;
         }
         case 'proj': fx.spawnProjectile(e.id, e.it, e.p, e.v, e.fuse, !!weaponDef(e.it)?.projectile); break;
-        case 'boom': fx.removeProjectile(e.id); fx.explosion(tmpA.set(...e.p), e.r); break;
-        case 'car_boom': fx.explosion(tmpA.set(...e.p), 6); break;
-        case 'supply': toast('Supply drop incoming! Check your map.', 'info'); break;
-        case 'recalled': toast(e.i === selfIdx ? `${roster[e.by]?.name} brought you back!` : `${roster[e.by]?.name} recalled ${roster[e.i]?.name}`, 'success'); break;
-        case 'vault': toast(`${roster[e.by]?.name ?? 'Someone'} opened a vault!`, 'info'); break;
+        case 'boom': fx.removeProjectile(e.id); fx.explosion(tmpA.set(...e.p), e.r); audio.explosion({ x: e.p[0], y: e.p[1], z: e.p[2] }); break;
+        case 'car_boom': fx.explosion(tmpA.set(...e.p), 6); audio.explosion({ x: e.p[0], y: e.p[1], z: e.p[2] }, 1.4); break;
+        case 'supply': toast('Supply drop incoming! Check your map.', 'info'); audio.item('supply'); break;
+        case 'opened': { const c = chestR.chests.get(e.id); if (c) audio.item('chest', { x: c.x, y: c.y + 0.5, z: c.z }); break; }
+        case 'recalled': audio.item('revive'); toast(e.i === selfIdx ? `${roster[e.by]?.name} brought you back!` : `${roster[e.by]?.name} recalled ${roster[e.i]?.name}`, 'success'); break;
+        case 'vault': { const d = world.vaults.find((v) => v.id === e.id)?.door; audio.item('vault', d ? { x: d.x, y: (pred?.y ?? 0) + 1, z: d.z } : null); } toast(`${roster[e.by]?.name ?? 'Someone'} opened a vault!`, 'info'); break;
         case 'feed':
           combat.feedLine(e.k, e.v, e.w, e.knock, e.cause);
           if (!e.knock && e.k >= 0 && e.k !== e.v) kills[e.k] = (kills[e.k] ?? 0) + 1;
+          if (!e.knock && e.k === selfIdx && e.v !== selfIdx) audio.elim();
           break;
         case 'revived':
           if (e.i < 0) revive = { p: e.by / 100, at: performance.now() };
-          else if (e.i !== selfIdx) toast(`${roster[e.by]?.name} revived ${roster[e.i]?.name}`, 'success');
+          else { if (team.includes(e.i)) audio.item('revive'); if (e.i !== selfIdx) toast(`${roster[e.by]?.name} revived ${roster[e.i]?.name}`, 'success'); }
           break;
       }
     }
@@ -306,6 +328,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
         const ch = actors.character(selfIdx);
         const from = ch ? ch.muzzleWorld(tmpA, e.weapon).clone() : new THREE.Vector3(e.origin.x, e.origin.y, e.origin.z);
         fx.muzzle(from, def.cls === 'sniper' || def.cls === 'shotgun');
+        audio.gun(def.cls, null, true);
         if (!def.projectile) for (const d of e.dirs) {
           const hit = raycastWorld(world, e.origin, d, def.range);
           tmpB.set(e.origin.x + d.x * hit.t, e.origin.y + d.y * hit.t, e.origin.z + d.z * hit.t);
@@ -317,6 +340,8 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
         input.pitch = Math.min(1.5, input.pitch + kick * ((input.keys & K.ADS) ? 0.6 : 1));
         input.yaw += (Math.random() - 0.5) * kick * 0.3;
       },
+      reloaded: () => audio.reload('end'),
+      used: (item) => audio.item(consumableDef(item)?.shield ? 'shield' : 'heal'),
     };
 
     function simStep() {
@@ -341,14 +366,18 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
     // movement feel: camera drops when you crouch or slide, dips on hard landings, FOV kicks with speed
     let camLow = 0, camDip = 0, fovKick = 0, selfFallVy = 0, selfWasGrounded = true;
     // per-player effect timers and "were they in the water" flags
-    const dustT = roster.map(() => 0), wetPrev = roster.map(() => false), mvPrev = roster.map(() => 0);
+    const dustT = roster.map(() => 0), wetPrev = roster.map(() => false), mvPrev = roster.map(() => 0), zipPrev = roster.map(() => false);
+    // sound: the continuous soundscape, plus a little state for one-shots we infer from the prediction
+    const sound = new Soundscape(world, roster.length);
+    let prevReload = 0, prevSlot = -1, prevItems = -1, prevAmmo = -1, landedOnce = false;
     input.onSpec = (dir) => net.send({ t: 'spec_next', dir });
-    let acc = 0, last = performance.now(), time = 0, fps = 60, slowFor = 0;
+    let acc = 0, last = performance.now(), time = 0, fps = 60, slowFor = 0, fastFor = 0, resTimer = 0;
     let debugCam: { x: number; y: number; z: number; yaw: number; pitch: number } | null = null;
 
     function resize() {
       const w = stage.clientWidth || innerWidth, hh = stage.clientHeight || innerHeight;
       renderer.setSize(w, hh);
+      post.setSize(w, hh, pixelRatio);
       camera.aspect = w / hh; camera.updateProjectionMatrix();
     }
     addEventListener('resize', resize);
@@ -503,12 +532,22 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       if (Math.floor(time * 2) !== Math.floor((time - dt) * 2)) island.props.setBeacons(beaconReady.map((t) => serverNow >= t));
       actors.update(dt, time, camPos);
       // movement effects: slide dust, hard-landing puffs, splashes, launch bursts
+      for (const [x, y, z, k] of actors.landings) if ((x - camPos.x) ** 2 + (z - camPos.z) ** 2 < 80 * 80) audio.move('land', { x, y, z }, k);
       for (const [x, y, z, k] of actors.landings) if ((x - camPos.x) ** 2 + (z - camPos.z) ** 2 < 80 * 80) fx.burst(x, y + 0.1, z, 4 + Math.round(k * 8), y < 2.5 ? '#eadcb5' : '#d6c9a8', 2 + k * 3, 0.6, 0.22, 0.6);
       for (let i = 0; i < st.length; i++) {
         const s = st[i];
         if (!s.visible || (s.x - camPos.x) ** 2 + (s.z - camPos.z) ** 2 > 75 * 75) { wetPrev[i] = false; mvPrev[i] = s.mv; continue; }
         dustT[i] -= dt;
         const wet = (s.mode === PM.Walk || s.mode === PM.Knocked) && s.y <= WATER_FLOAT_Y + 0.05 && terrainAt(world, s.x, s.z) < WATER_FLOAT_Y;
+        const at = { x: s.x, y: s.y + 0.3, z: s.z };
+        if (wet && !wetPrev[i] && (s.vy < -2 || s.speed > 3)) audio.move('splash', at, Math.min(1, -s.vy / 15));
+        if (s.mode === PM.Walk && s.mv !== mvPrev[i]) {
+          if (s.mv === MV.Slide) audio.move('slide', at);
+          else if (s.mv === MV.Mantle || s.mv === MV.Hurdle) audio.move('mantle', at);
+          else if (s.mv === MV.Launch) audio.move('pad', at);
+        }
+        if (s.mode === PM.Zip && !zipPrev[i]) audio.move('zipgrab', at);
+        zipPrev[i] = s.mode === PM.Zip;
         if (wet && !wetPrev[i] && (s.vy < -2 || s.speed > 3)) fx.burst(s.x, WATER_FLOAT_Y + 0.9, s.z, 12, '#e9fbff', 2.5, 5 + Math.min(6, -s.vy * 0.4), 0.2, 0.7, 1.1);
         else if (wet && s.speed > 1 && dustT[i] <= 0) { dustT[i] = 0.16; fx.burst(s.x, WATER_FLOAT_Y + 0.95, s.z, 2, '#ffffff', 0.8, 1.2, 0.14, 0.5, 1.5); }
         if (s.mode === PM.Walk && s.mv === MV.Slide && s.grounded && dustT[i] <= 0) {
@@ -521,11 +560,32 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
         wetPrev[i] = wet; mvPrev[i] = s.mv;
       }
       fx.update(dt);
+      life?.update(dt, camPos, pixelRatio);
+
+      // sound
+      if (pred) {
+        if (pred.reload > 0 && prevReload === 0) audio.reload('start');
+        prevReload = pred.reload;
+        const items = pred.inv.reduce((a, sl) => a + (sl.id ? sl.n : 0), 0), ammo = pred.ammo.reduce((a, b) => a + b, 0);
+        if (prevItems >= 0 && items > prevItems) audio.item('pickup');
+        else if (prevAmmo >= 0 && ammo > prevAmmo) audio.item('ammo');
+        if (prevSlot >= 0 && pred.slot !== prevSlot) audio.item('swap');
+        prevItems = items; prevAmmo = ammo; prevSlot = pred.slot;
+        if (phase === 'play' && pred.mode === PM.Walk) landedOnce = true;
+      }
+      audio.setMusic(phase === 'bus' || (phase === 'play' && !landedOnce && !!pred && (pred.mode === PM.Fall || pred.mode === PM.Glide || pred.mode === PM.Bus)) ? 'drop' : null);
+      sound.frame({
+        dt, phase, pred, self: selfIdx, actors: actors.states, cam: camPos, camYaw,
+        chests: [...chestR.chests.values()].filter((c) => !c.open && (c.x - camPos.x) ** 2 + (c.z - camPos.z) ** 2 < 400),
+        cars: [...cars.cars.keys()].map((id) => { const c = cars.sample(id, rt); return c && { id, x: c.x, y: c.y, z: c.z, vs: c.vs, mine: !!pred && pred.veh === id }; }).filter((c): c is NonNullable<typeof c> => !!c),
+        ship: shipActive ? { x: shipX, y: shipY, z: shipZ } : null,
+        storm: storm.state, warmupLeft: (warmupEndsAt - serverNow) / 1000,
+      });
       lootR.update(dt, time, camPos);
       chestR.update(dt, time, camPos, serverNow);
       cars.update(dt, rt, carOverride);
       for (const b of beams.values()) if (b.visible) (b.material as THREE.MeshBasicMaterial).opacity = 0.42 + Math.sin(time * 3) * 0.12;
-      renderer.render(scene, camera);
+      post.render(dt);
 
       // HUD
       const view: HudView = {
@@ -583,12 +643,22 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
         }, dt);
       }
 
-      // slow computer? quietly drop to cheaper settings
-      if (time > 4 && fps < 26) { slowFor += dt; } else slowFor = 0;
+      // dynamic resolution: render fewer pixels when the frame rate dips, more when there's room
+      resTimer += dt;
+      if (time > 3 && resTimer > 0.75) {
+        resTimer = 0;
+        const minRatio = Math.min(maxRatio, 0.6);
+        let next = pixelRatio;
+        if (fps < 48 && pixelRatio > minRatio) next = Math.max(minRatio, pixelRatio - (fps < 30 ? 0.2 : 0.1));
+        else if (fps > 58) { fastFor += 0.75; if (fastFor > 3 && pixelRatio < maxRatio) { next = Math.min(maxRatio, pixelRatio + 0.1); fastFor = 0; } }
+        else fastFor = 0;
+        if (Math.abs(next - pixelRatio) > 0.01) { pixelRatio = next; renderer.setPixelRatio(pixelRatio); resize(); }
+      }
+      // still slow at the lowest resolution? quietly drop to cheaper settings
+      if (time > 6 && fps < 26 && pixelRatio <= Math.min(maxRatio, 0.6) + 0.01) { slowFor += dt; } else slowFor = 0;
       if (slowFor > 3) {
         slowFor = 0;
         if (renderer.shadowMap.enabled) { renderer.shadowMap.enabled = false; scene.traverse((o) => { if ((o as THREE.DirectionalLight).isDirectionalLight) (o as THREE.DirectionalLight).castShadow = false; }); }
-        else if (pixelRatio > 1) { pixelRatio = Math.max(1, pixelRatio - 0.5); renderer.setPixelRatio(pixelRatio); resize(); }
         else if (q.treeRange > 320) q.treeRange -= 150;
       }
     }
@@ -598,6 +668,9 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
     (window as any).__dz = {
       input,
       set cam(c: typeof debugCam) { debugCam = c; },
+      ground: (x: number, z: number) => surfaceAt(world, x, z, 1e4),
+      /** Simulate a dropped connection (tests). */
+      drop: () => (net as unknown as { ws: WebSocket | null }).ws?.close(),
       self: selfIdx, roster, actors: actors.states,
       get pred() { return pred; }, loot: lootR, cars, fx, world, chests: chestR, combat, storm,
       get state() { return { phase, mode: pred?.mode ?? -1, hp: pred?.hp ?? 0, shield: pred?.shield ?? 0, slot: pred?.slot ?? 0, inv: pred?.inv.map((x) => x.id) ?? [], veh: pred?.veh ?? -1, alive: aliveCount, x: selfPos.x, y: selfPos.y, z: selfPos.z, grounded: pred?.grounded ?? false, fps, pending: pending.length, visible: actors.states.filter((s) => s.visible).length, doorsOpen: !!route && performance.now() + clockOffset >= route.doorsAt, err: err.length() }; },
@@ -610,7 +683,8 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
         removeEventListener('resize', resize); removeEventListener('beforeunload', leaveGuard);
         input.dispose(); actors.dispose(); lootR.clear(); offSettings();
         scene.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh || (o as THREE.InstancedMesh).isInstancedMesh) m.geometry?.dispose(); });
-        renderer.dispose(); renderer.domElement.remove();
+        post.dispose(); renderer.dispose(); renderer.domElement.remove();
+        audio.stopLoops(); audio.muffle(false); audio.setMusic(null);
         delete (window as any).__dz;
       },
     };
