@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { Effects } from './effects';
 import { CAR, clamp, surfaceAt, type VehSnap, type World } from '@dropzone/shared';
 import { outlineMaterial, softRamp } from '../lobby/toon';
 import { GeoBuilder, mat4, mergeColored } from './geo';
@@ -45,10 +46,7 @@ interface CarView { root: THREE.Group; body: THREE.Group; wheels: THREE.Mesh[]; 
 
 export class CarRenderer {
   readonly cars = new Map<number, CarView>();
-  private smokeGeo = new THREE.IcosahedronGeometry(0.5, 0);
-  private puffs: { m: THREE.Mesh; life: number }[] = [];
-
-  constructor(private scene: THREE.Scene, private w: World) {}
+  constructor(private scene: THREE.Scene, private w: World, private fx: Effects) {}
 
   private make(id: number): CarView {
     const root = new THREE.Group(), body = new THREE.Group();
@@ -92,10 +90,16 @@ export class CarRenderer {
   }
 
   /** `override` = the car you are driving (predicted locally, so no delay). */
-  update(dt: number, rt: number, override?: { id: number; x: number; y: number; z: number; vh: number; vs: number; steer: number }) {
+  update(dt: number, rt: number, override?: { id: number; x: number; y: number; z: number; vh: number; vs: number; steer: number }, cam?: THREE.Vector3) {
     for (const [id, c] of this.cars) {
       const s = override && override.id === id ? override : this.sample(id, rt);
       if (!s) continue;
+      // far cars are a few pixels: skip them (5 draw calls each), and only near ones cast shadows
+      const d2 = cam ? (s.x - cam.x) ** 2 + (s.z - cam.z) ** 2 : 0;
+      c.root.visible = d2 < 300 * 300;
+      if (!c.root.visible) continue;
+      const shadow = d2 < 90 * 90;
+      if (c.wheels[0].castShadow !== shadow) { c.wheels.forEach((wh) => (wh.castShadow = shadow)); (c.body.children[0] as THREE.Mesh).castShadow = shadow; }
       c.root.position.set(s.x, s.y, s.z);
       c.root.rotation.y = s.vh;
       // tilt the body to the ground under the wheels
@@ -118,15 +122,10 @@ export class CarRenderer {
         c.smoke -= dt;
         if (c.smoke <= 0) {
           c.smoke = c.hp < CAR.maxHp * 0.2 ? 0.05 : 0.14;
-          const m = new THREE.Mesh(this.smokeGeo, new THREE.MeshBasicMaterial({ color: c.hp < CAR.maxHp * 0.2 ? '#3a3a40' : '#9a9aa2', transparent: true, opacity: 0.7, depthWrite: false }));
-          m.position.set(s.x + fx * 1.6, s.y + 1.5, s.z + fz * 1.6);
-          this.scene.add(m);
-          this.puffs.push({ m, life: 1.4 });
+          this.fx.smokePuff(s.x + fx * 1.6, s.y + 1.5, s.z + fz * 1.6, (Math.random() - 0.5) * 0.4, 1.6, (Math.random() - 0.5) * 0.4, c.hp < CAR.maxHp * 0.2 ? '#3a3a40' : '#9a9aa2', 0.5, 1.4, 0.9);
         }
       }
     }
-    for (const p of this.puffs) { p.life -= dt; p.m.position.y += dt * 1.6; p.m.scale.multiplyScalar(1 + dt * 0.9); (p.m.material as THREE.MeshBasicMaterial).opacity = Math.max(0, p.life / 1.4) * 0.7; }
-    this.puffs = this.puffs.filter((p) => { if (p.life > 0) return true; this.scene.remove(p.m); (p.m.material as THREE.Material).dispose(); return false; });
   }
 
   nearest(x: number, y: number, z: number, r: number) {

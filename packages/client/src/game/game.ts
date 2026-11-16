@@ -24,17 +24,11 @@ import { Post } from './post';
 import { Life } from './life';
 import { audio } from '../audio';
 import { Soundscape } from './soundscape';
-import { QUALITY, buildIsland, type Quality } from './terrain';
+import { buildIsland } from './terrain';
+import { pickQuality } from './quality';
 
 const INTERP_MS = 100;
 interface Sample { t: number; x: number; y: number; z: number; yaw: number; pitch: number; mode: number; flags: number; item: number; rarity: number; mv: number; mt: number }
-
-function pickQuality(): Quality {
-  const name = new URLSearchParams(location.search).get('q') ?? settings.graphics;
-  if (name === 'low') return { ...QUALITY.low };
-  if (name === 'medium') return { ...QUALITY.medium };
-  return { ...QUALITY.high };
-}
 
 export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onExit: (playAgain?: boolean) => void) {
   const stage = h('div.stage');
@@ -88,8 +82,9 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
 
     // height fog and sun haze for every material (before anything compiles)
     installAtmosphere();
-    // the frame is rendered into an HDR buffer and finished by the post pipeline (post.ts)
-    const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance', stencil: false });
+    // Medium and High render into an HDR buffer finished by the post pipeline (post.ts)
+    // Low renders straight to the screen, so it uses the canvas's own anti-aliasing instead of FXAA
+    const renderer = new THREE.WebGLRenderer({ antialias: q.direct, powerPreference: 'high-performance', stencil: false });
     // resolution follows the frame rate (dynamic resolution, see the bottom of frame())
     const maxRatio = Math.min(devicePixelRatio || 1, q.pixelRatio);
     let pixelRatio = maxRatio;
@@ -99,25 +94,28 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
     renderer.toneMapping = THREE.NeutralToneMapping;
     renderer.toneMappingExposure = 1.0;
     renderer.shadowMap.enabled = q.shadows;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.type = q.softShadows ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+    renderer.info.autoReset = false; // the post pipeline renders several times a frame: count the whole frame
+    /** Frame cost: draw calls, triangles, and milliseconds spent in our code vs. submitting the render. */
+    const perf = { calls: 0, tris: 0, js: 0, render: 0 };
     stage.append(renderer.domElement);
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(70, 1, 0.3, 9000);
     const sky = buildSky(scene, q.shadows, q.shadowSize);
-    const post = new Post(renderer, scene, camera, { bloom: q.bloom, msaa: q.msaa, fxaa: q.fxaa });
+    const post = new Post(renderer, scene, camera, { bloom: q.bloom, fxaa: q.fxaa, direct: q.direct });
     const island = buildIsland(world, q);
     scene.add(island.group);
     const ship = buildDropship();
     ship.root.visible = false;
     scene.add(ship.root);
-    const actors = new Actors(scene, roster, selfIdx, world);
+    const actors = new Actors(scene, roster, selfIdx, world, q.name);
     const fx = new Effects(scene, world);
     const life = q.life ? new Life(world, scene) : null;
     const lootR = new LootRenderer(scene);
     lootR.set(init.loot);
-    const cars = new CarRenderer(scene, world);
-    const chestR = new ChestRenderer(scene);
+    const cars = new CarRenderer(scene, world, fx);
+    const chestR = new ChestRenderer(scene, fx);
     chestR.set(init.chests);
     let aliveCount = init.alive, specIdx = -1, revive = { p: 0, at: 0 };
     const kills = [...init.kills];
@@ -393,6 +391,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
 
     function frame() {
       const nowMs = performance.now();
+      renderer.info.reset();
       const dt = Math.min(0.1, (nowMs - last) / 1000);
       last = nowMs; time += dt;
       fps += (1 / Math.max(dt, 0.001) - fps) * 0.05;
@@ -528,7 +527,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
         camera.lookAt(camPos.x - Math.sin(debugCam.yaw) * c2, camPos.y + Math.sin(debugCam.pitch), camPos.z - Math.cos(debugCam.yaw) * c2);
       }
       sky.update(dt, camPos, debugCam ? camPos : selfPos);
-      island.update(dt, camPos);
+      island.update(dt, camPos, camera);
       storm.update(time, serverNow);
       if (Math.floor(time * 2) !== Math.floor((time - dt) * 2)) island.props.setBeacons(beaconReady.map((t) => serverNow >= t));
       actors.update(dt, time, camPos);
@@ -584,9 +583,12 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       });
       lootR.update(dt, time, camPos);
       chestR.update(dt, time, camPos, serverNow);
-      cars.update(dt, rt, carOverride);
+      cars.update(dt, rt, carOverride, camPos);
       for (const b of beams.values()) if (b.visible) (b.material as THREE.MeshBasicMaterial).opacity = 0.42 + Math.sin(time * 3) * 0.12;
+      const tJs = performance.now();
       post.render(dt);
+      perf.js += ((tJs - nowMs) - perf.js) * 0.05; perf.render += ((performance.now() - tJs) - perf.render) * 0.05;
+      perf.calls = renderer.info.render.calls; perf.tris = renderer.info.render.triangles;
 
       // HUD
       const view: HudView = {
@@ -674,6 +676,8 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       drop: () => (net as unknown as { ws: WebSocket | null }).ws?.close(),
       self: selfIdx, roster, actors: actors.states,
       get pred() { return pred; }, loot: lootR, cars, fx, world, chests: chestR, combat, storm,
+      scene, renderer,
+      get perf() { return { ...perf, ratio: pixelRatio, w: renderer.domElement.width, h: renderer.domElement.height, programs: renderer.info.programs?.length ?? 0, geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures }; },
       get state() { return { phase, mode: pred?.mode ?? -1, hp: pred?.hp ?? 0, shield: pred?.shield ?? 0, slot: pred?.slot ?? 0, inv: pred?.inv.map((x) => x.id) ?? [], veh: pred?.veh ?? -1, alive: aliveCount, x: selfPos.x, y: selfPos.y, z: selfPos.z, grounded: pred?.grounded ?? false, fps, pending: pending.length, visible: actors.states.filter((s) => s.visible).length, doorsOpen: !!route && performance.now() + clockOffset >= route.doorsAt, err: err.length() }; },
     };
 

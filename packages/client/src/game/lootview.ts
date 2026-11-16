@@ -4,9 +4,12 @@ import { itemMesh } from './items3d';
 
 /**
  * Floor loot: nearby pickups are drawn as their real model, floating and spinning slowly
- * above a glowing rarity-coloured ring. Far ones aren't drawn at all.
+ * above a glowing rarity-coloured ring. Far ones aren't drawn at all, and middle-distance ones
+ * skip their outline and shadow.
  */
-const SHOW = 70;
+const SHOW = 56;
+/** Closer than this the model gets its outline and casts a shadow (both cost a draw call each). */
+const DETAIL = 24;
 
 export class LootRenderer {
   readonly items = new Map<number, LootView>();
@@ -49,6 +52,14 @@ export class LootRenderer {
           this.scene.add(g);
           this.meshes.set(id, g);
         } else if (!near && this.meshes.has(id)) this.drop(id);
+      }
+      for (const [id, g] of this.meshes) {
+        const it = this.items.get(id);
+        if (!it) continue;
+        const close = (it.x - cam.x) ** 2 + (it.z - cam.z) ** 2 < DETAIL * DETAIL;
+        const m = g.getObjectByName('model') as THREE.Mesh;
+        m.castShadow = close;
+        if (m.children[0]) m.children[0].visible = close;
       }
     }
     for (const g of this.meshes.values()) {

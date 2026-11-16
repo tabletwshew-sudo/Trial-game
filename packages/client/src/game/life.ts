@@ -79,7 +79,9 @@ export class Life {
         }`,
       fragmentShader: /* glsl */ `
         varying float vA;
-        void main(){ float r = length(gl_PointCoord - 0.5); gl_FragColor = vec4(vec3(1.6, 1.4, 0.9) * vA * smoothstep(0.5, 0.0, r), 1.0); }`,
+        void main(){ float r = length(gl_PointCoord - 0.5); gl_FragColor = vec4(vec3(1.6, 1.4, 0.9) * vA * smoothstep(0.5, 0.0, r), 1.0);
+ #include <tonemapping_fragment>
+ #include <colorspace_fragment> }`,
     }));
     this.motes.frustumCulled = false;
     scene.add(this.birds, this.flies, this.motes);

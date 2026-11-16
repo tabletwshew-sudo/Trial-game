@@ -90,7 +90,6 @@ export class Grass {
 
   constructor(private w: World, scene: THREE.Object3D, private max: number) {
     this.mesh = new THREE.InstancedMesh(tuftGeo(), grassMaterial(), max);
-    this.mesh.receiveShadow = true;
     this.mesh.frustumCulled = false; this.mesh.count = 0;
     // a little flower: a ring of petals round a yellow middle, on top of a stem-high clump
     const petals: THREE.BufferGeometry[] = [];

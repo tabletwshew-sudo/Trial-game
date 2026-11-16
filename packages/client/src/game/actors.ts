@@ -1,12 +1,17 @@
 import * as THREE from 'three';
 import { EF, EF_EMOTE_SHIFT, HURDLE_TICKS, MANTLE_TICKS, MV, PM, WATER_FLOAT_Y, weaponDef, type RosterEntry, type World } from '@dropzone/shared';
 import { Character, SKINS, type PoseMode } from '../lobby/character';
-import { softRamp } from '../lobby/toon';
+import { outlineMaterial, softRamp } from '../lobby/toon';
 import { mat4, mergeColored } from './geo';
 
 export interface ActorState { x: number; y: number; z: number; yaw: number; pitch: number; mode: number; grounded: boolean; speed: number; dive: number; visible: boolean; item: number; rarity: number; flags: number; mv: number; mt: number; vy: number; /** horizontal velocity (for strafe/backpedal animation) */ vx: number; vz: number }
 
-const FULL_MODELS = 10;
+/** Nearest players drawn with the full animated character (the rest use cheap stand-ins). */
+const FULL_MODELS = { low: 5, medium: 8, high: 10 };
+/** Full characters beyond this many metres switch to stand-ins (they are only a few pixels tall). */
+const FULL_RANGE = 100;
+/** Outlines and shadows on full characters only up close (each is an extra draw call per body part). */
+const OUTLINE_RANGE = 45, SHADOW_RANGE = 55;
 const wrapAngle = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
 
 /**
@@ -29,7 +34,7 @@ export class Actors {
   /** Hard landings this frame (for dust): [x, y, z, strength]. */
   readonly landings: [number, number, number, number][] = [];
 
-  constructor(private scene: THREE.Scene, private roster: RosterEntry[], private selfIdx: number, private world?: World) {
+  constructor(private scene: THREE.Scene, private roster: RosterEntry[], private selfIdx: number, private world?: World, quality: keyof typeof FULL_MODELS = 'high') {
     this.states = roster.map(() => ({ x: 0, y: -100, z: 0, yaw: 0, pitch: 0, mode: PM.Walk, grounded: true, speed: 0, dive: 0, visible: false, item: 0, rarity: 0, flags: 0, mv: 0, mt: 0, vy: 0, vx: 0, vz: 0 }));
     this.wasGrounded = roster.map(() => true); this.fallVy = roster.map(() => 0);
     this.order = roster.map((r) => r.idx);
@@ -67,7 +72,7 @@ export class Actors {
       this.lodGlider.setColorAt(i, c.set(s.trim));
     });
     for (const m of [this.lodBody, this.lodHat, this.lodRest, this.lodGlider]) { m.frustumCulled = false; m.castShadow = false; scene.add(m); }
-    for (let i = 0; i < FULL_MODELS; i++) {
+    for (let i = 0; i < FULL_MODELS[quality]; i++) {
       const ch = new Character(0);
       ch.root.visible = false;
       scene.add(ch.root);
@@ -107,7 +112,7 @@ export class Actors {
       this.sortTimer = 0.25;
       const d = (i: number) => (i === this.selfIdx ? -1 : !st[i].visible ? 1e12 : (st[i].x - cam.x) ** 2 + (st[i].y - cam.y) ** 2 + (st[i].z - cam.z) ** 2);
       this.order.sort((a, b) => d(a) - d(b));
-      const want = new Set(this.order.slice(0, FULL_MODELS).filter((i) => st[i].visible && d(i) < 140 * 140));
+      const want = new Set(this.order.slice(0, this.pool.length).filter((i) => st[i].visible && d(i) < FULL_RANGE * FULL_RANGE));
       for (const slot of this.pool) if (slot.idx >= 0 && !want.has(slot.idx)) { this.full.delete(slot.idx); slot.idx = -1; slot.ch.root.visible = false; }
       for (const i of want) {
         if (this.full.has(i)) continue;
@@ -115,6 +120,15 @@ export class Actors {
         if (!slot) break;
         slot.idx = i; slot.ch.setSkin(this.roster[i].skin % SKINS.length);
         this.full.set(i, slot.ch);
+      }
+      for (const slot of this.pool) {
+        if (slot.idx < 0) continue;
+        const dd = d(slot.idx), outline = dd < OUTLINE_RANGE ** 2, shadow = dd < SHADOW_RANGE ** 2;
+        slot.ch.root.traverse((o) => {
+          const me = o as THREE.Mesh;
+          if (!me.isMesh) return;
+          if (me.material === outlineMaterial) me.visible = outline; else me.castShadow = shadow;
+        });
       }
     }
     const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(0, 0, 0, 'YXZ'), p = new THREE.Vector3(), one = new THREE.Vector3(1, 1, 1), zero = new THREE.Vector3(0, 0, 0);

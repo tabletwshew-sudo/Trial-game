@@ -216,6 +216,8 @@ export function buildProps(w: World, scene: THREE.Group): PropsView {
   const flames: THREE.Object3D[] = [];
   const blinkers: THREE.Mesh[] = [];
   const bobbers: { o: THREE.Object3D; phase: number; y: number }[] = [];
+  /** Signposts are three draw calls each: only drawn within 160 m. */
+  const signs: THREE.Object3D[] = [];
   const smokeSources: THREE.Vector3[] = [];
   const add = (o: THREE.Object3D, p: Prop) => { o.position.set(p.x, p.y, p.z); o.rotation.y = p.rot; scene.add(o); return o; };
   const mesh = (pieces: Piece[], glow = false) => { const me = new THREE.Mesh(mergeColored(pieces), glow ? hotGlowMat : mat); me.castShadow = !glow; return me; };
@@ -312,7 +314,7 @@ export function buildProps(w: World, scene: THREE.Group): PropsView {
     board.position.set(0, 2.05, 0.05);
     const back = board.clone(); back.rotation.y = Math.PI; back.position.z = -0.05;
     g.add(board, back);
-    add(g, p);
+    signs.push(add(g, p));
   }
   // wires between neighbouring power poles
   const poles = byType.get('pole') ?? [];
@@ -429,6 +431,7 @@ export function buildProps(w: World, scene: THREE.Group): PropsView {
     setBeacons(ready) { beaconLights.forEach((g, i) => { (g.material as THREE.MeshBasicMaterial).color.set(ready[i] === false ? '#8a8a99' : '#4ade80').multiplyScalar(ready[i] === false ? 1 : 5); }); },
     setVaults(open) { for (const [id, d] of vaultDoors) d.visible = !open.has(id); },
     update(dt, t, cam) {
+      for (const sg of signs) sg.visible = (sg.position.x - cam.x) ** 2 + (sg.position.z - cam.z) ** 2 < 160 * 160;
       for (const s of spinners) s.o.rotation[s.axis] += s.speed * dt;
       for (const f of flames) { const k = 0.85 + Math.sin(t * 13 + f.position.x) * 0.1 + Math.sin(t * 7.3) * 0.08; f.scale.set(1, k, 1); f.rotation.y += dt * 2; }
       for (const b of blinkers) b.visible = Math.sin(t * 3) > 0;

@@ -15,7 +15,7 @@ export const DEFAULT_KEYS: Record<Action, string> = {
   reload: 'KeyR', interact: 'KeyE', map: 'KeyM', emote: 'KeyB', slot1: 'Digit1', slot2: 'Digit2', slot3: 'Digit3', slot4: 'Digit4', slot5: 'Digit5',
 };
 export type ColorMode = 'normal' | 'deuteranopia' | 'protanopia' | 'tritanopia';
-export type Graphics = 'low' | 'medium' | 'high';
+export type Graphics = 'auto' | 'low' | 'medium' | 'high';
 
 export interface Settings {
   sensitivity: number;   // 0.2 .. 3 (1 = default)
@@ -24,6 +24,8 @@ export interface Settings {
   invertY: boolean;
   fov: number;           // 60 .. 100
   graphics: Graphics;
+  /** Bumped when the graphics default changes, so old saved defaults move to the new one. */
+  graphicsV?: number;
   showFps: boolean;
   autoSprint: boolean;   // sprint by default (Shift walks)
   toggleAds: boolean;
@@ -34,7 +36,7 @@ export interface Settings {
 }
 
 const DEFAULTS: Settings = {
-  sensitivity: 1, adsMul: 0.7, scopeMul: 0.55, invertY: false, fov: 75, graphics: 'high', showFps: false,
+  sensitivity: 1, adsMul: 0.7, scopeMul: 0.55, invertY: false, fov: 75, graphics: 'auto', graphicsV: 2, showFps: false,
   autoSprint: false, toggleAds: false, colorMode: 'normal', master: 0.8, effects: 0.9, music: 0.6, hudScale: 0.8, keys: { ...DEFAULT_KEYS },
 };
 
@@ -42,7 +44,12 @@ const KEY = 'dz.settings';
 function load(): Settings {
   try {
     const raw = JSON.parse(localStorage.getItem(KEY) ?? 'null');
-    if (raw && typeof raw === 'object') return { ...DEFAULTS, ...raw, keys: { ...DEFAULT_KEYS, ...(raw.keys ?? {}) } };
+    if (raw && typeof raw === 'object') {
+      const s: Settings = { ...DEFAULTS, ...raw, keys: { ...DEFAULT_KEYS, ...(raw.keys ?? {}) } };
+      // "high" used to be the default and was too heavy for most laptops: move it to auto once
+      if ((raw.graphicsV ?? 1) < 2) { if (s.graphics === 'high') s.graphics = 'auto'; s.graphicsV = 2; }
+      return s;
+    }
   } catch { /* storage blocked or bad data: use defaults */ }
   return { ...DEFAULTS, keys: { ...DEFAULT_KEYS } };
 }
@@ -111,7 +118,7 @@ export function settingsPanel(onClose: () => void): HTMLElement {
     if (tab === 'video') body.replaceChildren(
       slider('Field of view', 'fov', 60, 100, 1, (v) => `${v}°`),
       slider('HUD size', 'hudScale', 0.6, 1.2, 0.05, (v) => `${Math.round(v * 100)}%`),
-      choice('Graphics', 'graphics', [['low', 'LOW'], ['medium', 'MEDIUM'], ['high', 'HIGH']], 'Low suits older laptops; applies next match'),
+      choice('Graphics', 'graphics', [['auto', 'AUTO'], ['low', 'LOW'], ['medium', 'MEDIUM'], ['high', 'HIGH']], 'Auto picks for your computer; applies next match'),
       toggle('Show FPS', 'showFps'),
       choice('Colour-blind mode', 'colorMode', [['normal', 'OFF'], ['deuteranopia', 'DEUTER.'], ['protanopia', 'PROTAN.'], ['tritanopia', 'TRITAN.']], 'Changes rarity and team colours'),
       h('div.swatches', ...[0, 1, 2, 3, 4].map((r) => h('span', { style: { background: rarityColor(r) } }, ['C', 'U', 'R', 'E', 'L'][r]))),

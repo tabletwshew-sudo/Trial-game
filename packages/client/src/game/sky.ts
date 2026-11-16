@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { FOG_GLSL, HAZE, SUN_DIR, sceneFog } from './atmosphere';
+import { noiseTexture } from './noisetex';
 
 export { SUN_DIR } from './atmosphere';
 
@@ -14,15 +15,11 @@ export function buildSky(scene: THREE.Scene, shadows: boolean, shadowSize = 2048
     new THREE.SphereGeometry(4500, 48, 24),
     new THREE.ShaderMaterial({
       side: THREE.BackSide, depthWrite: false, fog: false,
-      uniforms: { time },
+      uniforms: { time, cirrusTex: { value: noiseTexture(256, 8, 5, 7) } },
       vertexShader: /* glsl */ `varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
       fragmentShader: /* glsl */ `
-        uniform float time; varying vec3 vDir;
+        uniform float time; uniform sampler2D cirrusTex; varying vec3 vDir;
         ${FOG_GLSL}
-        float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-        float noise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
-          return mix(mix(hash(i), hash(i+vec2(1,0)), f.x), mix(hash(i+vec2(0,1)), hash(i+vec2(1,1)), f.x), f.y); }
-        float fbm(vec2 p){ float v = 0.0, a = 0.5; for (int i = 0; i < 5; i++) { v += a * noise(p); p = p * 2.03 + 17.1; a *= 0.5; } return v; }
         void main(){
           vec3 d = normalize(vDir);
           float h = d.y;
@@ -33,7 +30,7 @@ export function buildSky(scene: THREE.Scene, shadows: boolean, shadowSize = 2048
           c = mix(c, DZ_HAZE * 0.92, smoothstep(0.0, -0.08, h));
           // high streaks of cloud, drifting
           vec2 p = d.xz / max(h + 0.12, 0.05) * 1.6 + vec2(time * 0.004, time * 0.0015);
-          float n = fbm(p * vec2(1.0, 3.2));
+          float n = texture2D(cirrusTex, p * vec2(1.0, 3.2) / 8.0).r;
           float cirrus = smoothstep(0.52, 0.85, n) * smoothstep(0.03, 0.25, h) * (1.0 - smoothstep(0.75, 1.0, h));
           c = mix(c, vec3(1.0, 0.99, 0.97), cirrus * 0.42);
           // warm glow around the sun, and the sun itself (bright enough to bloom)
@@ -43,6 +40,8 @@ export function buildSky(scene: THREE.Scene, shadows: boolean, shadowSize = 2048
           // the sky meets the fog exactly at the horizon
           c = mix(c, dzFogColor(d), smoothstep(0.06, 0.0, abs(h)) * 0.85);
           gl_FragColor = vec4(c, 1.0);
+ #include <tonemapping_fragment>
+ #include <colorspace_fragment>
         }`,
     }),
   );
@@ -51,7 +50,7 @@ export function buildSky(scene: THREE.Scene, shadows: boolean, shadowSize = 2048
   scene.add(dome);
 
   // clouds: clusters of puffs, lit from the sun with grey-blue undersides and bright silver edges
-  const CLOUDS = 64, PUFFS = 9;
+  const CLOUDS = 56, PUFFS = 7;
   const cloudMat = new THREE.ShaderMaterial({
     fog: false,
     vertexShader: /* glsl */ `
@@ -76,9 +75,11 @@ export function buildSky(scene: THREE.Scene, shadows: boolean, shadowSize = 2048
         float toward = pow(max(dot(-view, DZ_SUN), 0.0), 4.0);
         shade += vec3(1.0, 0.92, 0.78) * rim * (0.25 + toward * 1.4);
         gl_FragColor = vec4(dzFog(shade * 1.08, vWorld), 1.0);
+ #include <tonemapping_fragment>
+ #include <colorspace_fragment>
       }`,
   });
-  const puff = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 3), cloudMat, CLOUDS * PUFFS);
+  const puff = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 2), cloudMat, CLOUDS * PUFFS);
   puff.frustumCulled = false;
   const centers: THREE.Vector3[] = [], offsets: THREE.Vector4[] = [];
   const rnd = (() => { let s = 12345; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 2 ** 32); })();
@@ -105,9 +106,9 @@ export function buildSky(scene: THREE.Scene, shadows: boolean, shadowSize = 2048
   placeClouds();
 
   // light: cool sky fill, warm sun. The ground colour of the hemisphere tints shadows.
-  const hemi = new THREE.HemisphereLight('#dcecff', '#b9b08f', 1.35);
+  const hemi = new THREE.HemisphereLight('#d6e8ff', '#b3a98a', 1.18);
   scene.add(hemi);
-  const sun = new THREE.DirectionalLight('#fff0d2', 2.6);
+  const sun = new THREE.DirectionalLight('#ffedc8', 2.95);
   sun.castShadow = shadows;
   if (shadows) {
     sun.shadow.mapSize.set(shadowSize, shadowSize);

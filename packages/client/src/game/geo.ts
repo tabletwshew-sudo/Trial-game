@@ -39,7 +39,10 @@ export class GeoBuilder {
   private pos: number[] = [];
   private nor: number[] = [];
   private col: number[] = [];
+  private srf: number[] = [];
   private c = new THREE.Color();
+  /** Surface pattern for what is added next (see surface.ts: siding, brick, shingles...). */
+  surf = 0;
 
   /**
    * Fake ambient occlusion: when set, the sides of things get darker toward `base` (the ground),
@@ -52,6 +55,7 @@ export class GeoBuilder {
     let f = 1;
     if (this.ao && n[1] < 0.7) { const t = Math.min(1, Math.max(0, (p[1] - this.ao.base) / this.ao.h)); f = 1 - this.ao.k * (1 - t * t * (3 - 2 * t)); }
     this.col.push(this.c.r * f, this.c.g * f, this.c.b * f);
+    this.srf.push(this.surf);
   }
 
   /** Triangle; flipped if needed so its normal agrees with `hint`. */
@@ -100,6 +104,7 @@ export class GeoBuilder {
     g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(this.pos), 3));
     g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(this.nor), 3));
     g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(this.col), 3));
+    if (this.srf.some((v) => v !== 0)) g.setAttribute('surf', new THREE.BufferAttribute(new Float32Array(this.srf), 1));
     g.computeBoundingSphere();
     return g;
   }

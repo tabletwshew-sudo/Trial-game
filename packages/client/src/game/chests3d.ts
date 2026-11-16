@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { Effects } from './effects';
 import { CHEST_KIND, SUPPLY_FALL, type ChestView } from '@dropzone/shared';
 import { outlineMaterial, softRamp } from '../lobby/toon';
 import { mat4, mergeColored, type Piece } from './geo';
@@ -65,13 +66,10 @@ export class ChestRenderer {
     g.fillStyle = grad; g.fillRect(0, 0, 64, 64);
     return new THREE.CanvasTexture(cv);
   })();
-  private sparkGeo = new THREE.OctahedronGeometry(0.05, 0);
-  private sparks: { m: THREE.Mesh; v: THREE.Vector3; life: number }[] = [];
-  private smoke: { m: THREE.Mesh; v: THREE.Vector3; life: number }[] = [];
-  private smokeGeo = new THREE.IcosahedronGeometry(0.6, 1);
   private timer = 0;
 
-  constructor(private scene: THREE.Scene) {}
+  /** Sparkles and smoke go through the shared effect pools (one draw call, no new materials). */
+  constructor(private scene: THREE.Scene, private fx: Effects) {}
 
   set(list: ChestView[]) { for (const v of this.views.values()) this.scene.remove(v.root); this.views.clear(); this.chests.clear(); for (const c of list) this.chests.set(c.id, c); }
   add(list: ChestView[]) { for (const c of list) this.chests.set(c.id, c); }
@@ -117,12 +115,7 @@ export class ChestRenderer {
   }
 
   private burst(at: THREE.Vector3, n: number) {
-    for (let i = 0; i < n; i++) {
-      const m = new THREE.Mesh(this.sparkGeo, new THREE.MeshBasicMaterial({ color: i % 3 ? '#ffd23f' : '#ffffff', transparent: true }));
-      m.position.copy(at).add(new THREE.Vector3(0, 0.5, 0));
-      this.scene.add(m);
-      this.sparks.push({ m, v: new THREE.Vector3((Math.random() - 0.5) * 4, 2 + Math.random() * 4, (Math.random() - 0.5) * 4), life: 0.9 });
-    }
+    for (let i = 0; i < n; i++) this.fx.spark(at.x, at.y + 0.5, at.z, (Math.random() - 0.5) * 4, 2 + Math.random() * 4, (Math.random() - 0.5) * 4, i % 3 ? '#ffd23f' : '#ffffff', 0.06, 0.9, 6);
   }
 
   update(dt: number, t: number, cam: THREE.Vector3, serverNow: number) {
@@ -145,8 +138,9 @@ export class ChestRenderer {
         const falling = y > c.y + 0.01;
         if (v.balloon) v.balloon.visible = falling;
         v.root.rotation.z = falling ? Math.sin(t * 1.4 + id) * 0.06 : 0;
-        if (!falling && !v.landed) { v.landed = true; for (let i = 0; i < 14; i++) this.puff(v.root.position, '#9fd3ff'); }
-        if (v.landed && !c.open && Math.random() < dt * 6) this.puff(v.root.position.clone().add(new THREE.Vector3(0.9, 0.2, 0.9)), '#7fd1ff', true);
+        const p = v.root.position;
+        if (!falling && !v.landed) { v.landed = true; for (let i = 0; i < 14; i++) this.fx.smokePuff(p.x, p.y, p.z, (Math.random() - 0.5) * 6, Math.random() * 1.5, (Math.random() - 0.5) * 6, '#9fd3ff', 0.6, 3, 0.6); }
+        if (v.landed && !c.open && Math.random() < dt * 6) this.fx.smokePuff(p.x + 0.9, p.y + 0.2, p.z + 0.9, 0.3, 3.2, 0.2, '#7fd1ff', 0.6, 3, 0.6);
       }
       const glow = v.root.getObjectByName('glow') as THREE.Sprite | undefined;
       if (glow) (glow.material as THREE.SpriteMaterial).opacity = 0.65 + Math.sin(t * 3 + id) * 0.2;
@@ -155,10 +149,8 @@ export class ChestRenderer {
         v.sparkT -= dt;
         if (v.sparkT <= 0) {
           v.sparkT = 0.12;
-          const m = new THREE.Mesh(this.sparkGeo, new THREE.MeshBasicMaterial({ color: '#ffe8a3', transparent: true }));
-          m.position.copy(v.root.position).add(new THREE.Vector3((Math.random() - 0.5) * 0.9, 0.3, (Math.random() - 0.5) * 0.6));
-          this.scene.add(m);
-          this.sparks.push({ m, v: new THREE.Vector3(0, 0.8 + Math.random() * 0.6, 0), life: 1.2 });
+          const p = v.root.position;
+          this.fx.spark(p.x + (Math.random() - 0.5) * 0.9, p.y + 0.3, p.z + (Math.random() - 0.5) * 0.6, 0, 0.8 + Math.random() * 0.6, 0, '#ffe8a3', 0.045, 1.2, 1.5);
         }
       }
       // opening: lid swings back, then the whole chest shrinks away
@@ -169,17 +161,6 @@ export class ChestRenderer {
         if (v.opening > 1.6) { this.scene.remove(v.root); this.views.delete(id); }
       }
     }
-    for (const s of this.sparks) { s.life -= dt; s.m.position.addScaledVector(s.v, dt); s.v.y -= dt * 1.5; s.m.rotation.y += dt * 6; (s.m.material as THREE.MeshBasicMaterial).opacity = Math.max(0, s.life); }
-    for (let i = this.sparks.length - 1; i >= 0; i--) if (this.sparks[i].life <= 0) { this.scene.remove(this.sparks[i].m); (this.sparks[i].m.material as THREE.Material).dispose(); this.sparks.splice(i, 1); }
-    for (const s of this.smoke) { s.life -= dt; s.m.position.addScaledVector(s.v, dt); s.m.scale.multiplyScalar(1 + dt * 0.6); (s.m.material as THREE.MeshBasicMaterial).opacity = Math.max(0, s.life / 3) * 0.7; }
-    for (let i = this.smoke.length - 1; i >= 0; i--) if (this.smoke[i].life <= 0) { this.scene.remove(this.smoke[i].m); (this.smoke[i].m.material as THREE.Material).dispose(); this.smoke.splice(i, 1); }
-  }
-
-  private puff(at: THREE.Vector3, color: string, rising = false) {
-    const m = new THREE.Mesh(this.smokeGeo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.7, depthWrite: false }));
-    m.position.copy(at);
-    this.scene.add(m);
-    this.smoke.push({ m, v: rising ? new THREE.Vector3(0.3, 3.2, 0.2) : new THREE.Vector3((Math.random() - 0.5) * 6, Math.random() * 1.5, (Math.random() - 0.5) * 6), life: 3 });
   }
 
   /** The chest an E press would open (mirrors the server's choice). */

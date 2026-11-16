@@ -40,6 +40,8 @@ export class StormView {
           float d = length(vWorld.xz - cameraPosition.xz);
           float far = mix(1.0, 0.18, smoothstep(120.0, 1100.0, d));
           gl_FragColor = vec4(col, (0.42 + bands * 0.25) * edge * far);
+ #include <tonemapping_fragment>
+ #include <colorspace_fragment>
         }`,
     });
     this.mesh = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 600, 128, 1, true).translate(0, 250, 0), this.mat);

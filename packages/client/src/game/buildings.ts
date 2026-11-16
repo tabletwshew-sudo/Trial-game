@@ -2,13 +2,14 @@ import * as THREE from 'three';
 import { ROOF_FLAT, ROOF_GABLE_X, SK, hash2, lerp, type Box, type Furniture, type Layout, type PoiKind, type Solid, type World } from '@dropzone/shared';
 import { softRamp } from '../lobby/toon';
 import { GeoBuilder } from './geo';
+import { SURF, withGlass, withSurfaces } from './surface';
 
 /**
  * Buildings drawn from the same solids the game collides with, so what you see is exactly
  * what blocks you: outside walls in the building's paint, wallpaper inside, wooden or tiled
  * floors, stairs, furniture, windows on both sides, door frames with open doors, porch steps.
  */
-export const buildingMat = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: softRamp, side: THREE.DoubleSide });
+export const buildingMat = withSurfaces(new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: softRamp, side: THREE.DoubleSide }));
 /**
  * Inside surfaces: lit like the outside, plus a soft fill (part of their own colour as
  * emissive) so rooms read clearly even when the sun can't reach in.
@@ -19,11 +20,11 @@ export function fillLitMaterial(fill: number) {
     sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>\n totalEmissiveRadiance += diffuseColor.rgb * ${fill.toFixed(2)};`);
   };
   m.customProgramCacheKey = () => `fill${fill}`;
-  return m;
+  return withSurfaces(m);
 }
 const interiorMat = fillLitMaterial(0.32);
 /** Glass, lamp shades and crystals: drawn unlit so they glow a little. */
-const glowMat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
+const glowMat = withGlass(new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide }));
 
 const WALLS: Record<PoiKind, string[]> = {
   city: ['#e8dcc4', '#c96f4a', '#9fb7c9', '#d9a441', '#b5c99a', '#cfcfd6', '#e07a5f'],
@@ -51,11 +52,24 @@ const shade = (hex: string, k: number) => '#' + new THREE.Color(hex).multiplySca
 const FACE_SLOT = [2, 0, 3, 1];
 const FACE_DIR: [number, number][] = [[0, 1], [1, 0], [0, -1], [-1, 0]];
 
-interface Paint { wall: string; trim: string; roof: string; inside: string; floor: string; ceiling: string }
+interface Paint { wall: string; trim: string; roof: string; inside: string; floor: string; ceiling: string; wallSurf: number; floorSurf: number }
 function paintFor(b: Box, L: Layout): Paint {
   const pick = <T,>(arr: T[], salt: number) => arr[(b.style >> salt) % arr.length];
   const wall = pick(WALLS[b.kind], 0);
-  return { wall, trim: shade(wall, 0.72), roof: pick(ROOFS[b.kind], 3), inside: pick(INTERIOR, 5), floor: pick(FLOORS[L.type] ?? FLOORS.house, 7), ceiling: '#f7f3ea' };
+  return { wall, trim: shade(wall, 0.72), roof: pick(ROOFS[b.kind], 3), inside: pick(INTERIOR, 5), floor: pick(FLOORS[L.type] ?? FLOORS.house, 7), ceiling: '#f7f3ea', wallSurf: wallSurface(b), floorSurf: L.type === 'house' ? SURF.planks : L.type === 'hall' ? SURF.plaster : SURF.tiles };
+}
+/** What the outside walls are made of, by place and building. */
+function wallSurface(b: Box): number {
+  const v = (b.style >> 2) % 4;
+  switch (b.kind) {
+    case 'city': return v < 2 ? SURF.brick : SURF.plaster;
+    case 'town': return v === 0 ? SURF.brick : v === 1 ? SURF.plaster : SURF.siding;
+    case 'farm': case 'harbor': return SURF.siding;
+    case 'camp': return SURF.logs;
+    case 'industrial': case 'quarry': return v < 2 ? SURF.metal : SURF.brick;
+    case 'resort': case 'station': return SURF.plaster;
+    default: return SURF.plaster;
+  }
 }
 
 function addSolidOutline(g: GeoBuilder, gi: GeoBuilder, o: Solid, p: Paint, L: Layout) {
@@ -63,11 +77,13 @@ function addSolidOutline(g: GeoBuilder, gi: GeoBuilder, o: Solid, p: Paint, L: L
   switch (o.k) {
     case SK.Found: {
       const plinth = shade(p.wall, 0.62);
+      g.surf = SURF.plaster; gi.surf = p.floorSurf;
       g.boxFaces(x0 - 0.06, y0, z0 - 0.06, x1 + 0.06, y1, z1 + 0.06, [plinth, plinth, plinth, plinth, null, null]);
       gi.boxFaces(x0, y0, z0, x1, y1, z1, [null, null, null, null, p.floor, null]);
       break;
     }
     case SK.Wall: {
+      g.surf = p.wallSurf; gi.surf = SURF.wallpaper;
       const c: (string | null)[] = Array(6).fill(o.inner ? shade(p.inside, 0.93) : p.inside);
       c[4] = shade(p.inside, 0.85); c[5] = null;
       if (!o.inner && o.face !== undefined) {
@@ -82,24 +98,28 @@ function addSolidOutline(g: GeoBuilder, gi: GeoBuilder, o: Solid, p: Paint, L: L
         const [fx, fz] = FACE_DIR[o.face], e = 0.012;
         const bx0 = fx > 0 ? x1 + e : fx < 0 ? x0 - e : x0, bx1 = fx > 0 ? x1 + e : fx < 0 ? x0 - e : x1;
         const bz0 = fz > 0 ? z1 + e : fz < 0 ? z0 - e : z0, bz1 = fz > 0 ? z1 + e : fz < 0 ? z0 - e : z1;
+        g.surf = SURF.plaster;
         g.quad([bx0, y0, bz0], [bx1, y0, bz1], [bx1, y0 + 0.5, bz1], [bx0, y0 + 0.5, bz0], shade(p.wall, 0.8), [fx, 0, fz]);
       }
       break;
     }
-    case SK.Floor: gi.boxFaces(x0, y0, z0, x1, y1, z1, [p.inside, p.inside, p.inside, p.inside, p.floor, p.ceiling]); break;
+    case SK.Floor: gi.surf = p.floorSurf; gi.boxFaces(x0, y0, z0, x1, y1, z1, [p.inside, p.inside, p.inside, p.inside, p.floor, p.ceiling]); break;
     case SK.Ceil:
+      g.surf = SURF.gravel; gi.surf = SURF.plain;
       g.boxFaces(x0, y0, z0, x1, y1, z1, [null, null, null, null, L.b.roof === ROOF_FLAT || L.access < L.b.y1 - L.b.fy - 0.01 ? shade(p.roof, 1.05) : null, null]);
       gi.boxFaces(x0, y0, z0, x1, y1, z1, [null, null, null, null, null, p.ceiling]);
       break;
-    case SK.Block: g.boxFaces(x0, y0, z0, x1, y1, z1, [p.wall, p.wall, p.wall, p.wall, L.b.roof === ROOF_FLAT ? shade(p.roof, 1.05) : null, null]); break;
-    case SK.Stair: gi.boxFaces(x0, y0, z0, x1, y1, z1, [shade(p.floor, 0.8), shade(p.floor, 0.8), shade(p.floor, 0.8), shade(p.floor, 0.8), p.floor, null]); break;
-    case SK.Step: g.boxFaces(x0, y0, z0, x1, y1, z1, ['#b8b2a6', '#b8b2a6', '#b8b2a6', '#b8b2a6', '#cfc9bd', null]); break;
+    case SK.Block: g.surf = p.wallSurf; g.boxFaces(x0, y0, z0, x1, y1, z1, [p.wall, p.wall, p.wall, p.wall, L.b.roof === ROOF_FLAT ? shade(p.roof, 1.05) : null, null]); break;
+    case SK.Stair: gi.surf = p.floorSurf === SURF.planks ? SURF.planks : SURF.plaster; gi.boxFaces(x0, y0, z0, x1, y1, z1, [shade(p.floor, 0.8), shade(p.floor, 0.8), shade(p.floor, 0.8), shade(p.floor, 0.8), p.floor, null]); break;
+    case SK.Step: g.surf = SURF.plaster; g.boxFaces(x0, y0, z0, x1, y1, z1, ['#b8b2a6', '#b8b2a6', '#b8b2a6', '#b8b2a6', '#cfc9bd', null]); break;
   }
+  g.surf = gi.surf = SURF.plain;
 }
 
 function addRoof(g: GeoBuilder, b: Box, p: Paint) {
   const { x0, x1, z0, z1, y1 } = b;
   const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
+  g.surf = SURF.plaster;
   if (b.roof === ROOF_FLAT) {
     const pw = 0.3, ph = b.kind === 'city' ? 0.9 : 0.45;
     g.box(x0 - 0.25, y1, z0 - 0.25, x1 + 0.25, y1 + ph, z0 - 0.25 + pw, p.roof);
@@ -120,13 +140,17 @@ function addRoof(g: GeoBuilder, b: Box, p: Paint) {
   const half = alongX ? (z1 - z0) / 2 : (x1 - x0) / 2, slope = b.roofH / half, ye = y1 - o * slope, yr = y1 + b.roofH;
   const P = (a: number, y: number, c: number): [number, number, number] => (alongX ? [a, y, c] : [c, y, a]);
   const a0 = alongX ? x0 : z0, a1 = alongX ? x1 : z1, c0 = alongX ? z0 : x0, c1 = alongX ? z1 : x1, cc = (c0 + c1) / 2;
+  g.surf = b.kind === 'industrial' || b.kind === 'farm' && (b.style & 2) ? SURF.metal : SURF.shingles;
   g.quad(P(a0 - o, ye, c1 + o), P(a1 + o, ye, c1 + o), P(a1 + o, yr, cc), P(a0 - o, yr, cc), p.roof, [0, 1, 0]);
   g.quad(P(a0 - o, ye, c0 - o), P(a1 + o, ye, c0 - o), P(a1 + o, yr, cc), P(a0 - o, yr, cc), shade(p.roof, 0.92), [0, 1, 0]);
+  g.surf = SURF.plain;
   // underside (seen from the attic-less interior) and gable ends
   g.quad(P(a0 - o, ye - 0.05, c1 + o), P(a1 + o, ye - 0.05, c1 + o), P(a1 + o, yr - 0.05, cc), P(a0 - o, yr - 0.05, cc), shade(p.roof, 0.6), [0, -1, 0]);
   g.quad(P(a0 - o, ye - 0.05, c0 - o), P(a1 + o, ye - 0.05, c0 - o), P(a1 + o, yr - 0.05, cc), P(a0 - o, yr - 0.05, cc), shade(p.roof, 0.6), [0, -1, 0]);
+  g.surf = p.wallSurf;
   g.tri(P(a0, y1, c0), P(a0, y1, c1), P(a0, yr, cc), p.wall, alongX ? [-1, 0, 0] : [0, 0, -1]);
   g.tri(P(a1, y1, c0), P(a1, y1, c1), P(a1, yr, cc), p.wall, alongX ? [1, 0, 0] : [0, 0, 1]);
+  g.surf = SURF.plain;
   g.box(...(alongX ? [x0 - o, yr - 0.08, cz - 0.18, x1 + o, yr + 0.14, cz + 0.18] : [cx - 0.18, yr - 0.08, z0 - o, cx + 0.18, yr + 0.14, z1 + o]) as [number, number, number, number, number, number], shade(p.roof, 0.75));
   if ((b.kind === 'town' || b.kind === 'camp' || b.kind === 'resort') && (b.style & 1)) {
     const [px, , pz] = P(lerp(a0, a1, 0.72), 0, cc + half * 0.45);
@@ -289,6 +313,7 @@ export function buildBuildingMeshes(w: World, group: THREE.Group) {
         }
       }
       addRoof(g, b, p);
+      g.surf = SURF.plain;
       addDoors(g, gi, L, p);
       L.furniture.forEach((f, k) => addFurniture(gi, glass, f, p, (b.style >> 3) + k));
       // ceiling lamps in each room
@@ -319,18 +344,22 @@ function addContainerOrSilo(g: GeoBuilder, b: Box) {
   const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
   if (b.shape === 2) {
     const wall = pick(WALLS[b.kind], 0), r = (x1 - x0) / 2;
+    g.surf = SURF.metal;
     g.cylinder(cx, y0, cz, r, y1, wall, 12, 1.6, shade(wall, 0.8));
     for (let k = 1; k < 4; k++) g.cylinder(cx, lerp(fy, y1, k / 4) - 0.12, cz, r + 0.06, lerp(fy, y1, k / 4) + 0.12, shade(wall, 0.7), 12);
     // a ladder up the side
     g.box(cx + r - 0.02, fy, cz - 0.3, cx + r + 0.08, y1, cz - 0.24, '#555'); g.box(cx + r - 0.02, fy, cz + 0.24, cx + r + 0.08, y1, cz + 0.3, '#555');
     for (let yy = fy + 0.3; yy < y1; yy += 0.4) g.box(cx + r, yy, cz - 0.27, cx + r + 0.06, yy + 0.04, cz + 0.27, '#666');
+    g.surf = SURF.plain;
     return;
   }
   const col = pick(CONTAINER, 0);
+  g.surf = SURF.metal;
   g.box(x0, y0, z0, x1, y1, z1, col);
   const longX = x1 - x0 > z1 - z0, ribs = 7;
   for (let k = 1; k < ribs; k++) {
     if (longX) { const x = lerp(x0, x1, k / ribs); g.box(x - 0.06, fy + 0.15, z0 - 0.04, x + 0.06, y1 - 0.15, z1 + 0.04, shade(col, 0.82)); }
     else { const z = lerp(z0, z1, k / ribs); g.box(x0 - 0.04, fy + 0.15, z - 0.06, x1 + 0.04, y1 - 0.15, z + 0.06, shade(col, 0.82)); }
   }
+  g.surf = SURF.plain;
 }
