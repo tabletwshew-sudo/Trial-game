@@ -134,9 +134,14 @@ export const BODY_R = 0.42, BODY_H = 1.55, HEAD_R = 0.27, HEAD_Y = 1.78;
 export const KNOCKED_H = 0.75;
 
 /** Ray vs a vertical capsule-ish body (cylinder) and a head sphere. Returns distance and whether it was the head. */
-export function rayPlayer(o: Vec3, d: Vec3, px: number, py: number, pz: number, maxT: number, knocked = false): { t: number; head: boolean } | null {
+/** Hitbox poses: standing, crouched/sliding (shorter), knocked (on the ground). */
+export const POSE = { Stand: 0, Low: 1, Knocked: 2 } as const;
+export const LOW_HEAD_Y = 1.22, LOW_BODY_H = 1.02;
+
+export function rayPlayer(o: Vec3, d: Vec3, px: number, py: number, pz: number, maxT: number, pose: boolean | number = POSE.Stand): { t: number; head: boolean } | null {
   let best: { t: number; head: boolean } | null = null;
-  const hy = knocked ? 0.55 : HEAD_Y;
+  const knocked = pose === true || pose === POSE.Knocked, low = pose === POSE.Low;
+  const hy = knocked ? 0.55 : low ? LOW_HEAD_Y : HEAD_Y;
   // head sphere (done first so a ray that hits both counts as the head only when the head is nearer)
   {
     const cx = o.x - px, cy = o.y - (py + hy), cz = o.z - pz;
@@ -145,7 +150,7 @@ export function rayPlayer(o: Vec3, d: Vec3, px: number, py: number, pz: number, 
     if (disc >= 0) { const t = -b - Math.sqrt(disc); if (t >= 0 && t < maxT) best = { t, head: true }; }
   }
   // body cylinder
-  const h = knocked ? KNOCKED_H * 0.6 : BODY_H;
+  const h = knocked ? KNOCKED_H * 0.6 : low ? LOW_BODY_H : BODY_H;
   const ox = o.x - px, oz = o.z - pz;
   const a = d.x * d.x + d.z * d.z;
   if (a > 1e-9) {

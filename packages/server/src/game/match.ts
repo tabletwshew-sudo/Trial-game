@@ -1,7 +1,7 @@
 import {
   ACT, AMMO_ITEM, CAR, CHEST_KIND, SUPPLY_FALL, RECALL, ITEM, EF_EMOTE_SHIFT, makeStormPlan, stormAt, inStorm, consumableDef, ENT_BYTES, EF, ITEMS, K, MAP, PM, SIM_DT, SIM_HZ, SPAWN_ISLAND, TEAM_SIZE,
   addToInventory, applyDamage, blastDamage, busPos, decodeInputs, emptySlot, encodeEnt, encodeSnapshot, falloff, getWorld,
-  makeRoute, mulberry32, newPlayerState, rayPlayer, raycastWorld, seatWorld, stepCar, stepPlayer, stepProjectile, surfaceAt, terrainAt,
+  MV, POSE, isLow, makeRoute, resetMove, mulberry32, newPlayerState, rayPlayer, raycastWorld, seatWorld, stepCar, stepPlayer, stepProjectile, surfaceAt, terrainAt,
   weaponDamage, weaponDef, throwableDef, collideBoxes,
   type BusRoute, type CarBody, type FeedCause, type GameEvent, type GameInit, type GamePhase, type InputCmd, type LootView,
   type ChestView, type MatchStats, type StormPlan, type PlayerState, type Projectile, type ServerMsg, type ShotEvent, type SimEvents, type ThrowEvent, type Vec3, type VehSnap, type World,
@@ -57,6 +57,9 @@ const EMPTY_TIMEOUT_MS = 45_000;
 const REVIVE_S = 7;
 const INTEREST = 500;
 const HISTORY = 14; // ticks of positions kept for lag compensation (~460 ms)
+const STARVE_TICKS = 15; // ~500 ms without input before the server moves you itself
+const HS = 5; // history stride: x, y, z, mode, hitbox pose
+const poseOf = (s: PlayerState) => (s.mode === PM.Knocked ? POSE.Knocked : isLow(s) ? POSE.Low : POSE.Stand);
 const MAX_REWIND_MS = 300;
 
 export class MatchInstance {
@@ -161,7 +164,7 @@ export class MatchInstance {
     }
     s.y = surfaceAt(this.world, s.x, s.z, 100);
     s.yaw = this.rnd() * Math.PI * 2;
-    s.mode = PM.Walk; s.grounded = true; s.vx = s.vy = s.vz = 0;
+    s.mode = PM.Walk; s.grounded = true; s.vx = s.vy = s.vz = 0; resetMove(s);
     s.hp = 100; s.shield = 0; s.knock = 0; s.act = ACT.None;
     this.resetInventory(s);
     // warm-up loadout: a random gun with ammo
@@ -286,23 +289,23 @@ export class MatchInstance {
 
   // ------------------------------------------------------------ lag compensation
   private record() {
-    const pos = new Float32Array(this.players.length * 4);
-    this.players.forEach((p, i) => { pos[i * 4] = p.s.x; pos[i * 4 + 1] = p.s.y; pos[i * 4 + 2] = p.s.z; pos[i * 4 + 3] = p.s.mode; });
+    const pos = new Float32Array(this.players.length * HS);
+    this.players.forEach((p, i) => { const o = i * HS; pos[o] = p.s.x; pos[o + 1] = p.s.y; pos[o + 2] = p.s.z; pos[o + 3] = p.s.mode; pos[o + 4] = poseOf(p.s); });
     this.hist.push({ t: this.now, pos });
     if (this.hist.length > HISTORY) this.hist.shift();
   }
 
   /** Where player i was at server time t (interpolated between recorded ticks). */
-  private posAt(i: number, t: number): { x: number; y: number; z: number; mode: number } {
+  private posAt(i: number, t: number): { x: number; y: number; z: number; mode: number; pose: number } {
     const s = this.players[i].s;
     const h = this.hist;
-    if (!h.length || t >= h[h.length - 1].t) return { x: s.x, y: s.y, z: s.z, mode: s.mode };
+    if (!h.length || t >= h[h.length - 1].t) return { x: s.x, y: s.y, z: s.z, mode: s.mode, pose: poseOf(s) };
     let b = h.length - 1;
     while (b > 0 && h[b - 1].t > t) b--;
     const B = h[b], A = h[Math.max(0, b - 1)];
     const k = B.t > A.t ? Math.max(0, Math.min(1, (t - A.t) / (B.t - A.t))) : 1;
-    const o = i * 4;
-    return { x: A.pos[o] + (B.pos[o] - A.pos[o]) * k, y: A.pos[o + 1] + (B.pos[o + 1] - A.pos[o + 1]) * k, z: A.pos[o + 2] + (B.pos[o + 2] - A.pos[o + 2]) * k, mode: B.pos[o + 3] };
+    const o = i * HS;
+    return { x: A.pos[o] + (B.pos[o] - A.pos[o]) * k, y: A.pos[o + 1] + (B.pos[o + 1] - A.pos[o + 1]) * k, z: A.pos[o + 2] + (B.pos[o + 2] - A.pos[o + 2]) * k, mode: B.pos[o + 3], pose: (k < 0.5 ? A : B).pos[o + 4] };
   }
 
   // ------------------------------------------------------------ shooting
@@ -325,19 +328,19 @@ export class MatchInstance {
     const ends: number[] = [];
     const base = weaponDamage(def, e.rarity);
     // candidate players: anyone within range of the line (cheap pre-filter)
-    const cands: { q: P; x: number; y: number; z: number; knocked: boolean }[] = [];
+    const cands: { q: P; x: number; y: number; z: number; pose: number }[] = [];
     for (const q of this.players) {
       if (!this.hittable(q, p)) continue;
       const at = this.posAt(q.idx, t);
       if ((at.x - o.x) ** 2 + (at.z - o.z) ** 2 > (def.range + 3) ** 2) continue;
-      cands.push({ q, x: at.x, y: at.y, z: at.z, knocked: q.s.mode === PM.Knocked });
+      cands.push({ q, x: at.x, y: at.y, z: at.z, pose: q.s.mode === PM.Knocked ? POSE.Knocked : at.pose });
     }
     for (const d of e.dirs) {
       const wh = raycastWorld(this.world, o, d, def.range);
       let bestT = wh.t, kind = wh.kind === 'none' ? 5 : wh.kind === 'water' ? 3 : 0;
       let victim: (typeof cands)[number] | null = null, head = false, car: Veh | null = null;
       for (const c of cands) {
-        const hit = rayPlayer(o, d, c.x, c.y, c.z, bestT, c.knocked);
+        const hit = rayPlayer(o, d, c.x, c.y, c.z, bestT, c.pose);
         if (hit) { bestT = hit.t; victim = c; head = hit.head; }
       }
       for (const v of this.vehicles) {
@@ -559,7 +562,7 @@ export class MatchInstance {
   private interact(p: P) {
     const s = p.s;
     if (s.mode === PM.Drive || s.mode === PM.Ride) return this.exitVehicle(p);
-    if (s.mode !== PM.Walk || s.act !== ACT.None) return;
+    if (s.mode !== PM.Walk || s.act !== ACT.None || s.mv === MV.Climb || s.mv === MV.Mantle) return;
     // 1) revive a knocked teammate
     const downed = this.mates(p).find((q) => q.alive && q.s.mode === PM.Knocked && Math.hypot(q.s.x - s.x, q.s.z - s.z) < 2.8 && Math.abs(q.s.y - s.y) < 2);
     if (downed && !this.players.some((r) => r.revive?.target === downed.idx)) {
@@ -841,7 +844,7 @@ export class MatchInstance {
     const s = p.s, post = p.post!;
     this.resetInventory(s);
     s.x = post.x; s.z = post.z; s.y = surfaceAt(this.world, s.x, s.z, 500);
-    s.mode = PM.Walk; s.grounded = true; s.vx = s.vy = s.vz = 0; s.act = ACT.None;
+    s.mode = PM.Walk; s.grounded = true; s.vx = s.vy = s.vz = 0; s.act = ACT.None; resetMove(s);
     s.hp = 100; s.shield = p.npc === 'boss' ? 100 : 50; s.yaw = this.rnd() * 6.28;
     if (p.npc === 'boss') { addToInventory(s, ITEM.ar, 4, 1, 30); addToInventory(s, ITEM.pump, 4, 1, 5); }
     else addToInventory(s, this.rnd() < 0.5 ? ITEM.smg : ITEM.ar, 2, 1, 30);
@@ -976,8 +979,10 @@ export class MatchInstance {
       ran++;
     }
     if (ran) { p.starve = 0; return; }
-    // no input for a while (tab hidden, bad connection): keep physics moving with neutral input
-    if (++p.starve > 9 && p.s.mode !== PM.Bus) {
+    // no input for a while (tab hidden, bad connection): keep physics moving with neutral input.
+    // Half a second of grace first: school wifi often stalls for a few hundred ms, and stepping
+    // without the player's real inputs would snap them back when the packets arrive.
+    if (++p.starve > STARVE_TICKS && p.s.mode !== PM.Bus) {
       const held = p.s.keys;
       const idle: InputCmd = { keys: 0, yaw: p.s.yaw, pitch: p.s.pitch };
       this.runCmd(p, idle, this.now); this.runCmd(p, idle, this.now);
@@ -1078,7 +1083,7 @@ export class MatchInstance {
       if (!show) continue;
       const held = s.inv[s.slot];
       const flags = (s.grounded ? EF.GROUNDED : 0) | (s.keys & K.ADS ? EF.ADS : 0) | (s.keys & K.CROUCH ? EF.CROUCH : 0) | (s.use > 0 ? EF.USING : 0) | (s.reload > 0 ? EF.RELOADING : 0) | (s.keys & K.SPRINT && Math.hypot(s.vx, s.vz) > 6 ? EF.SPRINT : 0) | ((s.emote & 3) << EF_EMOTE_SHIFT);
-      encodeEnt({ idx: q.idx, x: s.x, y: s.y, z: s.z, yaw: s.mode === PM.Drive ? s.vh : s.yaw, pitch: s.pitch, mode: s.mode, flags, item: held?.id ?? 0, rarity: held?.r ?? 0 }, block, count * ENT_BYTES);
+      encodeEnt({ idx: q.idx, x: s.x, y: s.y, z: s.z, yaw: s.mode === PM.Drive ? s.vh : s.yaw, pitch: s.pitch, mode: s.mode, flags, item: held?.id ?? 0, rarity: held?.r ?? 0, mv: s.mv, mt: s.mt }, block, count * ENT_BYTES);
       count++;
     }
     const vehs: VehSnap[] = this.vehicles.filter((v) => !v.dead).map((v) => ({ id: v.id, x: v.x, y: v.y, z: v.z, vh: v.vh, vs: v.vs, hp: v.hp, driver: v.seats[0] >= 0 }));

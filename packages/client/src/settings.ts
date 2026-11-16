@@ -7,7 +7,7 @@ import { h } from './ui/dom';
  */
 export type Action = 'forward' | 'back' | 'left' | 'right' | 'jump' | 'sprint' | 'crouch' | 'reload' | 'interact' | 'map' | 'emote' | 'slot1' | 'slot2' | 'slot3' | 'slot4' | 'slot5';
 export const ACTION_LABELS: Record<Action, string> = {
-  forward: 'Move forward', back: 'Move back', left: 'Move left', right: 'Move right', jump: 'Jump / glider', sprint: 'Sprint', crouch: 'Crouch',
+  forward: 'Move forward', back: 'Move back', left: 'Move left', right: 'Move right', jump: 'Jump / glider', sprint: 'Sprint', crouch: 'Crouch / slide',
   reload: 'Reload', interact: 'Interact / pick up', map: 'Map', emote: 'Emote', slot1: 'Slot 1', slot2: 'Slot 2', slot3: 'Slot 3', slot4: 'Slot 4', slot5: 'Slot 5',
 };
 export const DEFAULT_KEYS: Record<Action, string> = {

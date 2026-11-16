@@ -123,7 +123,16 @@ export interface World {
   vaults: Vault[];
   /** Per match: vault doors that have been opened (use Object.create(world) to give each match its own). */
   openVaults?: Set<number>;
+  /** Climbable ladders, ziplines, spring pads. */
+  ladders: Ladder[];
+  zips: Zip[];
+  pads: { x: number; y: number; z: number }[];
 }
+
+/** Where you hang while climbing (x, z), from y0 to y1; n = outward from the wall; (tx, tz) = where you step off at the top. */
+export interface Ladder { x: number; z: number; y0: number; y1: number; nx: number; nz: number; tx: number; tz: number }
+/** A zipline cable from A to B (heights are the cable; you hang about 2 m below it). */
+export interface Zip { ax: number; ay: number; az: number; bx: number; by: number; bz: number; len: number }
 
 export interface Vault { id: number; x: number; z: number; y: number; face: number; door: { x: number; z: number }; post: { x: number; z: number }; chests: Spot[]; poi: number }
 
@@ -610,12 +619,12 @@ export function getWorld(seed: number = MAP.seed): World {
     main: genMain(seed, pois, river),
     spawn: genSpawn(seed),
     boxes: [], boxGrid: new Map(), roadGrid: buildRoadGrid(roads),
-    layouts: [], solids: [], solidGrid: new Map(), props: [], caves: [], outdoorChests: [], scatter: [], beacons: [], vaults: [],
+    layouts: [], solids: [], solidGrid: new Map(), props: [], caves: [], outdoorChests: [], scatter: [], beacons: [], vaults: [], ladders: [], zips: [], pads: [],
   };
   genBoxes(w);
   for (const b of w.boxes) w.layouts.push(genLayout(w, b, w.solids));
   const extra = genProps(w, w.solids);
-  w.props = extra.props; w.caves = extra.caves; w.beacons = extra.beacons; w.vaults = extra.vaults;
+  w.props = extra.props; w.caves = extra.caves; w.beacons = extra.beacons; w.vaults = extra.vaults; w.ladders = extra.ladders; w.zips = extra.zips; w.pads = extra.pads;
   w.outdoorChests = [...extra.extraChests, ...extra.caves.map((c) => c.chest)];
   w.scatter = genScatter(w, extra.excl);
   addScatterSolids(w);

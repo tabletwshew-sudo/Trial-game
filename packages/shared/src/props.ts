@@ -1,6 +1,6 @@
 import { hash2, mulberry32 } from './noise.js';
 import { SK, boxSolid, type Prop, type Solid, type Spot } from './structures.js';
-import { BRIDGE_Y, roadEdgeDist, terrainAt, type Poi, type Vault, type World } from './world.js';
+import { BRIDGE_Y, ROOF_FLAT, ROOF_GABLE_X, SPAWN_ISLAND, roadEdgeDist, terrainAt, type Ladder, type Poi, type Vault, type World, type Zip } from './world.js';
 
 /**
  * Outdoor details: street furniture, farm fences, camp tents, harbor docks, landmarks,
@@ -17,7 +17,7 @@ export interface Exclusion { x: number; z: number; r: number }
 const BOX_CELL = 32;
 const gridKey = (cx: number, cz: number) => (cx + 512) * 1024 + (cz + 512);
 
-export function genProps(w: World, solids: Solid[]): { props: Prop[]; caves: Cave[]; excl: Exclusion[]; extraChests: Spot[]; beacons: { x: number; y: number; z: number }[]; vaults: Vault[] } {
+export function genProps(w: World, solids: Solid[]): { props: Prop[]; caves: Cave[]; excl: Exclusion[]; extraChests: Spot[]; beacons: { x: number; y: number; z: number }[]; vaults: Vault[]; ladders: Ladder[]; zips: Zip[]; pads: { x: number; y: number; z: number }[] } {
   const props: Prop[] = [];
   const excl: Exclusion[] = [];
   const extraChests: Spot[] = [];
@@ -268,6 +268,110 @@ export function genProps(w: World, solids: Solid[]): { props: Prop[]; caves: Cav
     }
   }
 
+  // ---------------------------------------------------------------- ladders: silos, the lighthouse, halls and shops
+  const ladders: Ladder[] = [];
+  const FACE_N: [number, number][] = [[0, 1], [1, 0], [0, -1], [-1, 0]];
+  const ladderOn = (x0: number, z0: number, x1: number, z1: number, face: number, yTop: number, along: number) => {
+    const [nx, nz] = FACE_N[face];
+    // a point on that wall's outside face, `along` (0..1) of the way along it
+    const wx = nx > 0 ? x1 : nx < 0 ? x0 : x0 + (x1 - x0) * along, wz = nz > 0 ? z1 : nz < 0 ? z0 : z0 + (z1 - z0) * along;
+    const x = wx + nx * 0.45, z = wz + nz * 0.45, y0 = terrainAt(w, x, z);
+    if (y0 < 1 || roadEdgeDist(w, x, z) < 0.5 || yTop - y0 < 2.6) return;
+    ladders.push({ x, z, y0, y1: yTop, nx, nz, tx: wx - nx * 1.0, tz: wz - nz * 1.0 });
+    props.push({ t: 'ladder', x: wx + nx * 0.12, y: y0, z: wz + nz * 0.12, rot: Math.atan2(nx, nz), s: yTop - y0 });
+  };
+  w.boxes.forEach((b, i) => {
+    const L = w.layouts[i];
+    if (b.shape === 2) ladderOn(b.x0, b.z0, b.x1, b.z1, 1, b.y1, 0.5);
+    else if (L.type === 'hall' || L.type === 'shop') {
+      // put it under an eave (not a gable end), and not on the front wall with the door
+      const faces = b.roof === ROOF_FLAT ? [0, 1, 2, 3] : b.roof === ROOF_GABLE_X ? [0, 2] : [1, 3];
+      const face = faces.find((f) => f !== L.front && f !== (L.front + 2) % 4) ?? faces.find((f) => f !== L.front)!;
+      ladderOn(b.x0, b.z0, b.x1, b.z1, face, L.type === 'shop' ? b.fy + L.access : b.y1, 0.3);
+    }
+  });
+  for (const p of props.filter((q) => q.t === 'lighthouse')) ladderOn(p.x - 2.4, p.z - 2.4, p.x + 2.4, p.z + 2.4, 1, p.y + 22, 0.5);
+
+  // ---------------------------------------------------------------- ziplines across valleys
+  // Both ends hang low enough to grab from the ground (the cable is ZIP_END above the ground at
+  // each pole); the line has to clear the ground in between, so they end up between high spots.
+  const zips: Zip[] = [];
+  const ZIP_END = 3.6;
+  const sites: [number, number, number][] = [];
+  for (let t = 0; t < 900; t++) {
+    const x = (rnd() - 0.5) * 2000, z = (rnd() - 0.5) * 2000;
+    if (!clear(x, z, 4)) continue;
+    const g = ground(x, z);
+    // prefer high ground: compare to the ring around it
+    let ring = 0;
+    for (let k = 0; k < 8; k++) ring += ground(x + Math.cos(k * 0.785) * 40, z + Math.sin(k * 0.785) * 40);
+    if (g - ring / 8 > 2.5 && g > 6) sites.push([x, z, g]);
+  }
+  const cands: { ax: number; az: number; ay: number; bx: number; bz: number; by: number; len: number }[] = [];
+  for (let i = 0; i < sites.length; i++) for (let j = i + 1; j < sites.length; j++) {
+    const [ax, az, ga] = sites[i], [bx, bz, gb] = sites[j];
+    const hd = Math.hypot(bx - ax, bz - az);
+    if (hd < 110 || hd > 420) continue;
+    const ay = ga + ZIP_END, by = gb + ZIP_END;
+    if (Math.abs(ay - by) / hd > 0.25) continue;
+    let ok = true, mid = 0;
+    const n = Math.ceil(hd / 3);
+    for (let k = 1; k < n && ok; k++) {
+      const f = k / n, x = ax + (bx - ax) * f, z = az + (bz - az) * f, y = ay + (by - ay) * f;
+      const gap = y - Math.max(ground(x, z), 0), fromEnd = Math.min(f, 1 - f) * hd;
+      if (gap < (fromEnd < 5 ? 2.4 : 3.2) || nearBuilding(x, z, 1.5)) ok = false;
+      if (f > 0.3 && f < 0.7) mid = Math.max(mid, gap);
+    }
+    if (ok && mid > 8) cands.push({ ax, az, ay, bx, bz, by, len: Math.hypot(bx - ax, by - ay, bz - az) });
+  }
+  cands.sort((p, q) => q.len - p.len);
+  for (const c of cands) {
+    if (zips.length >= 5) break;
+    const far = (x: number, z: number) => zips.every((Z) => Math.hypot(Z.ax - x, Z.az - z) > 200 && Math.hypot(Z.bx - x, Z.bz - z) > 200);
+    if (!far(c.ax, c.az) || !far(c.bx, c.bz)) continue;
+    zips.push(c);
+    put('zippole', c.ax, c.az, Math.atan2(c.bx - c.ax, c.bz - c.az), ZIP_END + 0.9, { hx: 0.2, hz: 0.2, h: ZIP_END + 0.9 });
+    put('zippole', c.bx, c.bz, Math.atan2(c.ax - c.bx, c.az - c.bz), ZIP_END + 0.9, { hx: 0.2, hz: 0.2, h: ZIP_END + 0.9 });
+  }
+
+  // ---------------------------------------------------------------- spring pads
+  const pads: { x: number; y: number; z: number }[] = [];
+  for (const name of ['Brickwell', 'Northgate', 'Rustworks', 'Quarry Nine', 'Coral Cove', 'Summit Station', 'Mosshollow']) {
+    const p = w.pois.find((q) => q.name === name);
+    if (!p) continue;
+    for (let t = 0; t < 60; t++) {
+      const x = p.x + (rnd() - 0.5) * p.r * 1.2, z = p.z + (rnd() - 0.5) * p.r * 1.2;
+      if (!clear(x, z, 3)) continue;
+      const y = ground(x, z);
+      put('pad', x, z, 0, 1, { hx: 0.9, hz: 0.9, h: 0.15 });
+      pads.push({ x, y: y + 0.15, z });
+      break;
+    }
+  }
+
+  // ---------------------------------------------------------------- warm-up island: a little movement course
+  {
+    const X = SPAWN_ISLAND.x, Z = SPAWN_ISLAND.z;
+    // a lookout tower with a ladder, and a zipline from its roof back down across the island
+    const tx = X + 22, tz = Z - 22, tg = ground(tx, tz), tTop = tg + 6.5;
+    props.push({ t: 'ptower', x: tx, y: tg, z: tz, rot: 0, s: 1 });
+    solids.push(boxSolid(tx, tz, 2, 2, tg - 0.3, tTop, SK.Block));
+    excl.push({ x: tx, z: tz, r: 4.5 });
+    ladderOn(tx - 2, tz - 2, tx + 2, tz + 2, 0, tTop, 0.5);
+    const bx = X + 34, bz = Z + 28, by = ground(bx, bz) + 3.6, ay = tTop + 3.4;
+    zips.push({ ax: tx, ay, az: tz, bx, by, bz, len: Math.hypot(bx - tx, by - ay, bz - tz) });
+    solids.push(boxSolid(tx, tz, 0.2, 0.2, tTop, ay + 0.9, SK.Prop));
+    put('zippole', bx, bz, Math.atan2(tx - bx, tz - bz), 4.5, { hx: 0.2, hz: 0.2, h: 4.5 });
+    // a row of fences to vault, a crate to climb, a wall to mantle
+    for (const dz of [-30, -35, -40]) put('fence', X + 4, Z + dz, 0, 1, { hx: 1.5, hz: 0.08, h: 1.0 });
+    put('pblock', X - 12, Z - 26, 0, 1, { hx: 1.2, hz: 1.2, h: 1.5 });
+    put('pwall', X - 26, Z - 18, 0, 1, { hx: 2, hz: 0.25, h: 2.3 });
+    // and a spring pad
+    const px = X - 30, pz = Z + 10, py = ground(px, pz);
+    put('pad', px, pz, 0, 1, { hx: 0.9, hz: 0.9, h: 0.15 });
+    pads.push({ x: px, y: py + 0.15, z: pz });
+  }
+
   // ---------------------------------------------------------------- caves
   const caves: Cave[] = [];
   const candidates: [number, number, number][] = [[-660, -380, 0.6], [360, 640, 2.2], [700, -300, 1.2], [-470, 560, 4.0]];
@@ -345,7 +449,7 @@ export function genProps(w: World, solids: Solid[]): { props: Prop[]; caves: Cav
     excl.push({ x: c.x, z: c.z, r: half + 8 });
     caves.push(c);
   }
-  return { props, caves, excl, extraChests, beacons, vaults };
+  return { props, caves, excl, extraChests, beacons, vaults, ladders, zips, pads };
 }
 
 function genHarbor(w: World, p: Poi, put: (t: string, x: number, z: number, rot: number, s?: number, solid?: { hx: number; hz: number; h: number }, extra?: Partial<Prop>) => void, solids: Solid[], props: Prop[], excl: Exclusion[], extraChests: Spot[]) {

@@ -46,6 +46,17 @@ export function paintMap(w: World, colors: Float32Array): HTMLCanvasElement {
     c.fillStyle = '#4a4458'; c.fillRect(px(b.x0) - 0.6, px(b.z0) - 0.6, px(b.x1) - px(b.x0) + 1.2, px(b.z1) - px(b.z0) + 1.2);
     c.fillStyle = b.shape === 1 ? '#e9a15b' : '#efe6d8'; c.fillRect(px(b.x0), px(b.z0), px(b.x1) - px(b.x0), px(b.z1) - px(b.z0));
   }
+  // ziplines (dashed, with an end post at each end) and spring pads
+  c.lineCap = 'butt';
+  for (const Z of w.zips) {
+    for (const [col, wd] of [['#2b2d42', 3.4], ['#7cf2ff', 1.6]] as const) {
+      c.strokeStyle = col; c.lineWidth = wd; c.setLineDash(col === '#7cf2ff' ? [5, 4] : []);
+      c.beginPath(); c.moveTo(px(Z.ax), px(Z.az)); c.lineTo(px(Z.bx), px(Z.bz)); c.stroke();
+    }
+    c.setLineDash([]);
+    for (const [x, z] of [[Z.ax, Z.az], [Z.bx, Z.bz]]) { c.fillStyle = '#2b2d42'; c.beginPath(); c.arc(px(x), px(z), 3.2, 0, Math.PI * 2); c.fill(); c.fillStyle = '#ffb703'; c.beginPath(); c.arc(px(x), px(z), 1.9, 0, Math.PI * 2); c.fill(); }
+  }
+  for (const p of w.pads) { c.fillStyle = '#2b2d42'; c.beginPath(); c.arc(px(p.x), px(p.z), 3.4, 0, Math.PI * 2); c.fill(); c.fillStyle = '#38f8b8'; c.beginPath(); c.arc(px(p.x), px(p.z), 2.2, 0, Math.PI * 2); c.fill(); }
   return out;
 }
 

@@ -1,5 +1,5 @@
 import {
-  ITEMS, K, PM, SPAWN_ISLAND, aimOrigin, consumableDef, layoutAt, raycastWorld, routeParamNear, weaponDef,
+  ITEMS, K, MV, PM, SPAWN_ISLAND, aimOrigin, consumableDef, layoutAt, raycastWorld, routeParamNear, weaponDef,
   type BusRoute, type InputCmd, type Layout, type PlayerState, type StormState, type World,
 } from '@dropzone/shared';
 import type { LootStore } from './loot.js';
@@ -50,6 +50,9 @@ export interface BotBrain {
   stuckCheck: { x: number; z: number; at: number };
   /** Boss/guard NPCs defend a spot instead of roaming. */
   post?: { x: number; z: number };
+  /** Movement: ticks spent walking into something, and a slide in progress. */
+  blocked: number;
+  slideUntil: number;
 }
 
 export function newBrain(rnd: () => number): BotBrain {
@@ -61,6 +64,7 @@ export function newBrain(rnd: () => number): BotBrain {
     enemy: -1, enemySeenAt: 0, enemyFirstSeen: 0, lastScan: 0, lastPos: null, strafe: 1, strafeUntil: 0, heardFrom: null,
     aimYaw: 0, aimPitch: 0, errYaw: 0, errPitch: 0, errUntil: 0,
     lootId: -1, lootUntil: 0, ignoreLoot: new Set(), firePulse: false, stuckCheck: { x: 0, z: 0, at: 0 },
+    blocked: 0, slideUntil: 0,
   };
 }
 
@@ -236,6 +240,20 @@ function canSee(w: World, s: PlayerState, t: { x: number; y: number; z: number }
  * to use (E) - the match handles pickups/revives from USE like it does for humans.
  */
 export function botInput(s: PlayerState, b: BotBrain, bw: BotWorld, home: { x: number; z: number }, roam: number): InputCmd {
+  const cmd = decide(s, b, bw, home, roam);
+  if (s.mode !== PM.Walk || s.act) { b.blocked = 0; return cmd; }
+  const sp = Math.hypot(s.vx, s.vz);
+  // walking into something (a crate, fence, low wall)? jump: holding forward turns that into a mantle or vault
+  if ((cmd.keys & K.F) && s.grounded && s.mv === MV.None && sp < 1.5) {
+    if (++b.blocked > 8 && !(s.keys & K.JUMP)) { cmd.keys |= K.JUMP; b.blocked = 0; }
+  } else b.blocked = 0;
+  // sprinting somewhere (or rushing a fight): the odd slide, more often downhill
+  if (bw.now < b.slideUntil) { if (cmd.keys & K.F) cmd.keys |= K.CROUCH | K.SPRINT; }
+  else if ((cmd.keys & K.SPRINT) && s.grounded && sp > 7 && s.mv === MV.None && b.rnd() < 0.004 + b.skill * 0.006) b.slideUntil = bw.now + 500 + b.rnd() * 700;
+  return cmd;
+}
+
+function decide(s: PlayerState, b: BotBrain, bw: BotWorld, home: { x: number; z: number }, roam: number): InputCmd {
   const now = bw.now;
   const cmd: InputCmd = { keys: 0, yaw: s.yaw, pitch: 0 };
   if (s.mode === PM.Bus || s.mode === PM.Dead) return cmd;

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { SK, hash2, type Prop, type World } from '@dropzone/shared';
+import { SK, hash2, terrainAt, type Prop, type World } from '@dropzone/shared';
 import { softRamp } from '../lobby/toon';
 import { mat4, mergeColored, type Piece } from './geo';
 
@@ -141,11 +141,37 @@ function templates(): Record<string, (v: number) => Template> {
         { geo: B(5.6, 0.12, 0.12), color: '#fff2c4', matrix: mat4(0, 3.45, -2.4) },
       ],
     }),
+    // warm-up island movement course
+    ptower: () => {
+      const pieces: Piece[] = [
+        { geo: B(4, 6.5, 4), color: '#bdb6aa', matrix: mat4(0, 3.25, 0) },
+        { geo: B(4.12, 0.5, 4.12), color: '#3d405b', matrix: mat4(0, 6.3, 0) },
+        { geo: B(3.6, 0.04, 3.6), color: '#8d99ae', matrix: mat4(0, 6.52, 0) },
+        { geo: B(1.3, 2.2, 0.08), color: '#5c4033', matrix: mat4(0, 1.1, -2.02) },
+      ];
+      // hazard stripes round the top
+      for (let k = 0; k < 8; k++) for (const f of [0, 1, 2, 3]) {
+        const a = -1.75 + k * 0.5, x = f === 1 ? 2.07 : f === 3 ? -2.07 : a, z = f === 0 ? 2.07 : f === 2 ? -2.07 : a;
+        pieces.push({ geo: B(f % 2 ? 0.04 : 0.25, 0.5, f % 2 ? 0.25 : 0.04), color: '#ffb703', matrix: mat4(x, 6.3, z) });
+      }
+      for (const y of [2.2, 4.4]) for (const f of [-1, 1]) pieces.push({ geo: B(0.9, 0.5, 0.05), color: '#8fd0ea', matrix: mat4(f * 1.0, y + 0.8, -2.03) });
+      return { solid: pieces };
+    },
+    pblock: () => ({ solid: [
+      { geo: B(2.4, 1.5, 2.4), color: '#e9c46a', matrix: mat4(0, 0.75, 0) },
+      { geo: B(2.46, 0.14, 2.46), color: '#3d405b', matrix: mat4(0, 1.43, 0) }, { geo: B(2.46, 0.14, 2.46), color: '#3d405b', matrix: mat4(0, 0.07, 0) },
+      ...[-1, 1].map((f) => ({ geo: B(0.12, 1.2, 2.46), color: '#3d405b', matrix: mat4(f * 1.17, 0.75, 0) })),
+    ] }),
+    pwall: () => ({ solid: [
+      { geo: B(4, 2.3, 0.5), color: '#c8553d', matrix: mat4(0, 1.15, 0) },
+      { geo: B(4.1, 0.14, 0.6), color: '#d9d4c7', matrix: mat4(0, 2.33, 0) },
+      ...[-1.3, 0, 1.3].map((x) => ({ geo: B(0.06, 2.2, 0.52), color: '#a44a3f', matrix: mat4(x, 1.1, 0) })),
+    ] }),
     pole: () => ({ solid: [{ geo: CY(0.16, 0.12, 7.5, 7), color: '#7f5539', matrix: mat4(0, 3.75, 0) }, { geo: B(2.2, 0.12, 0.12), color: '#7f5539', matrix: mat4(0, 7.1, 0) }, ...[-0.9, 0, 0.9].map((x) => ({ geo: CY(0.05, 0.05, 0.18, 6), color: '#e9ecef', matrix: mat4(x, 7.25, 0) }))] }),
   };
 }
 
-const ANIMATED = new Set(['beacon', 'vault', 'windmill', 'fire', 'chimney', 'mast', 'lighthouse', 'boat', 'dock', 'sign', 'pole']);
+const ANIMATED = new Set(['beacon', 'vault', 'windmill', 'fire', 'chimney', 'mast', 'lighthouse', 'boat', 'dock', 'sign', 'pole', 'ladder', 'zippole', 'pad']);
 
 export interface PropsView {
   update(dt: number, t: number, cam: THREE.Vector3): void;
@@ -304,6 +330,67 @@ export function buildProps(w: World, scene: THREE.Group): PropsView {
     scene.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: '#2b2d42' })));
   }
 
+  // ------------------------------------------------ ladders: steel rails + rungs, with hoops above the roof edge
+  const ladderPieces: Piece[] = [];
+  for (const p of byType.get('ladder') ?? []) {
+    const h = p.s, top = h + 0.95, rot = mat4(p.x, p.y, p.z, 0, p.rot, 0);
+    const at = (x: number, y: number, z: number, geo: THREE.BufferGeometry, color: string) => ladderPieces.push({ geo, color, matrix: rot.clone().multiply(mat4(x, y, z)) });
+    for (const x of [-0.29, 0.29]) {
+      at(x, top / 2, 0.04, B(0.07, top, 0.07), '#5f6b7a');
+      // bolts holding it to the wall
+      for (let y = 1.2; y < h; y += 2.4) at(x, y, -0.06, B(0.05, 0.08, 0.14), DARK);
+    }
+    for (let y = 0.32; y < top - 0.1; y += 0.34) at(0, y, 0.04, B(0.56, 0.045, 0.06), y > h ? '#5f6b7a' : '#c2c9d1');
+    // grab hoops over the top
+    for (const x of [-0.29, 0.29]) at(x, top, -0.35, B(0.07, 0.07, 0.8), '#ffb703');
+    at(0, 0.02, 0.04, B(0.75, 0.04, 0.3), '#ffb703'); // a painted step at the bottom
+  }
+  if (ladderPieces.length) scene.add(mesh(ladderPieces));
+
+  // ------------------------------------------------ ziplines: poles, a steel cable, and glowing arrow signs
+  const zipPieces: Piece[] = [], zipGlow: Piece[] = [];
+  const cable = new THREE.Vector3(), up3 = new THREE.Vector3(0, 1, 0);
+  for (const Z of w.zips) {
+    cable.set(Z.bx - Z.ax, Z.by - Z.ay, Z.bz - Z.az);
+    const len = cable.length();
+    const qq = new THREE.Quaternion().setFromUnitVectors(up3, cable.clone().normalize());
+    const mid = new THREE.Matrix4().compose(new THREE.Vector3((Z.ax + Z.bx) / 2, (Z.ay + Z.by) / 2, (Z.az + Z.bz) / 2), qq, new THREE.Vector3(1, 1, 1));
+    zipPieces.push({ geo: CY(0.035, 0.035, len, 5), color: '#2b2d42', matrix: mid });
+    for (const [x, y, z, ox, oz] of [[Z.ax, Z.ay, Z.az, Z.bx, Z.bz], [Z.bx, Z.by, Z.bz, Z.ax, Z.az]]) {
+      const g = terrainAt(w, x, z), face = Math.atan2(ox - x, oz - z);
+      const base = mat4(x, g, z, 0, face, 0);
+      const at = (px: number, py: number, pz: number, geo: THREE.BufferGeometry, color: string, glow = false) => (glow ? zipGlow : zipPieces).push({ geo, color, matrix: base.clone().multiply(mat4(px, py, pz)) });
+      const hh = y - g + 0.9;
+      at(0, hh / 2, 0, CY(0.16, 0.12, hh, 8), '#ffb703');
+      at(0, hh - 0.05, 0.1, B(0.16, 0.16, 0.5), DARK);
+      at(0, y - g, 0.2, CY(0.14, 0.14, 0.1, 10).rotateZ(Math.PI / 2), '#e9ecef'); // pulley
+      at(0, 0.15, 0, CY(0.55, 0.65, 0.3, 10), '#6c757d'); // concrete footing
+      // arrow sign pointing along the line
+      at(0, 2.1, 0.2, B(0.62, 0.62, 0.05), '#2b2d42');
+      at(0, 2.18, 0.24, new THREE.ConeGeometry(0.2, 0.26, 3), '#7cf2ff', true);
+      at(0, 1.98, 0.24, B(0.1, 0.22, 0.03), '#7cf2ff', true);
+    }
+  }
+  if (zipPieces.length) scene.add(mesh(zipPieces));
+  if (zipGlow.length) scene.add(mesh(zipGlow, true));
+
+  // ------------------------------------------------ spring pads: a metal ring with a pulsing glowing face
+  const padPulses: THREE.Mesh[] = [];
+  for (const p of byType.get('pad') ?? []) {
+    const g = new THREE.Group();
+    g.add(mesh([
+      { geo: CY(0.98, 1.05, 0.12, 20), color: '#3d405b', matrix: mat4(0, 0.06, 0) },
+      ...[0, 1, 2, 3, 4, 5].map((k) => ({ geo: B(0.16, 0.13, 0.3), color: '#ffb703', matrix: mat4(Math.cos(k * 1.047) * 0.92, 0.07, Math.sin(k * 1.047) * 0.92, 0, -k * 1.047, 0) })),
+    ]));
+    g.add(mesh([
+      { geo: CY(0.8, 0.8, 0.04, 20), color: '#38f8b8', matrix: mat4(0, 0.13, 0) },
+      ...[-0.3, 0.15].map((z) => ({ geo: new THREE.ConeGeometry(0.28, 0.3, 3).rotateX(-Math.PI / 2).scale(1, 0.2, 1), color: '#effff8', matrix: mat4(0, 0.16, z) })),
+    ], true));
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.85, 0.05, 6, 24).rotateX(Math.PI / 2), new THREE.MeshBasicMaterial({ color: '#38f8b8', transparent: true, opacity: 0.8, depthWrite: false }));
+    ring.position.y = 0.2; g.add(ring); padPulses.push(ring);
+    add(g, p);
+  }
+
   // ------------------------------------------------ caves: rock shell, boulders on top, glowing crystals
   const rockPieces: Piece[] = [], crystalPieces: Piece[] = [];
   const caveSolids = w.solids.filter((o) => o.k === SK.Cave);
@@ -341,6 +428,11 @@ export function buildProps(w: World, scene: THREE.Group): PropsView {
       for (const s of spinners) s.o.rotation[s.axis] += s.speed * dt;
       for (const f of flames) { const k = 0.85 + Math.sin(t * 13 + f.position.x) * 0.1 + Math.sin(t * 7.3) * 0.08; f.scale.set(1, k, 1); f.rotation.y += dt * 2; }
       for (const b of blinkers) b.visible = Math.sin(t * 3) > 0;
+      for (const r of padPulses) {
+        const k = (t * 0.9 + r.parent!.position.x * 0.01) % 1;
+        r.position.y = 0.2 + k * 2.4; r.scale.setScalar(1 - k * 0.45);
+        (r.material as THREE.MeshBasicMaterial).opacity = (1 - k) * 0.8;
+      }
       for (const b of bobbers) { b.o.position.y = b.y + Math.sin(t * 1.3 + b.phase) * 0.12; b.o.rotation.z = Math.sin(t * 0.9 + b.phase) * 0.04; }
       smokeT -= dt;
       if (smokeT <= 0) {

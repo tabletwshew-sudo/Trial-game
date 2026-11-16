@@ -16,7 +16,8 @@
     "typecheck": "tsc -p packages/shared && tsc -p packages/server --noEmit && tsc -p packages/client --noEmit",
     "e2e:lobby": "node tests/e2e/lobby.e2e.cjs",
     "e2e:match": "node tests/e2e/match.e2e.cjs",
-    "e2e:combat": "node tests/e2e/combat.e2e.cjs"
+    "e2e:combat": "node tests/e2e/combat.e2e.cjs",
+    "e2e:movement": "node tests/e2e/movement.e2e.cjs"
   },
   "devDependencies": {
     "typescript": "5.7.2",

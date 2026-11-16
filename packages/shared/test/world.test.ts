@@ -126,12 +126,12 @@ describe('netcode', () => {
     expect(steep.cmds[0].pitch).toBeLessThanOrEqual(1.55);
   });
   it('round-trips snapshots, including the full inventory', () => {
-    const self = { ...newPlayerState(), x: 101.5, y: 22.25, z: -640.125, vx: 1, vy: -2, vz: 3, mode: PM.Glide, grounded: false, keys: 17 | K.ADS, hp: 73, shield: 50, slot: 2, cd: 40, burst: 2, reload: 99, use: 0, bloom: 31, shots: 123456, seed: 99, veh: 3, seat: 1, vh: 1.5, vs: -4.25, yaw: 0.5, pitch: -0.25 };
+    const self = { ...newPlayerState(), x: 101.5, y: 22.25, z: -640.125, vx: 1, vy: -2, vz: 3, mode: PM.Glide, grounded: false, keys: 17 | K.ADS, hp: 73, shield: 50, slot: 2, cd: 40, burst: 2, reload: 99, use: 0, bloom: 31, shots: 123456, seed: 99, veh: 3, seat: 1, vh: 1.5, vs: -4.25, yaw: 0.5, pitch: -0.25, mv: 2, mt: 9, tx: 4.5, ty: 2.25, tz: -8, my: 0.5, mh: 1.25, air: 255, jbuf: 3, li: 12, zt: 0.5, zv: -19, scd: 44 };
     self.inv[2] = { id: 3, r: 4, n: 1, mag: 27 }; self.inv[4] = { id: 11, r: 0, n: 12, mag: 0 };
     self.ammo = [10, 999, 0, 7, 2];
     const ents = [
-      { idx: 7, x: -1450.3, y: 330, z: 912.77, yaw: 4.2, pitch: -0.6, mode: PM.Fall, flags: 3, item: 5, rarity: 2 },
-      { idx: 79, x: 0, y: -1.15, z: 0, yaw: 0, pitch: 0.3, mode: PM.Walk, flags: 1, item: 0, rarity: 0 },
+      { idx: 7, x: -1450.3, y: 330, z: 912.77, yaw: 4.2, pitch: -0.6, mode: PM.Fall, flags: 3, item: 5, rarity: 2, mv: 0, mt: 0 },
+      { idx: 79, x: 0, y: -1.15, z: 0, yaw: 0, pitch: 0.3, mode: PM.Walk, flags: 1, item: 0, rarity: 0, mv: 2, mt: 17 },
     ];
     const block = new Uint8Array(ents.length * ENT_BYTES);
     ents.forEach((e, i) => encodeEnt(e, block, i * ENT_BYTES));

@@ -2,6 +2,7 @@ import { DROP, MOVEMENT } from './constants.js';
 import { aimDir, aimOrigin, spreadDir, type Vec3 } from './combat.js';
 import { AMMO_MAX, ITEMS, RARITY_RELOAD_MUL, consumableDef, throwableDef, weaponDef, type WeaponDef } from './items.js';
 import { clamp, lerp } from './noise.js';
+import { HURDLE_TICKS, MANTLE_TICKS, MV, findLedge, ladderAt, padAt, zipNear } from './move.js';
 import { stepCar } from './veh.js';
 import { WATER_FLOAT_Y, WORLD_LIMIT, collideBoxes, surfaceAt, terrainAt, type World } from './world.js';
 
@@ -17,7 +18,7 @@ export const K = {
   F: 1, B: 2, L: 4, R: 8, JUMP: 16, SPRINT: 32, CROUCH: 64,
   FIRE: 128, ADS: 256, RELOAD: 512, USE: 1024, EMOTE: 2048,
 } as const;
-export const PM = { Walk: 0, Bus: 1, Fall: 2, Glide: 3, Drive: 4, Ride: 5, Knocked: 6, Dead: 7 } as const;
+export const PM = { Walk: 0, Bus: 1, Fall: 2, Glide: 3, Drive: 4, Ride: 5, Knocked: 6, Dead: 7, Zip: 8 } as const;
 /** Server-controlled "busy" states that freeze the player. */
 export const ACT = { None: 0, Reviving: 1 } as const;
 
@@ -57,20 +58,40 @@ export interface PlayerState {
   veh: number; seat: number; vh: number; vs: number;
   /** Emote playing (0 = none, 1..3). Stops when you move, jump or shoot. */
   emote: number;
+  /** Movement sub-state (MV: slide, mantle, hurdle, climb, launch) and its tick counter. */
+  mv: number; mt: number;
+  /** Mantle/hurdle: where you end up, where you started (height) and how high the hop arcs. */
+  tx: number; ty: number; tz: number; my: number; mh: number;
+  /** Ticks since you left the ground without jumping (coyote time; 255 after a jump) and a buffered jump. */
+  air: number; jbuf: number;
+  /** Ladder or zipline index, position along the zipline (0..1) and signed speed along it (m/s). */
+  li: number; zt: number; zv: number;
+  /** Cooldown before another slide gives a speed boost. */
+  scd: number;
 }
 
 export const newPlayerState = (): PlayerState => ({
   x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, yaw: 0, pitch: 0, mode: PM.Walk, grounded: true, keys: 0,
   hp: 100, shield: 0, knock: 0, slot: 0, inv: [emptySlot(), emptySlot(), emptySlot(), emptySlot(), emptySlot()], ammo: [0, 0, 0, 0, 0],
   cd: 0, burst: 0, reload: 0, use: 0, bloom: 0, shots: 0, seed: 1, act: ACT.None, veh: -1, seat: 0, vh: 0, vs: 0, emote: 0,
+  mv: 0, mt: 0, tx: 0, ty: 0, tz: 0, my: 0, mh: 0, air: 0, jbuf: 0, li: -1, zt: 0, zv: 0, scd: 0,
 });
+
+/** Clear any slide/mantle/climb/zipline state (after a teleport or respawn). */
+export function resetMove(s: PlayerState) {
+  s.mv = MV.None; s.mt = 0; s.li = -1; s.air = 0; s.jbuf = 0; s.zt = 0; s.zv = 0; s.scd = 0;
+}
 
 export function clonePlayerState(s: PlayerState): PlayerState {
   return { ...s, inv: s.inv.map((x) => ({ ...x })), ammo: [...s.ammo] };
 }
 
 export const isSwimming = (s: PlayerState, w: World) =>
-  (s.mode === PM.Walk || s.mode === PM.Knocked) && s.y <= WATER_FLOAT_Y + 0.02 && terrainAt(w, s.x, s.z) < WATER_FLOAT_Y;
+  (s.mode === PM.Walk || s.mode === PM.Knocked) && s.mv !== MV.Climb && s.y <= WATER_FLOAT_Y + 0.02 && terrainAt(w, s.x, s.z) < WATER_FLOAT_Y;
+/** Crouched or sliding: smaller hitbox, lower eyes. */
+export const isLow = (s: PlayerState) => s.mode === PM.Walk && (s.mv === MV.Slide || ((s.keys & K.CROUCH) !== 0 && s.mv === MV.None && s.grounded));
+/** Hands busy (climbing, mantling, swimming): can't shoot, reload or heal. */
+const handsBusy = (s: PlayerState, swimming: boolean) => swimming || s.mv === MV.Mantle || s.mv === MV.Climb;
 
 /** Things that happened during a step that the server (hits) or client (effects) cares about. */
 export interface ShotEvent { origin: Vec3; dirs: Vec3[]; weapon: number; rarity: number }
@@ -100,13 +121,14 @@ export function currentSpread(s: PlayerState, def: WeaponDef) {
   let base = ads ? def.spreadAds : def.spreadHip;
   const moving = Math.hypot(s.vx, s.vz) > 0.5;
   if (moving && !ads) base *= 1.45;
-  if (!s.grounded && s.mode === PM.Walk) base *= 2;
+  if ((!s.grounded && s.mode === PM.Walk) || s.mode === PM.Zip) base *= 2;
+  if (s.mv === MV.Slide) base *= 1.25;
   if (s.keys & K.CROUCH && !moving) base *= 0.8;
   return base + s.bloom / 1000;
 }
 
 export const heldWeapon = (s: PlayerState) => weaponDef(s.inv[s.slot]?.id ?? 0);
-export const canShoot = (s: PlayerState) => (s.mode === PM.Walk || s.mode === PM.Ride) && s.act === ACT.None;
+export const canShoot = (s: PlayerState) => (s.mode === PM.Walk || s.mode === PM.Ride || s.mode === PM.Zip) && s.act === ACT.None;
 
 function canConsume(s: PlayerState, id: number) {
   const d = consumableDef(id);
@@ -135,7 +157,7 @@ function finishReload(s: PlayerState, def: WeaponDef, ev?: SimEvents) {
 function fireOnce(s: PlayerState, def: WeaponDef, ev?: SimEvents) {
   const slot = s.inv[s.slot];
   slot.mag--;
-  const origin = aimOrigin(s.x, s.y, s.z, s.yaw, (s.keys & K.CROUCH) !== 0);
+  const origin = aimOrigin(s.x, s.y, s.z, s.yaw, isLow(s));
   const d = aimDir(s.yaw, s.pitch);
   const spread = currentSpread(s, def);
   const dirs: Vec3[] = [];
@@ -146,7 +168,7 @@ function fireOnce(s: PlayerState, def: WeaponDef, ev?: SimEvents) {
   ev?.shot?.({ origin, dirs, weapon: slot.id, rarity: slot.r });
 }
 
-function stepCombat(s: PlayerState, cmd: InputCmd, prevKeys: number, ev?: SimEvents) {
+function stepCombat(s: PlayerState, cmd: InputCmd, prevKeys: number, ev?: SimEvents, busy = false) {
   const keys = cmd.keys;
   const fireEdge = (keys & K.FIRE) !== 0 && (prevKeys & K.FIRE) === 0;
   const fireHeld = (keys & K.FIRE) !== 0;
@@ -161,7 +183,7 @@ function stepCombat(s: PlayerState, cmd: InputCmd, prevKeys: number, ev?: SimEve
   const slot = s.inv[s.slot];
   const def = weaponDef(slot.id);
   if (s.bloom > 0) s.bloom = Math.max(0, s.bloom - Math.round(((def?.bloomRecover ?? 0.1) * 1000) / SIM_HZ));
-  if (!canShoot(s)) { s.reload = 0; s.use = 0; s.burst = 0; return; }
+  if (!canShoot(s) || busy) { s.reload = 0; s.use = 0; s.burst = 0; return; }
 
   if (def) {
     if (s.reload > 0) {
@@ -201,7 +223,7 @@ function stepCombat(s: PlayerState, cmd: InputCmd, prevKeys: number, ev?: SimEve
   }
 
   const tdef = throwableDef(slot.id);
-  if (tdef && fireEdge && s.cd === 0 && s.mode === PM.Walk) {
+  if (tdef && fireEdge && s.cd === 0 && (s.mode === PM.Walk || s.mode === PM.Zip)) {
     const d = aimDir(s.yaw, s.pitch + 0.12);
     const o = aimOrigin(s.x, s.y, s.z, s.yaw);
     ev?.thrown?.({ origin: o, vel: { x: d.x * tdef.speed + s.vx, y: d.y * tdef.speed + 2, z: d.z * tdef.speed + s.vz }, item: slot.id });
@@ -220,6 +242,7 @@ export function stepPlayer(s: PlayerState, cmd: InputCmd, w: World, ev?: SimEven
   const jumpEdge = (keys & K.JUMP) !== 0 && (prev & K.JUMP) === 0;
   const f = (keys & K.F ? 1 : 0) - (keys & K.B ? 1 : 0), r = (keys & K.R ? 1 : 0) - (keys & K.L ? 1 : 0);
 
+  if (s.mode === PM.Drive || s.mode === PM.Ride) s.mv = MV.None;
   if (s.mode === PM.Drive) {
     stepCar(s, f, r, (keys & K.JUMP) !== 0, w, dt);
     s.vx = -Math.sin(s.vh) * s.vs; s.vz = -Math.cos(s.vh) * s.vs;
@@ -234,52 +257,12 @@ export function stepPlayer(s: PlayerState, cmd: InputCmd, w: World, ev?: SimEven
   const wl = Math.hypot(wx, wz);
   if (wl > 1e-6) { wx /= wl; wz /= wl; }
 
+  if (s.mode === PM.Zip) { stepZip(s, cmd, prev, jumpEdge, w, ev); return; }
   if (s.mode === PM.Walk || s.mode === PM.Knocked) {
-    const knocked = s.mode === PM.Knocked;
-    const frozen = s.act !== ACT.None;
-    const swimming = isSwimming(s, w);
-    const using = s.use > 0;
-    const usingSlow = using && !(consumableDef(s.inv[s.slot]?.id ?? 0)?.walk ?? true);
-    const ads = (keys & K.ADS) !== 0 && !swimming && !knocked;
-    const firing = (keys & K.FIRE) !== 0 && heldWeapon(s) !== null;
-    const sprint = (keys & K.SPRINT) !== 0 && f > 0 && !ads && !firing && !using && !knocked;
-    const crouch = (keys & K.CROUCH) !== 0 && !swimming && !knocked;
-    let speed: number = swimming ? (sprint ? MOVEMENT.swimSprintSpeed : MOVEMENT.swimSpeed) : sprint ? MOVEMENT.sprintSpeed : MOVEMENT.walkSpeed;
-    if (crouch) speed = MOVEMENT.crouchSpeed;
-    if (ads) speed *= MOVEMENT.adsSpeedMul;
-    if (using) speed = Math.min(speed, usingSlow ? 0 : USE_WALK_SPEED);
-    if (knocked) speed = KNOCKED_SPEED;
-    if (frozen) speed = 0;
-    if (f < 0) speed *= 0.82;
-    approach2(s, wx * speed, wz * speed, MOVEMENT.groundAccel * (s.grounded ? 1 : MOVEMENT.airControl) * dt);
-    if (s.grounded && jumpEdge && !swimming && !knocked && !frozen) { s.vy = MOVEMENT.jumpVelocity; s.grounded = false; }
-    if (!s.grounded) s.vy = Math.max(s.vy - MOVEMENT.gravity * dt, -60);
-    s.x += s.vx * dt; s.z += s.vz * dt;
-    collideBoxes(w, s);
-    if (s.grounded) {
-      const g = surfaceAt(w, s.x, s.z, s.y);
-      if (g >= s.y - 0.7) s.y = g;
-      else { s.grounded = false; s.vy = 0; }
-    } else {
-      s.y += s.vy * dt;
-      const g = surfaceAt(w, s.x, s.z, s.y);
-      if (s.vy <= 0 && s.y <= g) {
-        // fall damage, from the speed you hit the ground at (health only, like the storm)
-        const height = (s.vy * s.vy) / (2 * MOVEMENT.gravity);
-        if (height > MOVEMENT.fallDamageMinHeight && g > WATER_FLOAT_Y + 0.01) {
-          const dmg = Math.round((height - MOVEMENT.fallDamageMinHeight) * MOVEMENT.fallDamagePerMetre);
-          s.hp = Math.max(0, s.hp - dmg);
-          ev?.fallDamage?.(dmg);
-        }
-        s.y = g; s.vy = 0; s.grounded = true;
-      }
-    }
-    if (!knocked) stepCombat(s, cmd, prev, ev);
-    // emotes: B cycles through three; any movement, jump, shot or aim cancels
-    if ((keys & K.EMOTE) && !(prev & K.EMOTE) && s.grounded && !knocked && !swimming && s.act === ACT.None) s.emote = (s.emote % 3) + 1;
-    if (s.emote && (f !== 0 || r !== 0 || (keys & (K.FIRE | K.ADS | K.JUMP)) || !s.grounded || knocked || swimming)) s.emote = 0;
+    stepGround(s, cmd, prev, f, r, wx, wz, jumpEdge, w, ev);
   } else {
     const height = s.y - surfaceAt(w, s.x, s.z, Infinity);
+    s.mv = MV.None;
     if (s.mode === PM.Fall) { if (height < DROP.gliderAutoDeployHeight || jumpEdge) s.mode = PM.Glide; }
     else if (jumpEdge && height > DROP.gliderAutoDeployHeight + 20) s.mode = PM.Fall;
 
@@ -298,7 +281,7 @@ export function stepPlayer(s: PlayerState, cmd: InputCmd, w: World, ev?: SimEven
     s.y += s.vy * dt;
     const g = surfaceAt(w, s.x, s.z, s.y);
     if (s.y <= g) {
-      s.y = g; s.vy = 0; s.grounded = true; s.mode = PM.Walk;
+      s.y = g; s.vy = 0; s.grounded = true; s.mode = PM.Walk; s.air = 0;
       const sp = Math.hypot(s.vx, s.vz);
       if (sp > MOVEMENT.sprintSpeed) { s.vx *= MOVEMENT.sprintSpeed / sp; s.vz *= MOVEMENT.sprintSpeed / sp; }
     }
@@ -306,6 +289,256 @@ export function stepPlayer(s: PlayerState, cmd: InputCmd, w: World, ev?: SimEven
   }
   s.x = clamp(s.x, -WORLD_LIMIT, WORLD_LIMIT);
   s.z = clamp(s.z, -WORLD_LIMIT, WORLD_LIMIT);
+}
+
+/** Standing, walking, sprinting, crouching, sliding, jumping, swimming, mantling, hurdling, climbing. */
+function stepGround(s: PlayerState, cmd: InputCmd, prev: number, f: number, r: number, wx: number, wz: number, jumpEdge: boolean, w: World, ev?: SimEvents) {
+  const dt = SIM_DT, keys = cmd.keys;
+  const knocked = s.mode === PM.Knocked;
+  const frozen = s.act !== ACT.None;
+  if (knocked || frozen) { if (s.mv !== MV.Climb || knocked) s.mv = MV.None; }
+  if (s.scd > 0) s.scd--;
+  if (s.mv === MV.None && s.mt > 0) s.mt--; // (after a zipline: no auto re-grab for a moment)
+  if (jumpEdge) s.jbuf = MOVEMENT.jumpBufferTicks; else if (s.jbuf > 0) s.jbuf--;
+  const fwdX = -Math.sin(s.yaw), fwdZ = -Math.cos(s.yaw);
+
+  // ---------------------------------------------------------------- mantle / hurdle (scripted, no collisions)
+  if (s.mv === MV.Mantle || s.mv === MV.Hurdle) {
+    const total = s.mv === MV.Mantle ? MANTLE_TICKS : HURDLE_TICKS;
+    s.mt--;
+    if (s.mv === MV.Mantle) {
+      // pull up first, then step forward onto the ledge
+      const H = Math.round(total * 0.4);
+      if (s.mt >= H) {
+        const k = 1 - (s.mt - H) / (total - H);
+        s.y = s.my + (s.ty - s.my) * (k * k * (3 - 2 * k));
+        s.x += (s.tx - s.x) * 0.04; s.z += (s.tz - s.z) * 0.04;
+      } else { s.y = s.ty; s.x += (s.tx - s.x) / (s.mt + 1); s.z += (s.tz - s.z) / (s.mt + 1); }
+    } else {
+      const k = 1 - s.mt / total;
+      s.x += (s.tx - s.x) / (s.mt + 1); s.z += (s.tz - s.z) / (s.mt + 1);
+      s.y = s.my + (s.ty - s.my) * k + 4 * s.mh * k * (1 - k);
+    }
+    if (s.mt <= 0) {
+      s.x = s.tx; s.y = s.ty; s.z = s.tz; s.grounded = true; s.vy = 0; s.air = 0;
+      if (s.mv === MV.Mantle) { s.vx = fwdX * 2.5; s.vz = fwdZ * 2.5; }
+      s.mv = MV.None;
+    }
+    stepCombat(s, cmd, prev, ev, s.mv === MV.Mantle);
+    return;
+  }
+
+  // ---------------------------------------------------------------- ladders
+  if (s.mv === MV.Climb) {
+    const L = w.ladders[s.li];
+    if (!L || knocked) { s.mv = MV.None; s.li = -1; }
+    else {
+      s.x = L.x; s.z = L.z; s.vx = s.vz = 0;
+      s.vy = frozen ? 0 : f * MOVEMENT.climbSpeed;
+      s.y += s.vy * dt;
+      s.grounded = false; s.air = 0;
+      if (jumpEdge || (keys & K.CROUCH)) {
+        // let go, pushing off the wall
+        s.mv = MV.None; s.li = -1; s.vx = L.nx * 3.2; s.vz = L.nz * 3.2; s.vy = jumpEdge ? 4.5 : 0; s.air = 255; s.jbuf = 0;
+      } else if (s.y >= L.y1 - 0.05) {
+        // over the top
+        s.mv = MV.Mantle; s.mt = 14; s.my = s.y = L.y1 - 0.05;
+        s.tx = L.tx; s.tz = L.tz; s.ty = surfaceAt(w, L.tx, L.tz, L.y1 + 0.6);
+      } else if (s.y <= L.y0) { s.y = L.y0; s.grounded = true; s.vy = 0; s.mv = MV.None; s.li = -1; }
+      stepCombat(s, cmd, prev, ev, true);
+      return;
+    }
+  }
+
+  const swimming = isSwimming(s, w);
+  const using = s.use > 0;
+  const usingSlow = using && !(consumableDef(s.inv[s.slot]?.id ?? 0)?.walk ?? true);
+  const ads = (keys & K.ADS) !== 0 && !swimming && !knocked;
+  const firing = (keys & K.FIRE) !== 0 && heldWeapon(s) !== null && !swimming;
+  const sprint = (keys & K.SPRINT) !== 0 && f > 0 && !ads && !firing && !using && !knocked;
+  const crouchHeld = (keys & K.CROUCH) !== 0 && !swimming && !knocked;
+  const hs = Math.hypot(s.vx, s.vz);
+  const canAct = !knocked && !frozen && !using;
+
+  // grab a ladder you walk into, a zipline you press E under (or jump into)
+  if (canAct && f > 0) {
+    const li = ladderAt(w, s, fwdX, fwdZ);
+    if (li >= 0) { s.mv = MV.Climb; s.li = li; s.emote = 0; s.vx = s.vz = 0; s.vy = 0; stepCombat(s, cmd, prev, ev, true); return; }
+  }
+  if (canAct && w.zips.length && (((keys & K.USE) && !(prev & K.USE)) || (!s.grounded && s.air > 4 && s.mt === 0))) {
+    const z = zipNear(w, s.x, s.y, s.z);
+    if (z && (s.grounded ? true : zipHandsNear(w, s, z[0], z[1]))) { startZip(s, w, z[0], z[1]); return; }
+  }
+
+  // ---------------------------------------------------------------- mantle / hurdle triggers
+  const wantJump = s.jbuf > 0;
+  const coyote = !s.grounded && s.air < MOVEMENT.coyoteTicks;
+  if (canAct && f > 0 && (wantJump || (!s.grounded && s.vy < 3) || swimming)) {
+    const ml = Math.hypot(wx, wz) > 0.1;
+    const dx = ml ? wx : fwdX, dz = ml ? wz : fwdZ;
+    const ledge = findLedge(w, s, dx, dz, swimming, wantJump && !swimming);
+    if (ledge) {
+      s.mv = ledge.hurdle ? MV.Hurdle : MV.Mantle;
+      s.mt = ledge.hurdle ? HURDLE_TICKS : MANTLE_TICKS;
+      s.tx = ledge.x; s.ty = ledge.y; s.tz = ledge.z; s.my = s.y;
+      s.mh = ledge.hurdle ? Math.max(0.4, ledge.top - Math.min(s.y, ledge.y) + 0.3) : 0;
+      s.grounded = false; s.vy = 0; s.jbuf = 0; s.air = 255; s.emote = 0;
+      if (ledge.hurdle) { const v = Math.max(hs, MOVEMENT.sprintSpeed); s.vx = dx * v; s.vz = dz * v; }
+      else { s.vx = s.vz = 0; }
+      stepCombat(s, cmd, prev, ev, !ledge.hurdle);
+      return;
+    }
+  }
+
+  // ---------------------------------------------------------------- slide
+  if (s.mv === MV.Slide && (!crouchHeld || !s.grounded || swimming || knocked)) s.mv = MV.None;
+  if (s.mv === MV.None && s.grounded && crouchHeld && canAct && hs >= MOVEMENT.slideMinEntrySpeed) {
+    s.mv = MV.Slide; s.emote = 0;
+    if (s.scd === 0) { const b = Math.min(hs + MOVEMENT.slideBoost, MOVEMENT.slideMaxSpeed) / hs; s.vx *= b; s.vz *= b; s.scd = 90; }
+  }
+
+  let speed: number = swimming ? (sprint ? MOVEMENT.swimSprintSpeed : MOVEMENT.swimSpeed) : sprint ? MOVEMENT.sprintSpeed : MOVEMENT.walkSpeed;
+  if (crouchHeld) speed = MOVEMENT.crouchSpeed;
+  if (ads) speed *= MOVEMENT.adsSpeedMul;
+  if (using) speed = Math.min(speed, usingSlow ? 0 : USE_WALK_SPEED);
+  if (knocked) speed = KNOCKED_SPEED;
+  if (frozen) speed = 0;
+  if (f < 0) speed *= 0.82;
+
+  if (s.mv === MV.Slide) {
+    // momentum: friction, gravity down slopes, gentle steering
+    let sp = Math.hypot(s.vx, s.vz);
+    let ux = sp > 1e-3 ? s.vx / sp : fwdX, uz = sp > 1e-3 ? s.vz / sp : fwdZ;
+    const e = 0.5, y = s.y + 0.5;
+    const gx = (surfaceAt(w, s.x + e, s.z, y) - surfaceAt(w, s.x - e, s.z, y)) / (2 * e);
+    const gz = (surfaceAt(w, s.x, s.z + e, y) - surfaceAt(w, s.x, s.z - e, y)) / (2 * e);
+    const downhill = -(gx * ux + gz * uz); // > 0 going downhill
+    const slope = Math.max(-0.8, Math.min(0.8, downhill));
+    sp += (slope * MOVEMENT.slideSlopeAccel - MOVEMENT.slideFriction) * dt;
+    sp = Math.min(sp, MOVEMENT.slideMaxSpeed);
+    if (Math.hypot(wx, wz) > 0.1) {
+      const cross = ux * wz - uz * wx, dot = ux * wx + uz * wz;
+      const want = Math.atan2(cross, dot), turn = Math.max(-MOVEMENT.slideSteer * dt, Math.min(MOVEMENT.slideSteer * dt, want));
+      const c = Math.cos(turn), sn = Math.sin(turn);
+      [ux, uz] = [ux * c - uz * sn, ux * sn + uz * c];
+    }
+    if (sp < MOVEMENT.slideExitSpeed) { s.mv = MV.None; sp = Math.max(sp, 0); }
+    s.vx = ux * sp; s.vz = uz * sp;
+  } else if (s.grounded || swimming) {
+    approach2(s, wx * speed, wz * speed, MOVEMENT.groundAccel * dt);
+  } else {
+    // in the air: steer, but keep momentum from slides, pads and hurdles (bleeds off slowly)
+    const keep = Math.max(speed, hs - 1.2 * dt);
+    const has = Math.hypot(wx, wz) > 0.1;
+    const tx = has ? wx * keep : hs > speed ? (s.vx / hs) * keep : 0, tz = has ? wz * keep : hs > speed ? (s.vz / hs) * keep : 0;
+    approach2(s, tx, tz, MOVEMENT.groundAccel * MOVEMENT.airControl * dt);
+  }
+
+  // ---------------------------------------------------------------- jump (with coyote time and a buffer)
+  if ((s.grounded || coyote) && wantJump && !swimming && canAct) {
+    s.vy = MOVEMENT.jumpVelocity; s.grounded = false; s.air = 255; s.jbuf = 0;
+    if (s.mv === MV.Slide) {
+      // slide-jump keeps your speed (up to a cap)
+      const sp = Math.hypot(s.vx, s.vz);
+      if (sp > MOVEMENT.slideJumpMax) { s.vx *= MOVEMENT.slideJumpMax / sp; s.vz *= MOVEMENT.slideJumpMax / sp; }
+    }
+    s.mv = MV.None;
+  }
+  // spring pads
+  if (s.grounded && w.pads.length && !knocked && padAt(w, s)) {
+    s.vy = MOVEMENT.padLaunch; s.grounded = false; s.mv = MV.Launch; s.air = 255; s.jbuf = 0; s.emote = 0;
+  }
+
+  if (!s.grounded) s.vy = Math.max(s.vy - MOVEMENT.gravity * dt, -60);
+  s.x += s.vx * dt; s.z += s.vz * dt;
+  collideBoxes(w, s);
+  if (s.grounded) {
+    const g = surfaceAt(w, s.x, s.z, s.y);
+    // sliding sticks to the ground over small dips; walking steps down 0.7 m
+    if (g >= s.y - (s.mv === MV.Slide ? 0.9 : 0.7)) s.y = g;
+    else { s.grounded = false; s.vy = 0; s.air = 0; }
+  } else {
+    if (s.air < 255) s.air++;
+    s.y += s.vy * dt;
+    const g = surfaceAt(w, s.x, s.z, s.y);
+    if (s.mv === MV.Launch && s.vy < 0 && s.y - g > 4) {
+      // launched: the glider opens on the way down
+      s.mode = PM.Glide; s.mv = MV.None;
+    } else if (s.vy <= 0 && s.y <= g) {
+      // fall damage, from the speed you hit the ground at (health only, like the storm)
+      const height = (s.vy * s.vy) / (2 * MOVEMENT.gravity);
+      if (height > MOVEMENT.fallDamageMinHeight && g > WATER_FLOAT_Y + 0.01) {
+        const dmg = Math.round((height - MOVEMENT.fallDamageMinHeight) * MOVEMENT.fallDamagePerMetre);
+        s.hp = Math.max(0, s.hp - dmg);
+        ev?.fallDamage?.(dmg);
+      }
+      s.y = g; s.vy = 0; s.grounded = true; s.air = 0;
+      if (s.mv === MV.Launch) s.mv = MV.None;
+      // land with crouch held and speed: straight into a slide
+      if (crouchHeld && Math.hypot(s.vx, s.vz) >= MOVEMENT.slideMinEntrySpeed && canAct) s.mv = MV.Slide;
+      // buffered jump fires on landing
+      if (s.jbuf > 0 && canAct && !isSwimming(s, w)) { s.vy = MOVEMENT.jumpVelocity; s.grounded = false; s.air = 255; s.jbuf = 0; s.mv = MV.None; }
+    }
+  }
+  if (!knocked) stepCombat(s, cmd, prev, ev, handsBusy(s, swimming));
+  // emotes: B cycles through three; any movement, jump, shot or aim cancels
+  if ((keys & K.EMOTE) && !(prev & K.EMOTE) && s.grounded && !knocked && !swimming && s.act === ACT.None && s.mv === MV.None) s.emote = (s.emote % 3) + 1;
+  if (s.emote && (f !== 0 || r !== 0 || (keys & (K.FIRE | K.ADS | K.JUMP)) || !s.grounded || knocked || swimming)) s.emote = 0;
+}
+
+/** Are your hands close enough to the cable to grab it mid-air? */
+function zipHandsNear(w: World, s: PlayerState, i: number, t: number) {
+  const Z = w.zips[i];
+  const cy = Z.ay + (Z.by - Z.ay) * t;
+  return Math.abs(cy - ZIP_HANG - s.y) < 1.1;
+}
+
+/** How far below the cable your feet hang. */
+export const ZIP_HANG = 2.05;
+
+function startZip(s: PlayerState, w: World, i: number, t: number) {
+  const Z = w.zips[i];
+  const ux = (Z.bx - Z.ax) / Z.len, uz = (Z.bz - Z.az) / Z.len;
+  // ride the way you're looking (or already moving)
+  const fx = -Math.sin(s.yaw), fz = -Math.cos(s.yaw);
+  const dir = fx * ux + fz * uz >= 0 ? 1 : -1;
+  const carry = (s.vx * ux + s.vz * uz) * dir;
+  s.mode = PM.Zip; s.mv = MV.None; s.li = i; s.zt = t; s.zv = dir * Math.max(4, Math.min(carry, MOVEMENT.zipSpeed));
+  s.vx = s.vz = s.vy = 0; s.grounded = false; s.emote = 0; s.jbuf = 0;
+  placeOnZip(s, w);
+}
+
+function placeOnZip(s: PlayerState, w: World) {
+  const Z = w.zips[s.li];
+  s.x = Z.ax + (Z.bx - Z.ax) * s.zt; s.z = Z.az + (Z.bz - Z.az) * s.zt;
+  s.y = Z.ay + (Z.by - Z.ay) * s.zt - ZIP_HANG;
+}
+
+/** Hanging from a zipline: it pulls you along the way you face; jump or crouch to let go. */
+function stepZip(s: PlayerState, cmd: InputCmd, prev: number, jumpEdge: boolean, w: World, ev?: SimEvents) {
+  const dt = SIM_DT, Z = w.zips[s.li];
+  const detach = (vy: number) => {
+    s.mode = PM.Walk; s.li = -1; s.grounded = false; s.air = 255; s.vy = vy; s.mv = MV.None; s.mt = 50;
+    s.vx = s.zv * (Z ? (Z.bx - Z.ax) / Z.len : 0); s.vz = s.zv * (Z ? (Z.bz - Z.az) / Z.len : 0);
+  };
+  if (!Z) { detach(0); return; }
+  const ux = (Z.bx - Z.ax) / Z.len, uz = (Z.bz - Z.az) / Z.len;
+  const fx = -Math.sin(cmd.yaw), fz = -Math.cos(cmd.yaw);
+  const look = fx * ux + fz * uz;
+  // turn around by looking back along the line
+  let want = Math.abs(look) > 0.3 ? Math.sign(look) * MOVEMENT.zipSpeed : Math.sign(s.zv || 1) * MOVEMENT.zipSpeed;
+  // the trolley brakes over the last few metres, so riding off the end drops you gently
+  const left = (want > 0 ? 1 - s.zt : s.zt) * Z.len;
+  if (left < 9) want = Math.sign(want) * Math.max(4, left * 1.6);
+  s.zv = approach(s.zv, want, (Math.abs(want) < Math.abs(s.zv) && left < 9 ? 40 : 22) * dt);
+  s.zt += (s.zv * dt) / Z.len;
+  const prevY = s.y;
+  if (s.zt <= 0 || s.zt >= 1) { s.zt = Math.max(0, Math.min(1, s.zt)); placeOnZip(s, w); detach(3); stepCombat(s, cmd, prev, ev); return; }
+  placeOnZip(s, w);
+  s.vy = (s.y - prevY) / dt;
+  stepCombat(s, cmd, prev, ev);
+  if (jumpEdge) detach(6);
+  else if ((cmd.keys & K.CROUCH) && !(prev & K.CROUCH)) detach(0);
 }
 
 /** Apply damage: shield first, then health. Returns [shieldDamage, healthDamage]. */

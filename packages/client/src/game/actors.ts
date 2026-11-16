@@ -1,10 +1,10 @@
 import * as THREE from 'three';
-import { EF, EF_EMOTE_SHIFT, PM, WATER_FLOAT_Y, weaponDef, type RosterEntry } from '@dropzone/shared';
+import { EF, EF_EMOTE_SHIFT, HURDLE_TICKS, MANTLE_TICKS, MV, PM, WATER_FLOAT_Y, weaponDef, type RosterEntry, type World } from '@dropzone/shared';
 import { Character, SKINS, type PoseMode } from '../lobby/character';
 import { softRamp } from '../lobby/toon';
 import { mat4, mergeColored } from './geo';
 
-export interface ActorState { x: number; y: number; z: number; yaw: number; pitch: number; mode: number; grounded: boolean; speed: number; dive: number; visible: boolean; item: number; rarity: number; flags: number }
+export interface ActorState { x: number; y: number; z: number; yaw: number; pitch: number; mode: number; grounded: boolean; speed: number; dive: number; visible: boolean; item: number; rarity: number; flags: number; mv: number; mt: number; vy: number }
 
 const FULL_MODELS = 10;
 
@@ -21,9 +21,15 @@ export class Actors {
   private order: number[];
   private sortTimer = 0;
   private full = new Map<number, Character>();
+  /** Per player: were they on the ground last frame, and the fastest they were falling since. */
+  private wasGrounded: boolean[];
+  private fallVy: number[];
+  /** Hard landings this frame (for dust): [x, y, z, strength]. */
+  readonly landings: [number, number, number, number][] = [];
 
-  constructor(private scene: THREE.Scene, private roster: RosterEntry[], private selfIdx: number) {
-    this.states = roster.map(() => ({ x: 0, y: -100, z: 0, yaw: 0, pitch: 0, mode: PM.Walk, grounded: true, speed: 0, dive: 0, visible: false, item: 0, rarity: 0, flags: 0 }));
+  constructor(private scene: THREE.Scene, private roster: RosterEntry[], private selfIdx: number, private world?: World) {
+    this.states = roster.map(() => ({ x: 0, y: -100, z: 0, yaw: 0, pitch: 0, mode: PM.Walk, grounded: true, speed: 0, dive: 0, visible: false, item: 0, rarity: 0, flags: 0, mv: 0, mt: 0, vy: 0 }));
+    this.wasGrounded = roster.map(() => true); this.fallVy = roster.map(() => 0);
     this.order = roster.map((r) => r.idx);
     const n = roster.length;
     const mat = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: softRamp });
@@ -69,6 +75,14 @@ export class Actors {
 
   private poseOf(s: ActorState): PoseMode {
     if (s.mode === PM.Knocked) return 'knocked';
+    if (s.mode === PM.Zip) return 'zip';
+    if (s.mode === PM.Walk) {
+      if (s.mv === MV.Slide) return 'slide';
+      if (s.mv === MV.Mantle) return 'mantle';
+      if (s.mv === MV.Hurdle) return 'hurdle';
+      if (s.mv === MV.Climb) return 'climb';
+      if (s.mv === MV.Launch && s.vy > 0) return 'launch';
+    }
     if (s.mode === PM.Drive) return 'drive';
     if (s.mode === PM.Ride) return 'sit';
     if (s.mode === PM.Fall) return 'fall';
@@ -98,17 +112,35 @@ export class Actors {
     }
     const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(0, 0, 0, 'YXZ'), p = new THREE.Vector3(), one = new THREE.Vector3(1, 1, 1), zero = new THREE.Vector3(0, 0, 0);
     const hide = m.clone().compose(p.set(0, -500, 0), q, zero);
+    this.landings.length = 0;
     for (let i = 0; i < st.length; i++) {
       const s = st[i], ch = this.full.get(i);
+      // hard landings: squash the model and kick up dust
+      if (s.visible) {
+        const onGround = s.grounded || s.mode !== PM.Walk;
+        if (!onGround) this.fallVy[i] = Math.min(this.fallVy[i], s.vy);
+        else if (!this.wasGrounded[i]) {
+          const v = -this.fallVy[i];
+          if (v > 7 && s.mode === PM.Walk && s.mv === MV.None) { ch?.land((v - 5) / 12); this.landings.push([s.x, s.y, s.z, Math.min(1, (v - 5) / 12)]); }
+          this.fallVy[i] = 0;
+        }
+        this.wasGrounded[i] = onGround;
+      }
       // anyone practically inside the camera would fill the screen with their outline: hide them
       const tooClose = i !== this.selfIdx && (s.x - cam.x) ** 2 + (s.y + 1.1 - cam.y) ** 2 + (s.z - cam.z) ** 2 < 1.6 * 1.6;
       if (ch) {
         ch.root.visible = s.visible && !tooClose;
         ch.root.position.set(s.x, s.y, s.z);
         ch.root.rotation.y = s.yaw + Math.PI;
+        if (s.mv === MV.Climb && s.mode === PM.Walk && this.world) {
+          // face the wall you're climbing
+          const L = this.world.ladders.find((l) => Math.abs(l.x - s.x) < 1 && Math.abs(l.z - s.z) < 1);
+          if (L) ch.root.rotation.y = Math.atan2(L.nx, L.nz) + Math.PI;
+        }
         ch.setHeld(s.mode === PM.Walk || s.mode === PM.Ride ? s.item : 0, s.rarity);
         ch.animate(dt, t, {
-          mode: this.poseOf(s), speed: s.speed, dive: s.dive, pitch: s.pitch,
+          mode: this.poseOf(s), speed: s.speed, dive: s.dive, pitch: s.pitch, vy: s.vy,
+          phase: s.mv === MV.Mantle ? Math.min(1, 1 - s.mt / MANTLE_TICKS) : s.mv === MV.Hurdle ? Math.min(1, 1 - s.mt / HURDLE_TICKS) : 0,
           hold: !s.item ? 'none' : weaponDef(s.item) ? 'gun' : 'item',
           sprint: (s.flags & EF.SPRINT) !== 0, crouch: (s.flags & EF.CROUCH) !== 0, using: (s.flags & EF.USING) !== 0, emote: (s.flags >> EF_EMOTE_SHIFT) & 3,
         });
@@ -118,8 +150,9 @@ export class Actors {
         this.lodBody.setMatrixAt(i, hide); this.lodRest.setMatrixAt(i, hide); this.lodGlider.setMatrixAt(i, hide);
         continue;
       }
-      const falling = s.mode === PM.Fall, flat = s.mode === PM.Knocked || s.mode === PM.Drive || s.mode === PM.Ride;
-      e.set(falling ? 1.3 : s.mode === PM.Knocked ? 1.3 : 0, s.yaw + Math.PI, 0);
+      const falling = s.mode === PM.Fall, sliding = s.mode === PM.Walk && s.mv === MV.Slide;
+      const flat = s.mode === PM.Knocked || s.mode === PM.Drive || s.mode === PM.Ride || sliding;
+      e.set(falling ? 1.3 : s.mode === PM.Knocked ? 1.3 : sliding ? -0.6 : 0, s.yaw + Math.PI, 0);
       q.setFromEuler(e);
       m.compose(p.set(s.x, s.y + (falling ? 0.8 : flat ? -0.4 : 0), s.z), q, one);
       this.lodBody.setMatrixAt(i, m); this.lodRest.setMatrixAt(i, m);

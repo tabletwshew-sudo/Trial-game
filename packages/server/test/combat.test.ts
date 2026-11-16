@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ACT, ITEM, K, PM, aimOrigin, decodeSnapshot, encodeInputs, makeStormPlan, raycastWorld, surfaceAt, weaponDef, type InputCmd, type ServerMsg, type Snapshot } from '@dropzone/shared';
+import { ACT, ITEM, K, MV, PM, aimOrigin, decodeSnapshot, encodeInputs, makeStormPlan, raycastWorld, surfaceAt, weaponDef, type InputCmd, type ServerMsg, type Snapshot } from '@dropzone/shared';
 import { MatchInstance, type Sock } from '../src/game/match';
 import type { Match } from '../src/hub';
 
@@ -211,10 +211,12 @@ describe('a full match with 80 bots', () => {
     const inst = new MatchInstance({ mode: 'squad', teams, humans: 1, bots: 79, partyIds: [], id: 'big', createdAt: 0 }, { warmupS: 2, onEnd: () => {} }, now);
     const c = new Client(); inst.join('h0', c, now);
     let worst = 0, total = 0, ticks = 0;
+    const moves = { slide: 0, mantle: 0 };
     for (let i = 0; i < 30 * 60 * 6; i++) { // six minutes of match time
       now += 1000 / 30;
       const t0 = performance.now(); inst.step(now); const ms = performance.now() - t0;
       total += ms; ticks++; if (i > 30 * 90) worst = Math.max(worst, ms);
+      for (const p of inst.players) { if (p.s.mv === MV.Slide) moves.slide++; else if (p.s.mv === MV.Mantle || p.s.mv === MV.Hurdle) moves.mantle++; }
       if (inst.ended) break;
       // invariants
       if (i % 300 === 0) {
@@ -233,9 +235,11 @@ describe('a full match with 80 bots', () => {
     const looted = inst.players.filter((p) => p.bot && p.s.inv.some((s) => s.id)).length;
     const elims = inst.players.filter((p) => !p.alive).length;
     // eslint-disable-next-line no-console
-    console.log(`avg ${(total / ticks).toFixed(2)} ms/tick, worst ${worst.toFixed(1)} ms; ${elims} eliminated, ${feed.length} feed lines, ${looted} bots holding loot, loot on ground ${inst.loot.size}`);
+    console.log(`slides ${moves.slide} mantles ${moves.mantle}; avg ${(total / ticks).toFixed(2)} ms/tick, worst ${worst.toFixed(1)} ms; ${elims} eliminated, ${feed.length} feed lines, ${looted} bots holding loot, loot on ground ${inst.loot.size}`);
     expect(total / ticks).toBeLessThan(8);
     expect(feed.length).toBeGreaterThan(10); // they actually fight
+    expect(moves.slide).toBeGreaterThan(20); // bots slide...
+    expect(moves.mantle).toBeGreaterThan(5); // ...and climb over things they walk into
     expect(elims).toBeGreaterThan(5);
     // kills add up: every elimination by a player is credited once
     const credited = inst.players.reduce((n, p) => n + p.kills, 0);

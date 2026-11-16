@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import {
-  ACT, DROP, EF, EF_EMOTE_SHIFT, ITEM, ITEMS, K, PM, SIM_DT, busPos, clamp, currentSpread, decodeSnapshot, encodeInputs, getWorld, raycastWorld, seatWorld, stepPlayer, surfaceAt, terrainAt, weaponDef,
+  ACT, DROP, EF, EF_EMOTE_SHIFT, ITEM, ITEMS, K, MV, PM, SIM_DT, WATER_FLOAT_Y, isLow, zipNear, busPos, clamp, currentSpread, decodeSnapshot, encodeInputs, getWorld, raycastWorld, seatWorld, stepPlayer, surfaceAt, terrainAt, weaponDef,
   type EntSnap, type GameEvent, type GameInit, type GamePhase, type InputCmd, type MatchFoundView, type PlayerState, type RouteView, type ServerMsg, type SimEvents, type UserView, type World,
 } from '@dropzone/shared';
 import { STORM_PHASES } from '@dropzone/shared';
@@ -22,7 +22,7 @@ import { FOG_COLOR, FOG_FAR, FOG_NEAR, buildSky } from './sky';
 import { QUALITY, buildIsland, type Quality } from './terrain';
 
 const INTERP_MS = 100;
-interface Sample { t: number; x: number; y: number; z: number; yaw: number; pitch: number; mode: number; flags: number; item: number; rarity: number }
+interface Sample { t: number; x: number; y: number; z: number; yaw: number; pitch: number; mode: number; flags: number; item: number; rarity: number; mv: number; mt: number }
 
 function pickQuality(): Quality {
   const name = new URLSearchParams(location.search).get('q') ?? settings.graphics;
@@ -95,7 +95,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
     const ship = buildDropship();
     ship.root.visible = false;
     scene.add(ship.root);
-    const actors = new Actors(scene, roster, selfIdx);
+    const actors = new Actors(scene, roster, selfIdx, world);
     const fx = new Effects(scene, world);
     const lootR = new LootRenderer(scene);
     lootR.set(init.loot);
@@ -278,7 +278,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       for (const e of snap.ents as EntSnap[]) {
         if (e.idx >= hist.length) continue;
         const list = hist[e.idx];
-        list.push({ t: snap.time, x: e.x, y: e.y, z: e.z, yaw: e.yaw, pitch: e.pitch, mode: e.mode, flags: e.flags, item: e.item, rarity: e.rarity });
+        list.push({ t: snap.time, x: e.x, y: e.y, z: e.z, yaw: e.yaw, pitch: e.pitch, mode: e.mode, flags: e.flags, item: e.item, rarity: e.rarity, mv: e.mv, mt: e.mt });
         if (list.length > 16) list.shift();
         seenTick[e.idx] = snap.tick;
       }
@@ -323,6 +323,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       const frozen = hud.menuOpen || hud.mapOpen || combat.resultOpen;
       const slot = pred ? input.takeSlot(pred.slot, (i) => pred!.inv[i].id !== 0) : 0;
       const cmd: InputCmd = { keys: frozen ? 0 : input.keys, yaw: Math.fround(input.yaw), pitch: Math.fround(input.pitch), slot };
+      input.consumeTaps();
       seq++;
       pending.push({ seq, cmd });
       if (pending.length > 180) pending.shift();
@@ -337,6 +338,10 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
     // ---------------------------------------------------------------- render
     const selfPos = new THREE.Vector3(), camPos = new THREE.Vector3(), pivot = new THREE.Vector3(), dir = new THREE.Vector3(), proj = new THREE.Vector3();
     let camDist = 4.3, shoulder = 0.75, fov = settings.fov, emoteSwing = 0;
+    // movement feel: camera drops when you crouch or slide, dips on hard landings, FOV kicks with speed
+    let camLow = 0, camDip = 0, fovKick = 0, selfFallVy = 0, selfWasGrounded = true;
+    // per-player effect timers and "were they in the water" flags
+    const dustT = roster.map(() => 0), wetPrev = roster.map(() => false), mvPrev = roster.map(() => 0);
     input.onSpec = (dir) => net.send({ t: 'spec_next', dir });
     let acc = 0, last = performance.now(), time = 0, fps = 60, slowFor = 0;
     let debugCam: { x: number; y: number; z: number; yaw: number; pitch: number } | null = null;
@@ -347,6 +352,9 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       camera.aspect = w / hh; camera.updateProjectionMatrix();
     }
     addEventListener('resize', resize);
+    // Ctrl is a crouch key and Ctrl+W closes the tab: ask before leaving a match by accident
+    const leaveGuard = (e: BeforeUnloadEvent) => { if (pred && pred.mode !== PM.Dead) { e.preventDefault(); e.returnValue = ''; } };
+    addEventListener('beforeunload', leaveGuard);
     resize();
 
     function project(x: number, y: number, z: number) {
@@ -394,11 +402,12 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
         let dy = B.yaw - A.yaw; if (dy > Math.PI) dy -= Math.PI * 2; if (dy < -Math.PI) dy += Math.PI * 2;
         s.yaw = A.yaw + dy * k;
         s.pitch = A.pitch + (B.pitch - A.pitch) * k;
-        s.mode = B.mode; s.grounded = (B.flags & EF.GROUNDED) !== 0; s.flags = B.flags; s.item = B.item; s.rarity = B.rarity;
+        s.mode = B.mode; s.grounded = (B.flags & EF.GROUNDED) !== 0; s.flags = B.flags; s.item = B.item; s.rarity = B.rarity; s.mv = B.mv; s.mt = B.mt;
         if (s.mode === PM.Drive) { const at = seatWorld({ x: s.x, y: s.y, z: s.z, vh: s.yaw }, 0); s.x = at.x; s.y = at.y - 0.55; s.z = at.z; }
         if (s.mode === PM.Ride) { s.y -= 0.55; const near = cars.nearest(s.x, s.y, s.z, 3); if (near !== null) { const c = cars.sample(near, rt); if (c) s.yaw = c.vh; } }
         const span = Math.max(0.001, (B.t - A.t) / 1000);
         const sp = Math.hypot(B.x - A.x, B.z - A.z) / span;
+        s.vy = (B.y - A.y) / span;
         s.speed += (sp - s.speed) * 0.25;
         s.dive = clamp((-(B.y - A.y) / span - DROP.freefallMinSpeed) / (DROP.freefallMaxSpeed - DROP.freefallMinSpeed), 0, 1);
         if (s.mode === PM.Bus) s.visible = false;
@@ -413,7 +422,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
         err.multiplyScalar(Math.exp(-dt * 12));
         selfPos.set(prevPos.x + (pred.x - prevPos.x) * alpha, prevPos.y + (pred.y - prevPos.y) * alpha, prevPos.z + (pred.z - prevPos.z) * alpha).add(err);
         me.x = selfPos.x; me.y = selfPos.y; me.z = selfPos.z;
-        me.yaw = input.yaw; me.pitch = input.pitch; me.mode = pred.mode; me.grounded = pred.grounded;
+        me.yaw = input.yaw; me.pitch = input.pitch; me.mode = pred.mode; me.grounded = pred.grounded; me.mv = pred.mv; me.mt = pred.mt; me.vy = pred.vy;
         me.speed = Math.hypot(pred.vx, pred.vz);
         me.dive = clamp((-input.pitch - 0.2) / 0.9, 0, 1);
         const held = pred.inv[pred.slot];
@@ -453,7 +462,15 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       camDist += ((inBus ? 46 : air ? 8.5 : driving ? 8 : ads ? 2.2 : dead ? 5 : 4.3) - camDist) * kCam;
       shoulder += ((inBus || air || driving ? 0 : ads ? 0.62 : 0.75) - shoulder) * kCam;
       const knockedCam = pred?.mode === PM.Knocked ? -0.7 : 0;
-      pivot.set(selfPos.x + Math.cos(camYaw) * shoulder, selfPos.y + (inBus ? 4 : air ? 1.3 : driving ? 2.4 : 1.62 + knockedCam), selfPos.z - Math.sin(camYaw) * shoulder);
+      const walking = !!pred && pred.mode === PM.Walk && !watching;
+      camLow += ((walking ? (pred!.mv === MV.Slide ? -0.62 : isLow(pred!) ? -0.42 : 0) : 0) - camLow) * (1 - Math.exp(-dt * 10));
+      if (pred && pred.mode === PM.Walk) {
+        if (!pred.grounded) selfFallVy = Math.min(selfFallVy, pred.vy);
+        else if (!selfWasGrounded) { if (selfFallVy < -7 && pred.mv === MV.None) camDip = Math.min(0.35, (-selfFallVy - 5) * 0.03); selfFallVy = 0; }
+        selfWasGrounded = pred.grounded;
+      } else { selfWasGrounded = true; selfFallVy = 0; }
+      camDip *= Math.exp(-dt * 7);
+      pivot.set(selfPos.x + Math.cos(camYaw) * shoulder, selfPos.y + (inBus ? 4 : air ? 1.3 : driving ? 2.4 : 1.62 + knockedCam + camLow - camDip), selfPos.z - Math.sin(camYaw) * shoulder);
       camPos.copy(pivot).addScaledVector(dir, -camDist);
       // keep the camera out of walls: pull in to the first thing behind the player
       const back = { x: camPos.x - pivot.x, y: camPos.y - pivot.y, z: camPos.z - pivot.z };
@@ -467,7 +484,9 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       camera.lookAt(pivot.x + dir.x * 20, pivot.y + dir.y * 20, pivot.z + dir.z * 20);
       const scoped = ads && !!heldDef?.scope && camDist < 2.6;
       const baseFov = settings.fov;
-      const wantFov = me.mode === PM.Fall && !inBus ? baseFov + 6 + me.dive * 10 : ads && heldDef ? heldDef.adsFov * (baseFov / 70) : baseFov;
+      const kickTo = !pred || ads || watching ? 0 : pred.mode === PM.Zip ? 6 : pred.mv === MV.Launch ? 10 : pred.mv === MV.Slide ? 4 + Math.min(5, Math.hypot(pred.vx, pred.vz) - 6) : (me.flags & EF.SPRINT) ? 3 : 0;
+      fovKick += (Math.max(0, kickTo) - fovKick) * (1 - Math.exp(-dt * 5));
+      const wantFov = me.mode === PM.Fall && !inBus ? baseFov + 6 + me.dive * 10 : ads && heldDef ? heldDef.adsFov * (baseFov / 70) : baseFov + fovKick;
       if (Math.abs(wantFov - fov) > 0.05) { fov += (wantFov - fov) * kCam; camera.fov = fov; camera.updateProjectionMatrix(); }
       input.zoom = fov / baseFov;
       actors.states[selfIdx].visible &&= !scoped; // hide yourself inside a scope
@@ -483,6 +502,24 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       storm.update(time, serverNow);
       if (Math.floor(time * 2) !== Math.floor((time - dt) * 2)) island.props.setBeacons(beaconReady.map((t) => serverNow >= t));
       actors.update(dt, time, camPos);
+      // movement effects: slide dust, hard-landing puffs, splashes, launch bursts
+      for (const [x, y, z, k] of actors.landings) if ((x - camPos.x) ** 2 + (z - camPos.z) ** 2 < 80 * 80) fx.burst(x, y + 0.1, z, 4 + Math.round(k * 8), y < 2.5 ? '#eadcb5' : '#d6c9a8', 2 + k * 3, 0.6, 0.22, 0.6);
+      for (let i = 0; i < st.length; i++) {
+        const s = st[i];
+        if (!s.visible || (s.x - camPos.x) ** 2 + (s.z - camPos.z) ** 2 > 75 * 75) { wetPrev[i] = false; mvPrev[i] = s.mv; continue; }
+        dustT[i] -= dt;
+        const wet = (s.mode === PM.Walk || s.mode === PM.Knocked) && s.y <= WATER_FLOAT_Y + 0.05 && terrainAt(world, s.x, s.z) < WATER_FLOAT_Y;
+        if (wet && !wetPrev[i] && (s.vy < -2 || s.speed > 3)) fx.burst(s.x, WATER_FLOAT_Y + 0.9, s.z, 12, '#e9fbff', 2.5, 5 + Math.min(6, -s.vy * 0.4), 0.2, 0.7, 1.1);
+        else if (wet && s.speed > 1 && dustT[i] <= 0) { dustT[i] = 0.16; fx.burst(s.x, WATER_FLOAT_Y + 0.95, s.z, 2, '#ffffff', 0.8, 1.2, 0.14, 0.5, 1.5); }
+        if (s.mode === PM.Walk && s.mv === MV.Slide && s.grounded && dustT[i] <= 0) {
+          dustT[i] = 0.045;
+          const fx2 = -Math.sin(s.yaw), fz2 = -Math.cos(s.yaw);
+          fx.burst(s.x + fx2 * 0.5, s.y + 0.12, s.z + fz2 * 0.5, 1, s.y < 2.5 ? '#eadcb5' : '#d2c4a0', 1.4, 1.4, 0.18, 0.55, 2.2);
+        }
+        if (s.mv === MV.Launch && mvPrev[i] !== MV.Launch) fx.burst(s.x, s.y + 0.3, s.z, 14, '#7dffd2', 5, 3, 0.2, 0.6, 1.2);
+        if ((s.mv === MV.Mantle || s.mv === MV.Hurdle) && mvPrev[i] !== s.mv) fx.burst(s.x - Math.sin(s.yaw) * 0.6, s.y + 0.9, s.z - Math.cos(s.yaw) * 0.6, 3, '#e6dcc6', 0.8, 0.8, 0.12, 0.4);
+        wetPrev[i] = wet; mvPrev[i] = s.mv;
+      }
       fx.update(dt);
       lootR.update(dt, time, camPos);
       chestR.update(dt, time, camPos, serverNow);
@@ -536,6 +573,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
           else if (it && it.item === ITEM.card) { prompt = `Pick up ${roster[it.r]?.name}'s recall card`; promptRarity = 3; }
           else if (chestWins) { prompt = chest!.k === 0 ? 'Open Chest' : chest!.k === 1 ? 'Search Ammo Box' : 'Open Supply Drop'; promptRarity = chest!.k === 2 ? 3 : chest!.k === 0 ? 4 : 0; }
           else if (it) { prompt = ITEMS[it.item]?.kind === 'forage' ? `Eat ${ITEMS[it.item]!.name}` : CombatHud.label(it.item, it.r, it.n); promptRarity = ITEMS[it.item]?.kind === 'weapon' ? it.r : 0; }
+          else if (pred.mv === MV.None && zipNear(world, pred.x, pred.y, pred.z)) prompt = 'Ride zipline';
         }
         const rp = performance.now() - revive.at < 200 ? revive.p : 0;
         combat.update({
@@ -569,7 +607,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       onMsg, onSnapshot, resync,
       dispose() {
         renderer.setAnimationLoop(null);
-        removeEventListener('resize', resize);
+        removeEventListener('resize', resize); removeEventListener('beforeunload', leaveGuard);
         input.dispose(); actors.dispose(); lootR.clear(); offSettings();
         scene.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh || (o as THREE.InstancedMesh).isInstancedMesh) m.geometry?.dispose(); });
         renderer.dispose(); renderer.domElement.remove();

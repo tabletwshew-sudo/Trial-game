@@ -12,3 +12,4 @@ export * from './projectile.js';
 export * from './structures.js';
 export * from './props.js';
 export * from './storm.js';
+export * from './move.js';

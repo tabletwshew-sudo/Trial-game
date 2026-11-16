@@ -70,7 +70,7 @@ describe('match instance', () => {
     expect(landed.length).toBe(80); // everyone is down (some may already be fighting, knocked or out)
     const onLand = inst.players.filter((p) => !p.npc).filter((p) => terrainAt(inst.world, p.s.x, p.s.z) > 0 || p.s.y > 0);
     expect(onLand.length).toBeGreaterThanOrEqual(72); // almost everyone hits dry land
-    expect(mates.every((p) => Math.hypot(p.s.x - me.s.x, p.s.z - me.s.z) < 60)).toBe(true); // squad landed together
+    expect(mates.every((p) => Math.hypot(p.s.x - me.s.x, p.s.z - me.s.z) < 90)).toBe(true); // squad landed together (and has been looting the same town for 45 s)
     // bot squads spread across several locations
     const spots = new Set(inst.players.filter((p) => p.bot && !p.npc && p.team !== me.team).map((p) => `${Math.round(p.s.x / 250)},${Math.round(p.s.z / 250)}`));
     expect(spots.size).toBeGreaterThanOrEqual(5);
@@ -137,13 +137,14 @@ describe('client prediction', () => {
     const LAG = 3; // ticks each way
     const up: ArrayBuffer[][] = [], down: (Snapshot | null)[] = [];
     let pending: { seq: number; cmd: { keys: number; yaw: number; pitch: number } }[] = [];
-    let pred: any = null, seq = 0, worst = 0, checks = 0;
+    let pred: any = null, seq = 0, worst = 0, checks = 0, slid = 0;
     const rnd = (() => { let s = 7; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 2 ** 32); })();
     let keys = 0, yaw = 0, pitch = 0;
     for (let tick = 0; tick < 30 * 80; tick++) {
       now += 1000 / 30;
       // the "player": random wandering, jump taps, steering; presses space after the doors open
-      if (tick % 20 === 0) { keys = (rnd() < 0.8 ? K.F : 0) | (rnd() < 0.5 ? K.SPRINT : 0) | (rnd() < 0.3 ? K.L : 0) | (rnd() < 0.2 ? K.JUMP : 0); yaw = Math.fround(yaw + (rnd() - 0.5)); pitch = Math.fround(-rnd() * 1.4); }
+      if (tick % 20 === 0) { keys = (rnd() < 0.8 ? K.F : 0) | (rnd() < 0.5 ? K.SPRINT : 0) | (rnd() < 0.3 ? K.L : 0) | (rnd() < 0.2 ? K.JUMP : 0) | (rnd() < 0.3 ? K.CROUCH : 0); yaw = Math.fround(yaw + (rnd() - 0.5)); pitch = Math.fround(-rnd() * 1.4); } // (crouch + sprint = slides)
+      if (tick % 20 === 8 && (keys & K.SPRINT) && (keys & K.F)) keys |= K.CROUCH; // crouch mid-sprint: a slide
       if (inst.route && now > inst.route.doorsAt + 3000 && now < inst.route.doorsAt + 3200) keys |= K.JUMP;
       const cmds = [0, 1].map(() => ({ keys, yaw, pitch }));
       for (const cmd of cmds) { seq++; pending.push({ seq, cmd }); if (pred) stepPlayer(pred, cmd, world); }
@@ -159,11 +160,13 @@ describe('client prediction', () => {
           pending = pending.filter((p) => p.seq > snap.ack);
           for (const p of pending) stepPlayer(pred, p.cmd, world);
           // compare only when the mode did not just change server-side (boarding / leaving the ship is server-driven)
+          if (pred.mv === 1) slid++;
           if (before && before.mode === pred.mode && pred.mode !== PM.Bus) { worst = Math.max(worst, Math.hypot(pred.x - before.x, pred.y - before.y, pred.z - before.z)); checks++; }
         }
       }
     }
     expect(checks).toBeGreaterThan(1500);
+    expect(slid).toBeGreaterThan(5); // the replay covered slides too
     expect(pred.mode).toBe(PM.Walk); // made it down
     expect(worst).toBeLessThan(0.02);
   });

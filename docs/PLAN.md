@@ -115,7 +115,7 @@ tests/      e2e (Playwright)
   (Low/Medium/High for Chromebooks), volume sliders, colour-blind modes
 * Map (M) with markers and pings (middle mouse), compass
 
-### Phase 7 — Movement polish
+### Phase 7 — Movement polish ✅
 * Walk, sprint (unlimited, with a tactical-sprint toggle), crouch, **slide** (momentum, downhill
   boost), jump, **mantle** (ledges up to ~2.5 m), **hurdle** (low obstacles while
   sprinting), swim (surface + sprint-swim), fall damage, ladder/zip-line, knock-back

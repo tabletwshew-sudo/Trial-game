@@ -52,6 +52,18 @@ export class Effects {
     }
   }
 
+  /**
+   * A burst of soft puffs (dust, sand, splashes): n puffs thrown out sideways at `speed` and
+   * up at `up` m/s. Skipped when lots are already alive, so big fights stay cheap.
+   */
+  burst(x: number, y: number, z: number, n: number, color: string, speed: number, up: number, size: number, life: number, grow = 1.4) {
+    if (this.puffs.length > 360) return;
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2, r = speed * (0.5 + Math.random() * 0.5);
+      this.puff(new THREE.Vector3(x, y, z), new THREE.Vector3(Math.cos(a) * r, up * (0.6 + Math.random() * 0.6), Math.sin(a) * r), color, size * (0.7 + Math.random() * 0.6), life * (0.7 + Math.random() * 0.5), grow, 0);
+    }
+  }
+
   private puff(at: THREE.Vector3, vel: THREE.Vector3, color: string, size: number, life: number, grow: number, glow: number) {
     const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, depthWrite: false });
     if (glow > 0.3) mat.fog = false;

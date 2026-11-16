@@ -34,12 +34,18 @@ export class Input {
 
   /** Bits the game should act on: sprint-by-default and toggle-aim applied. */
   get keys() {
-    let k = this.held;
+    let k = this.held | this.tapped;
     if (settings.autoSprint) k ^= K.SPRINT;
     if (settings.toggleAds) k = (k & ~K.ADS) | (this.adsLatched ? K.ADS : 0);
     return k;
   }
-  set keys(v: number) { this.held = v; if (!(v & K.ADS)) this.adsLatched = false; }
+  set keys(v: number) { this.held = v & ~(this.tapped & ~this.held); if (!(v & K.ADS)) this.adsLatched = false; }
+  /**
+   * Keys pressed since the last sim step, even if already released: a quick tap on a slow frame
+   * (low-end laptops) still counts. The game calls this after each step reads `keys`.
+   */
+  consumeTaps() { this.tapped = 0; }
+  private tapped = 0;
   onLockChange?: (locked: boolean) => void;
   private off: (() => void)[] = [];
   private mouse = 0;
@@ -52,7 +58,7 @@ export class Input {
     on(document, 'keydown', (e) => {
       if ((e.target as HTMLElement)?.tagName === 'INPUT' || document.querySelector('.settings-overlay')) return;
       const bit = keymap()[e.code];
-      if (bit) { this.held |= bit; e.preventDefault(); }
+      if (bit) { this.held |= bit; if (!e.repeat) this.tapped |= bit; e.preventDefault(); }
       if (e.repeat) return;
       for (let i = 1; i <= 5; i++) if (settings.keys[`slot${i}` as Action] === e.code) this.pendingSlot = i;
       if (e.code === settings.keys.map || e.code === 'Tab') { e.preventDefault(); this.onAction?.('map'); }
@@ -60,7 +66,7 @@ export class Input {
       if (this.spectating && (e.code === 'ArrowRight' || e.code === 'ArrowLeft')) this.onSpec?.(e.code === 'ArrowRight' ? 1 : -1);
     });
     on(document, 'keyup', (e) => { const bit = keymap()[e.code]; if (bit) this.held &= ~bit; });
-    on(window, 'blur' as any, () => { this.held = 0; this.mouse = 0; });
+    on(window, 'blur' as any, () => { this.held = 0; this.tapped = 0; this.mouse = 0; });
     on(document, 'mousemove', (e) => {
       if (!this.locked) return;
       // some browsers report a huge delta on the first locked frame

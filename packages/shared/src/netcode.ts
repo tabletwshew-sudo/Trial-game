@@ -39,8 +39,8 @@ export function decodeInputs(v: DataView): { firstSeq: number; cmds: InputCmd[];
 export const EF = { GROUNDED: 1, ADS: 2, CROUCH: 4, USING: 8, RELOADING: 16, SPRINT: 32 } as const;
 /** Emote id lives in the top two flag bits. */
 export const EF_EMOTE_SHIFT = 6;
-export interface EntSnap { idx: number; x: number; y: number; z: number; yaw: number; pitch: number; mode: number; flags: number; item: number; rarity: number }
-export const ENT_BYTES = 13;
+export interface EntSnap { idx: number; x: number; y: number; z: number; yaw: number; pitch: number; mode: number; flags: number; item: number; rarity: number; /** movement sub-state + its tick counter (for slide/mantle/climb poses) */ mv: number; mt: number }
+export const ENT_BYTES = 15;
 
 export function encodeEnt(e: EntSnap, out: Uint8Array, o: number) {
   const v = new DataView(out.buffer, out.byteOffset);
@@ -51,6 +51,7 @@ export function encodeEnt(e: EntSnap, out: Uint8Array, o: number) {
   v.setUint8(o + 7, Math.round(((((e.yaw % TAU) + TAU) % TAU) / TAU) * 256) & 255);
   v.setInt8(o + 8, Math.round(Math.max(-1.57, Math.min(1.57, e.pitch)) * 80));
   v.setUint8(o + 9, e.mode); v.setUint8(o + 10, e.flags); v.setUint8(o + 11, e.item); v.setUint8(o + 12, e.rarity);
+  v.setUint8(o + 13, e.mv); v.setUint8(o + 14, Math.max(0, Math.min(255, e.mt)));
 }
 
 // ------------------------------------------------------------------ cars
@@ -67,7 +68,7 @@ function encodeVeh(e: VehSnap, v: DataView, o: number) {
 
 // ------------------------------------------------------------------ snapshot
 export interface Snapshot { tick: number; time: number; ack: number; self: PlayerState | null; ents: EntSnap[]; vehs: VehSnap[] }
-const SELF_BYTES = 98;
+const SELF_BYTES = 133;
 
 function writeSelf(v: DataView, o: number, s: PlayerState) {
   for (const f of [s.x, s.y, s.z, s.vx, s.vy, s.vz]) { v.setFloat32(o, f, true); o += 4; }
@@ -81,6 +82,10 @@ function writeSelf(v: DataView, o: number, s: PlayerState) {
   for (const a of s.ammo) { v.setUint16(o, a, true); o += 2; }
   v.setFloat32(o, s.yaw, true); o += 4; v.setFloat32(o, s.pitch, true); o += 4;
   v.setUint8(o++, s.emote);
+  v.setUint8(o++, s.mv); v.setUint8(o++, s.mt);
+  for (const f of [s.tx, s.ty, s.tz, s.my, s.mh]) { v.setFloat32(o, f, true); o += 4; }
+  v.setUint8(o++, s.air); v.setUint8(o++, s.jbuf); v.setInt16(o, s.li, true); o += 2;
+  v.setFloat32(o, s.zt, true); o += 4; v.setFloat32(o, s.zv, true); o += 4; v.setUint8(o++, s.scd);
   return o;
 }
 function readSelf(v: DataView, o: number): PlayerState {
@@ -93,7 +98,10 @@ function readSelf(v: DataView, o: number): PlayerState {
   const inv = [0, 1, 2, 3, 4].map(() => ({ ...emptySlot(), id: u8(), r: u8(), n: u8(), mag: u8() }));
   const ammo = [0, 1, 2, 3, 4].map(() => u16());
   const yaw = f(), pitch = f(), emote = u8();
-  return { emote, x, y, z, vx, vy, vz, yaw, pitch, mode, grounded, keys, hp, shield, knock, slot, inv, ammo, cd, burst, reload, use, bloom, shots, seed, act, veh, seat, vh, vs };
+  const mv = u8(), mt = u8(), tx = f(), ty = f(), tz = f(), my = f(), mh = f(), air = u8(), jbuf = u8();
+  const li = v.getInt16(o, true); o += 2;
+  const zt = f(), zv = f(), scd = u8();
+  return { mv, mt, tx, ty, tz, my, mh, air, jbuf, li, zt, zv, scd, emote, x, y, z, vx, vy, vz, yaw, pitch, mode, grounded, keys, hp, shield, knock, slot, inv, ammo, cd, burst, reload, use, bloom, shots, seed, act, veh, seat, vh, vs };
 }
 
 /**
@@ -124,7 +132,7 @@ export function decodeSnapshot(v: DataView): Snapshot | null {
   for (let i = 0; i < n; i++, o += ENT_BYTES) {
     snap.ents.push({
       idx: v.getUint8(o), x: v.getInt16(o + 1, true) / 16, y: v.getInt16(o + 3, true) / 32, z: v.getInt16(o + 5, true) / 16,
-      yaw: (v.getUint8(o + 7) / 256) * TAU, pitch: v.getInt8(o + 8) / 80, mode: v.getUint8(o + 9), flags: v.getUint8(o + 10), item: v.getUint8(o + 11), rarity: v.getUint8(o + 12),
+      yaw: (v.getUint8(o + 7) / 256) * TAU, pitch: v.getInt8(o + 8) / 80, mode: v.getUint8(o + 9), flags: v.getUint8(o + 10), item: v.getUint8(o + 11), rarity: v.getUint8(o + 12), mv: v.getUint8(o + 13), mt: v.getUint8(o + 14),
     });
   }
   const nv = v.getUint8(o++);

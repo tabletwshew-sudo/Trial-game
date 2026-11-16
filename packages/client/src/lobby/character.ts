@@ -44,8 +44,14 @@ function bake(group: THREE.Group) {
   group.add(mesh);
 }
 
-export type PoseMode = 'idle' | 'run' | 'air' | 'fall' | 'glide' | 'swim' | 'knocked' | 'drive' | 'sit';
-export interface Pose { mode: PoseMode; speed: number; dive: number; hold?: 'none' | 'gun' | 'item'; pitch: number; sprint?: boolean; crouch?: boolean; using?: boolean; emote?: number }
+export type PoseMode = 'idle' | 'run' | 'air' | 'fall' | 'glide' | 'swim' | 'knocked' | 'drive' | 'sit' | 'slide' | 'mantle' | 'hurdle' | 'climb' | 'zip' | 'launch';
+export interface Pose {
+  mode: PoseMode; speed: number; dive: number; hold?: 'none' | 'gun' | 'item'; pitch: number; sprint?: boolean; crouch?: boolean; using?: boolean; emote?: number;
+  /** 0..1 through a mantle or hurdle. */
+  phase?: number;
+  /** Vertical speed (ladders). */
+  vy?: number;
+}
 const damp = (a: number, b: number, k: number) => a + (b - a) * k;
 
 export class Character {
@@ -64,11 +70,27 @@ export class Character {
   private phase = Math.random() * 10;
   private hop = 0;
   private wave = 0;
+  private squash = 0;
+  private roll = 0;
+  /** The little trolley you hang from on a zipline. */
+  private trolley: THREE.Group;
   lookTarget = new THREE.Vector3(0, 1.6, 10);
 
   constructor(public skinIndex: number) {
     this.build(SKINS[skinIndex % SKINS.length]);
+    this.trolley = new THREE.Group();
+    const dark = new THREE.MeshToonMaterial({ color: '#2b2d42' }), yellow = new THREE.MeshToonMaterial({ color: '#ffb703' });
+    const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.07, 10).rotateZ(Math.PI / 2), dark);
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.32, 0.12), yellow); frame.position.y = -0.16;
+    const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.5, 6).rotateZ(Math.PI / 2), dark); bar.position.y = -0.32;
+    this.trolley.add(wheel, frame, bar);
+    this.trolley.position.set(0, 2.05 + 0.02, 0.05);
+    this.trolley.visible = false;
+    this.root.add(this.trolley);
   }
+
+  /** Hit the ground hard: squash down for a moment (0..1). */
+  land(intensity: number) { this.squash = Math.max(this.squash, Math.min(1, intensity)); }
 
   setSkin(i: number) {
     if (i === this.skinIndex) return;
@@ -258,6 +280,55 @@ export class Character {
         legL = sw * 0.3; legR = -sw * 0.3;
         break;
       }
+      case 'slide': {
+        // leaning back, lead leg out front, a hand trailing on the ground
+        rx = -0.62; by = -0.62; headX = 0.42;
+        legL = -1.45; legR = -0.55; aLx = 0.35; aLz = -0.95; aRx = -0.35; aRz = 0.5;
+        this.roll = damp(this.roll, 0.12, k);
+        break;
+      }
+      case 'mantle': {
+        const ph = p.phase ?? 0;
+        if (ph < 0.6) {
+          // reach up and haul yourself over
+          const u = ph / 0.6;
+          rx = 0.25 + u * 0.35; headX = -0.25;
+          aLx = aRx = -2.95 + u * 2.3; aLz = -0.25 + u * 0.1; aRz = 0.25 - u * 0.1;
+          legL = -0.9 * Math.sin(u * Math.PI) - 0.2; legR = -0.35 - u * 0.5; by = -u * 0.2;
+        } else {
+          // knee up onto the ledge and stand
+          const u = (ph - 0.6) / 0.4;
+          rx = 0.6 * (1 - u); aLx = aRx = -0.65 * (1 - u); aLz = -0.3; aRz = 0.3;
+          legL = -1.3 * (1 - u); legR = -0.3 * (1 - u); by = -0.2 * (1 - u);
+        }
+        break;
+      }
+      case 'hurdle': {
+        const ph = p.phase ?? 0, arc = Math.sin(ph * Math.PI);
+        rx = 0.32 * arc; legL = -1.25 * arc; legR = 0.85 * arc;
+        aLx = -0.5 * arc; aLz = -0.35 - 0.9 * arc; aRz = 0.35 + 0.9 * arc; aRx = 0.3 * arc;
+        this.roll = damp(this.roll, 0.28 * arc, k);
+        break;
+      }
+      case 'climb': {
+        this.cycle += dt * Math.abs(p.vy ?? 0) * 2.2;
+        const sw = Math.sin(this.cycle);
+        rx = -0.04; headX = -0.35;
+        aLx = -2.7 + sw * 0.38; aRx = -2.7 - sw * 0.38; aLz = -0.12; aRz = 0.12;
+        legL = -0.75 + sw * 0.5; legR = -0.75 - sw * 0.5; by = -0.05;
+        break;
+      }
+      case 'zip': {
+        const sway = Math.sin(t * 2.3 + this.phase);
+        rx = 0.06; aLx = -3.05; aLz = 0.12; aRx = -3.05; aRz = -0.12;
+        legL = -0.45 + sway * 0.18; legR = -0.15 - sway * 0.15; headX = 0.05;
+        this.roll = damp(this.roll, sway * 0.06, k);
+        break;
+      }
+      case 'launch': {
+        rx = -0.12; aLx = -0.3; aRx = -0.3; aLz = -2.5; aRz = 2.5; legL = 0.1; legR = -0.15; headX = -0.3;
+        break;
+      }
       case 'drive': case 'sit': {
         by = -0.42; legL = legR = -1.45; rx = -0.08;
         if (p.mode === 'drive') { aLx = aRx = -1.15; aLz = -0.05; aRz = 0.05; }
@@ -266,16 +337,25 @@ export class Character {
       }
     }
     // upper body: aim the gun (except while sprinting, swimming, gliding...)
-    const canAim = gun && (p.mode === 'idle' || p.mode === 'run' || p.mode === 'air' || p.mode === 'sit');
-    if (canAim && !p.sprint) {
+    const canAim = gun && (p.mode === 'idle' || p.mode === 'run' || p.mode === 'air' || p.mode === 'sit' || p.mode === 'slide' || p.mode === 'zip');
+    if (canAim && (!p.sprint || p.mode === 'slide')) {
       const pitch = Math.max(-1.2, Math.min(1.2, p.pitch));
-      aRx = -Math.PI / 2 - pitch; aRz = 0.05; aRy = -0.08;
-      aLx = -Math.PI / 2 - pitch + 0.05; aLz = 0.1; aLy = 0.62;
-      headX = -pitch * 0.5;
+      // aim relative to the body, which leans back in a slide
+      const lean = p.mode === 'slide' ? -0.62 : 0;
+      aRx = -Math.PI / 2 - pitch - lean; aRz = 0.05; aRy = -0.08;
+      if (p.mode !== 'zip') { aLx = -Math.PI / 2 - pitch + 0.05 - lean; aLz = 0.1; aLy = 0.62; } // (on a zipline the other hand holds on)
+      headX = -pitch * 0.5 - lean * 0.6;
       if (p.mode === 'run') rx = 0.04;
     } else if (canAim && p.sprint) { aRx = -0.9; aRy = 0; aLx = -0.75; aLy = 0.5; aRz = 0.15; }
     if (p.using) { aRx = -2.3 + Math.sin(t * 8) * 0.08; aRz = -0.25; aRy = 0.3; headX = 0.25; }
     if (p.crouch && (p.mode === 'idle' || p.mode === 'run')) { by -= 0.32; legL -= 0.55; legR -= 0.55; rx += 0.18; }
+    // landing squash
+    if (this.squash > 0.01) {
+      const q = this.squash;
+      by -= q * 0.3; legL -= q * 0.7; legR -= q * 0.5; rx += q * 0.25; aLz -= q * 0.3; aRz += q * 0.3;
+      this.squash = Math.max(0, this.squash - dt * 4.5);
+    }
+    if (p.mode !== 'slide' && p.mode !== 'hurdle' && p.mode !== 'zip') this.roll = damp(this.roll, 0, k);
     // emotes (only while standing still)
     let spin = 0;
     if (p.emote && p.mode === 'idle') {
@@ -295,7 +375,7 @@ export class Character {
     const B = this.body;
     B.rotation.y = spin ? spin : damp(B.rotation.y % (Math.PI * 2), 0, k);
     B.rotation.x = damp(B.rotation.x, rx, k);
-    B.rotation.z = 0; B.position.x = 0;
+    B.rotation.z = this.roll; B.position.x = 0;
     // keep the body's centre in place when it tips over (the pivot is at the feet)
     const pivot = 1.05;
     B.position.y = damp(B.position.y, by + pivot * (1 - Math.cos(B.rotation.x)), k);
@@ -306,7 +386,8 @@ export class Character {
     this.armL.rotation.set(damp(this.armL.rotation.x, aLx, kArm), damp(this.armL.rotation.y, aLy, kArm), damp(this.armL.rotation.z, aLz, kArm));
     this.armR.rotation.set(damp(this.armR.rotation.x, aRx, kArm), damp(this.armR.rotation.y, aRy, kArm), damp(this.armR.rotation.z, aRz, kArm));
     this.head.rotation.set(damp(this.head.rotation.x, headX, k), damp(this.head.rotation.y, 0, k), 0);
-    this.held.visible = !p.emote && p.mode !== 'fall' && p.mode !== 'glide' && p.mode !== 'swim' && p.mode !== 'knocked' && p.mode !== 'drive';
+    this.held.visible = !p.emote && p.mode !== 'fall' && p.mode !== 'glide' && p.mode !== 'swim' && p.mode !== 'knocked' && p.mode !== 'drive' && p.mode !== 'climb' && p.mode !== 'mantle' && p.mode !== 'launch';
+    this.trolley.visible = p.mode === 'zip';
     // glider pops open / folds away
     this.gliderOpen = damp(this.gliderOpen, p.mode === 'glide' ? 1 : 0, 1 - Math.exp(-dt * 10));
     this.glider.visible = this.gliderOpen > 0.03;
@@ -325,7 +406,10 @@ export class Character {
   /** Frees this character's own geometry (held items share a cache, so they're detached first). */
   dispose() {
     this.held.removeFromParent();
+    const tr = this.trolley;
+    tr?.removeFromParent();
     this.root.traverse((o) => { if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).geometry.dispose(); });
+    if (tr) this.root.add(tr);
   }
 
   /** Little hop + wave (ready-up, joining). */
