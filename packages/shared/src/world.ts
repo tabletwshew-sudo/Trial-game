@@ -14,7 +14,7 @@ export const STEP_UP = 0.6;
 export const PLAYER_RADIUS = 0.42;
 export const PLAYER_HEIGHT = 1.85;
 export const WORLD_LIMIT = 1900;
-export const SPAWN_ISLAND = { x: -1450, z: -1450, r: 75 };
+export const SPAWN_ISLAND = { x: -1450, z: -1450, r: 130 };
 /** Roads become bridge decks at this height wherever the ground dips below it (rivers). */
 export const BRIDGE_Y = 1.25;
 
@@ -123,6 +123,8 @@ export interface World {
   vaults: Vault[];
   /** Per match: vault doors that have been opened (use Object.create(world) to give each match its own). */
   openVaults?: Set<number>;
+  /** Per match: walls and furniture smashed with the pickaxe or blown up (solid ids). */
+  broken?: Set<number>;
   /** Climbable ladders, ziplines, spring pads. */
   ladders: Ladder[];
   zips: Zip[];
@@ -136,7 +138,8 @@ export interface Zip { ax: number; ay: number; az: number; bx: number; by: numbe
 
 export interface Vault { id: number; x: number; z: number; y: number; face: number; door: { x: number; z: number }; post: { x: number; z: number }; chests: Spot[]; poi: number }
 
-const isOpenDoor = (w: World, o: Solid) => o.vault !== undefined && !!w.openVaults?.has(o.vault);
+/** Is this solid not there right now (an opened vault door, or a wall/furniture that's been broken)? */
+const isOpenDoor = (w: World, o: Solid) => (o.vault !== undefined && !!w.openVaults?.has(o.vault)) || (o.id !== undefined && !!w.broken?.has(o.id));
 
 export const SOLID_CELL = 16;
 export const solidKey = (cx: number, cz: number) => (cx + 1024) * 2048 + (cz + 1024);
@@ -246,8 +249,8 @@ function genMain(seed: number, pois: Poi[], riverPts: Float32Array): HeightField
 }
 
 function genSpawn(seed: number): HeightField {
-  const cell = 2.5, n = 81;
-  const f = new HeightField(SPAWN_ISLAND.x - 100, SPAWN_ISLAND.z - 100, cell, n, n);
+  const cell = 2.5, n = 129;
+  const f = new HeightField(SPAWN_ISLAND.x - 160, SPAWN_ISLAND.z - 160, cell, n, n);
   for (let iz = 0; iz < n; iz++) {
     for (let ix = 0; ix < n; ix++) {
       const x = f.ox + ix * cell, z = f.oz + iz * cell;
@@ -595,6 +598,7 @@ function addScatterSolids(w: World) {
 
 function buildSolidGrid(w: World) {
   const pad = 1.6; // big enough for a car's collision circle
+  w.solids.forEach((o, i) => { o.id = i; });
   for (const o of w.solids) {
     for (let cz = Math.floor((o.z0 - pad) / SOLID_CELL); cz <= Math.floor((o.z1 + pad) / SOLID_CELL); cz++)
       for (let cx = Math.floor((o.x0 - pad) / SOLID_CELL); cx <= Math.floor((o.x1 + pad) / SOLID_CELL); cx++) {

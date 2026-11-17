@@ -77,7 +77,7 @@ export interface BotBrain {
 
 export function newBrain(rnd: () => number): BotBrain {
   return {
-    rnd, skill: 0.15 + rnd() * 0.55,
+    rnd, skill: 0.05 + rnd() * 0.3, // mostly beginners: easy to outplay
     target: { x: SPAWN_ISLAND.x, z: SPAWN_ISLAND.z }, follow: -1, jumpAt: Infinity,
     wander: null, wanderUntil: 0, idleUntil: 0, sprint: false,
     offset: { x: (rnd() - 0.5) * 16, z: (rnd() - 0.5) * 16 },
@@ -355,7 +355,7 @@ function decide(s: PlayerState, b: BotBrain, bw: BotWorld, home: { x: number; z:
   // ------------------------------------------------ perception (4x a second)
   if (now - b.lastScan > 250) {
     b.lastScan = now;
-    const range = 55 + b.skill * 70;
+    const range = 40 + b.skill * 45;
     const cands = bw.enemiesNear(s.x, s.z, range).sort((a, c) => (a.x - s.x) ** 2 + (a.z - s.z) ** 2 - ((c.x - s.x) ** 2 + (c.z - s.z) ** 2));
     let found = -1;
     for (const c of cands.slice(0, 3)) {
@@ -393,13 +393,13 @@ function decide(s: PlayerState, b: BotBrain, bw: BotWorld, home: { x: number; z:
     // aim: smooth turn toward the target plus an error that shrinks over the fight
     if (now > b.errUntil) {
       const engaged = (now - b.enemyFirstSeen) / 1000;
-      const sloppy = (1.15 - b.skill) * (0.05 + Math.min(0.06, dist / 900)) * Math.max(0.35, 1.4 - engaged * 0.25);
+      const sloppy = (1.2 - b.skill) * (0.085 + Math.min(0.09, dist / 700)) * Math.max(0.5, 1.5 - engaged * 0.18);
       b.errYaw = (b.rnd() - 0.5) * 2 * sloppy;
       b.errPitch = (b.rnd() - 0.5) * 1.6 * sloppy;
       b.errUntil = now + 250 + b.rnd() * 350;
     }
     const wantYaw = yawTo(dx, dz) + b.errYaw, wantPitch = Math.atan2(dy, dist) + b.errPitch;
-    const turn = (3 + b.skill * 7) * (1 / 30) * 2;
+    const turn = (2 + b.skill * 4) * (1 / 30) * 2;
     const dyaw = wrap(wantYaw - s.yaw);
     cmd.yaw = s.yaw + Math.max(-turn, Math.min(turn, dyaw));
     cmd.pitch = s.pitch + Math.max(-turn, Math.min(turn, wantPitch - s.pitch));
@@ -442,12 +442,12 @@ function decide(s: PlayerState, b: BotBrain, bw: BotWorld, home: { x: number; z:
       if (gunSlot !== s.slot) cmd.slot = gunSlot + 1;
 
       // ---- shoot
-      const reacted = now - b.enemyFirstSeen > 900 - b.skill * 550;
+      const reacted = now - b.enemyFirstSeen > 1500 - b.skill * 700;
       const lined = Math.abs(dyaw) < 0.12 + 2 / Math.max(dist, 4);
       const def = held;
       if (t && reacted && lined && def && s.cd === 0 && s.reload === 0) {
         // automatics at long range: tap so the spread settles between shots
-        const tap = def.auto && dist > 45 && def.cls !== 'smg';
+        const tap = def.auto && dist > 30 && def.cls !== 'smg';
         if (def.auto && !tap) cmd.keys |= K.FIRE;
         else { b.firePulse = !b.firePulse; if (b.firePulse) cmd.keys |= K.FIRE; }
         if (dist > 25 && def.cls !== 'shotgun' && def.cls !== 'autoshotgun') cmd.keys |= K.ADS;
@@ -469,7 +469,7 @@ function decide(s: PlayerState, b: BotBrain, bw: BotWorld, home: { x: number; z:
       // ---- they ducked behind something: lob a grenade over it
       const gs = grenadeSlot(s);
       const hidden = now - b.enemySeenAt;
-      if (!t && gs >= 0 && now > b.nadeAt && hidden > 900 && hidden < 5000 && dist > 7 && dist < 26) {
+      if (!t && gs >= 0 && b.skill > 0.25 && now > b.nadeAt && hidden > 1500 && hidden < 5000 && dist > 7 && dist < 26) {
         if (s.slot !== gs) cmd.slot = gs + 1;
         else if (s.cd === 0 && !(s.keys & K.FIRE)) {
           cmd.yaw = yawTo(tx - s.x, tz - s.z); cmd.pitch = Math.min(0.6, 0.12 + dist * 0.014);

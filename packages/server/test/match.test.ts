@@ -28,7 +28,7 @@ describe('match instance', () => {
     const init = c.msgs.find((m) => m.t === 'game_init');
     expect(init && init.t === 'game_init' && init.init.players.filter((x) => !x.npc).length).toBe(80);
     expect(init && init.t === 'game_init' && init.init.players.filter((x) => x.npc === 'boss').length).toBe(2);
-    expect(inst.players.filter((p) => !p.npc).every((p) => Math.hypot(p.s.x - SPAWN_ISLAND.x, p.s.z - SPAWN_ISLAND.z) < 70)).toBe(true);
+    expect(inst.players.filter((p) => !p.npc).every((p) => Math.hypot(p.s.x - SPAWN_ISLAND.x, p.s.z - SPAWN_ISLAND.z) < SPAWN_ISLAND.r)).toBe(true); // everyone starts on the warm-up island
 
     const tick = (keys = 0, yaw = 0, pitch = 0) => { now += 1000 / 30; c.send(inst, 'h0', keys, yaw, pitch); inst.step(now); };
 

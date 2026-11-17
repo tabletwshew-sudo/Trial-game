@@ -2,9 +2,9 @@ import {
   ACT, AMMO_ITEM, CAR, CHEST_KIND, SUPPLY_FALL, RECALL, ITEM, EF_EMOTE_SHIFT, makeStormPlan, stormAt, inStorm, consumableDef, ENT_BYTES, EF, ITEMS, K, MAP, PM, SIM_DT, SIM_HZ, SPAWN_ISLAND, TEAM_SIZE,
   addToInventory, applyDamage, blastDamage, busPos, decodeInputs, emptySlot, encodeEnt, encodeSnapshot, falloff, getWorld,
   MV, POSE, isLow, makeRoute, resetMove, mulberry32, newPlayerState, rayPlayer, raycastWorld, seatWorld, stepCar, stepPlayer, stepProjectile, surfaceAt, terrainAt,
-  weaponDamage, weaponDef, throwableDef, collideBoxes, meleeDef, heldItemId, BODY_R, PICK_SLOT,
+  weaponDamage, weaponDef, throwableDef, collideBoxes, clearColumn, meleeDef, OVERSHIELD, heldItemId, BODY_R, PICK_SLOT, SOLID_CELL, solidKey, structureHp,
   type BusRoute, type CarBody, type FeedCause, type GameEvent, type GameInit, type GamePhase, type InputCmd, type LootView,
-  type ChestView, type ClientMsg, type MatchStats, type StormPlan, type PlayerState, type Projectile, type ServerMsg, type ShotEvent, type SimEvents, type SwingEvent, type ThrowEvent, type Vec3, type VehSnap, type World,
+  type ChestView, type ClientMsg, type MatchStats, type Solid, type StormPlan, type PlayerState, type Projectile, type ServerMsg, type ShotEvent, type SimEvents, type SwingEvent, type ThrowEvent, type Vec3, type VehSnap, type World,
 } from '@dropzone/shared';
 import type { Match } from '../hub.js';
 
@@ -30,6 +30,8 @@ interface P {
   kills: number;
   place: number;
   lastHit: { by: number; at: number; w: number; cause: FeedCause } | null;
+  /** When this player last lost overshield, shield or health (the overshield waits a bit after). */
+  hurtAt: number;
   knockedBy: number;
   revive: { target: number; t: number } | null;
   bleedAcc: number;
@@ -97,6 +99,12 @@ export class MatchInstance {
   private beaconReady: number[];
   /** Things players dropped from their inventory: who, and until when they won't auto-collect it. */
   private droppedBy = new Map<number, { idx: number; until: number }>();
+  /** Hit points left on walls and furniture that have been hit (solid id -> hp). */
+  private structHp = new Map<number, number>();
+  /** Overshield on (tests that check exact damage numbers turn it off). */
+  overshield = true;
+  /** When a car last ran someone over (car id * 1000 + player), so one hit isn't counted every tick. */
+  private rammed = new Map<number, number>();
   private cardExpiry = new Map<number, number>();
   ended = false;
 
@@ -105,6 +113,7 @@ export class MatchInstance {
     // each match gets its own view of the shared world (so vault doors open per match)
     this.world = Object.create(getWorld(opts.seed ?? MAP.seed)) as World;
     this.world.openVaults = new Set();
+    this.world.broken = new Set();
     this.beaconReady = this.world.beacons.map(() => 0);
     this.rnd = mulberry32((now ^ 0x9e3779b9) >>> 0);
     this.lastNow = this.now = now;
@@ -117,7 +126,7 @@ export class MatchInstance {
         idx: idx++, id: m.id, name: m.name, bot: m.bot, team: team.id, skin: m.skin,
         s: newPlayerState(), queue: [], lastSeq: 0, budget: 4, starve: 0, gone: false, sock: null,
         brain: m.bot ? newBrain(mulberry32(Math.floor(this.rnd() * 2 ** 31))) : null, marker: null,
-        alive: true, kills: 0, place: 0, lastHit: null, knockedBy: -1, revive: null, bleedAcc: 0, respawnAt: 0, spec: -1, ev: [],
+        alive: true, kills: 0, place: 0, lastHit: null, hurtAt: 0, knockedBy: -1, revive: null, bleedAcc: 0, respawnAt: 0, spec: -1, ev: [],
         armor: 1, cards: [], stats: newStats(), aliveSince: now, lastPos: null,
       };
       p.s.seed = Math.floor(this.rnd() * 2 ** 31);
@@ -134,7 +143,7 @@ export class MatchInstance {
           idx: idx++, id: `npc${v.id}_${k}`, name, bot: true, team: 1000 + v.id, skin: boss ? 8 : 9,
           s: newPlayerState(), queue: [], lastSeq: 0, budget: 4, starve: 0, gone: false, sock: null,
           brain: newBrain(mulberry32(Math.floor(this.rnd() * 2 ** 31))), marker: null,
-          alive: false, kills: 0, place: 0, lastHit: null, knockedBy: -1, revive: null, bleedAcc: 0, respawnAt: 0, spec: -1, ev: [],
+          alive: false, kills: 0, place: 0, lastHit: null, hurtAt: 0, knockedBy: -1, revive: null, bleedAcc: 0, respawnAt: 0, spec: -1, ev: [],
           npc: boss ? 'boss' : 'guard', post: { x: v.post.x + (k - 1) * 4, z: v.post.z + (k ? 2 : 0) }, armor: boss ? 0.3 : 0.75,
           cards: [], stats: newStats(), aliveSince: now, lastPos: null,
         };
@@ -161,8 +170,11 @@ export class MatchInstance {
     const s = p.s;
     s.x = SPAWN_ISLAND.x; s.z = SPAWN_ISLAND.z;
     for (let i = 0; i < 30; i++) {
-      const x = SPAWN_ISLAND.x + (this.rnd() * 2 - 1) * 48, z = SPAWN_ISLAND.z + (this.rnd() * 2 - 1) * 48;
-      if (Math.hypot(x - SPAWN_ISLAND.x, z - SPAWN_ISLAND.z) > 48 || terrainAt(this.world, x, z) < 2) continue;
+      const x = SPAWN_ISLAND.x + (this.rnd() * 2 - 1) * 100, z = SPAWN_ISLAND.z + (this.rnd() * 2 - 1) * 100;
+      if (Math.hypot(x - SPAWN_ISLAND.x, z - SPAWN_ISLAND.z) > 100 || terrainAt(this.world, x, z) < 2) continue;
+      // open ground: not on or inside a prop, with room to move
+      const g = terrainAt(this.world, x, z);
+      if (surfaceAt(this.world, x, z, g + 3) > g + 0.05 || !clearColumn(this.world, x, z, g + 0.1, g + 2, 1.2)) continue;
       s.x = x; s.z = z;
       break;
     }
@@ -236,6 +248,7 @@ export class MatchInstance {
       kills: this.players.map((q) => q.kills),
       storm: this.storm ? { t0: this.storm.t0, circles: this.storm.circles } : null,
       vaultsOpen: [...this.world.openVaults!],
+      broken: [...this.world.broken!],
       beacons: this.beaconReady,
     };
     sock.json({ t: 'game_init', init });
@@ -457,6 +470,7 @@ export class MatchInstance {
       else {
         const wh = raycastWorld(this.world, o, d, def.range, false);
         if (wh.kind !== 'none') { kind = 0; hit = { x: o.x + d.x * wh.t, y: o.y + d.y * wh.t, z: o.z + d.z * wh.t }; }
+        if (wh.solid) this.damageStructure(wh.solid, def.structure, p);
       }
     }
     this.emitNear(o.x, o.z, 120, { e: 'melee', i: p.idx, h: [r1(hit.x), r1(hit.y), r1(hit.z), kind] }, p.bot ? undefined : p);
@@ -465,9 +479,13 @@ export class MatchInstance {
 
   private damage(q: P, amount: number, by: P | null, cause: FeedCause, weapon: number, head = false, at?: Vec3) {
     if (!q.alive || q.s.mode === PM.Dead || q.s.mode === PM.Bus) return;
+    // warm-up is for messing about: nobody can hurt anybody else (falls and the sea still count)
+    if (this.phase === 'warmup' && by && by !== q) return;
+    if (this.phase === 'warmup' && (cause === 'blast' || cause === 'car' || cause === 'gun')) return;
     const knockedBefore = q.s.mode === PM.Knocked;
     if (q.npc) amount *= q.armor;
     const [sh, hp] = applyDamage(q.s, amount, cause === 'fall' || cause === 'water' || cause === 'storm');
+    if (sh + hp > 0) q.hurtAt = this.now;
     q.stats.taken += sh + hp;
     if (by && by !== q && by.team !== q.team) by.stats.damage += sh + hp;
     // a bot keeps count of how hard it has hit its target (it pushes when it's a lot)
@@ -849,6 +867,41 @@ export class MatchInstance {
         const s = this.players[idx].s, at = seatWorld(v, seat);
         s.x = at.x; s.y = at.y; s.z = at.z; s.vh = v.vh;
       }
+      this.ram(v, driver);
+    }
+  }
+
+  /**
+   * Cars hurt the people they hit: damage grows with speed (about 50 at 15 m/s, 80 at 25 m/s),
+   * the victim is thrown along the car's path, and the car loses some speed. The driver gets
+   * the credit. Each person can only be hit once a second by the same car.
+   */
+  private ram(v: Veh, driver: P | null) {
+    const speed = Math.abs(v.vs);
+    if (speed < 7) return;
+    const fx = -Math.sin(v.vh) * Math.sign(v.vs), fz = -Math.cos(v.vh) * Math.sign(v.vs);
+    for (const q of this.players) {
+      if (!q.alive || q.gone || (q.s.mode !== PM.Walk && q.s.mode !== PM.Knocked) || v.seats.includes(q.idx)) continue;
+      if (driver && q.team === driver.team) continue;
+      if (Math.abs(q.s.y - v.y) > 2) continue;
+      // three circles along the car's length
+      let hit = false;
+      for (const k of [-1.1, 0, 1.3]) {
+        const cx = v.x - Math.sin(v.vh) * k, cz = v.z - Math.cos(v.vh) * k;
+        if ((q.s.x - cx) ** 2 + (q.s.z - cz) ** 2 < (1.15 + 0.42) ** 2) { hit = true; break; }
+      }
+      if (!hit) continue;
+      // only what's in front of the car's travel counts as being run into
+      if ((q.s.x - v.x) * fx + (q.s.z - v.z) * fz < -0.5) continue;
+      const key = v.id * 1000 + q.idx, last = this.rammed.get(key) ?? 0;
+      if (this.now - last < 1000) continue;
+      this.rammed.set(key, this.now);
+      const dmg = Math.round(speed * 3.2);
+      this.damage(q, dmg, driver, 'car', 0, false, { x: q.s.x, y: q.s.y + 1, z: q.s.z });
+      if (q.s.mode === PM.Walk && !(this.phase === 'warmup')) { q.s.vx = fx * speed * 0.7; q.s.vz = fz * speed * 0.7; q.s.vy = 4.5; q.s.grounded = false; q.s.air = 255; }
+      v.vs *= 0.72;
+      if (driver) driver.s.vs = v.vs;
+      this.damageCar(v, speed * 0.6, q.idx);
     }
   }
 
@@ -902,6 +955,29 @@ export class MatchInstance {
       const d = Math.hypot(v.x - at.x, v.y + 1 - at.y, v.z - at.z);
       if (d < radius + 1) this.damageCar(v, blastDamage(blast, radius + 1, d) * 2, by ? by.idx : -1);
     }
+    // blasts knock holes in walls and smash furniture
+    const seen = new Set<Solid>();
+    for (let cz = Math.floor((at.z - radius) / SOLID_CELL); cz <= Math.floor((at.z + radius) / SOLID_CELL); cz++)
+      for (let cx = Math.floor((at.x - radius) / SOLID_CELL); cx <= Math.floor((at.x + radius) / SOLID_CELL); cx++)
+        for (const o of this.world.solidGrid.get(solidKey(cx, cz)) ?? []) {
+          if (seen.has(o) || !structureHp(o)) continue;
+          seen.add(o);
+          const qx = Math.max(o.x0, Math.min(at.x, o.x1)), qy = Math.max(o.y0, Math.min(at.y, o.y1)), qz = Math.max(o.z0, Math.min(at.z, o.z1));
+          const d = Math.hypot(qx - at.x, qy - at.y, qz - at.z);
+          if (d < radius) this.damageStructure(o, blast * 2.4 * (1 - d / radius), by);
+        }
+  }
+
+  /** Damage a wall or piece of furniture; at zero it breaks for everyone. */
+  private damageStructure(o: Solid, amount: number, by: P | null) {
+    const max = structureHp(o);
+    if (!max || o.id === undefined || this.world.broken!.has(o.id)) return;
+    const hp = (this.structHp.get(o.id) ?? max) - amount;
+    if (hp > 0) { this.structHp.set(o.id, hp); by?.ev.push({ e: 'struct', id: o.id, hp: Math.round((hp / max) * 100) / 100 }); return; }
+    this.structHp.delete(o.id);
+    this.world.broken!.add(o.id);
+    by?.ev.push({ e: 'struct', id: o.id, hp: 0 });
+    this.broadcast({ t: 'ev', ev: [{ e: 'broke', id: o.id }] });
   }
 
   // ------------------------------------------------------------ phases
@@ -962,6 +1038,7 @@ export class MatchInstance {
     p.s.mode = PM.Fall; p.s.grounded = false;
     p.s.x = b.x - dz * side; p.s.z = b.z + dx * side; p.s.y = b.y - 7;
     p.s.vx = dx * 12; p.s.vz = dz * 12; p.s.vy = -6;
+    if (this.overshield) p.s.os = OVERSHIELD.max; // everyone drops in with a full overshield
   }
 
   // ------------------------------------------------------------ stepping players
@@ -990,6 +1067,18 @@ export class MatchInstance {
     stepPlayer(s, cmd, this.world, this.events(p, view));
     if (s.mode === PM.Drive && s.veh >= 0) { const v = this.vehicles[s.veh]; v.x = s.x; v.y = s.y; v.z = s.z; v.vh = s.vh; v.vs = s.vs; }
     if (s.hp < hpBefore || (s.hp <= 0 && s.mode === PM.Walk)) this.checkDown(p);
+  }
+
+  /** Overshield refills after a few seconds without taking damage (in the match proper only). */
+  private stepOvershield(dt: number) {
+    if (this.phase !== 'play' || !this.overshield) return;
+    for (const q of this.players) {
+      const s = q.s;
+      if (!q.alive || q.gone || s.mode === PM.Bus || s.mode === PM.Dead) continue;
+      if (s.mode === PM.Knocked) { s.os = 0; continue; }
+      if (s.os >= OVERSHIELD.max || this.now - q.hurtAt < OVERSHIELD.delayMs) continue;
+      s.os = Math.min(OVERSHIELD.max, s.os + OVERSHIELD.perSecond * dt);
+    }
   }
 
   private stepStorm(dt: number) {
@@ -1124,6 +1213,7 @@ export class MatchInstance {
     this.stepRevives(dt);
     this.stepSupply(now);
     this.stepStorm(dt);
+    this.stepOvershield(dt);
     for (const [id, until] of this.cardExpiry) if (now >= until) { this.loot.remove(id); this.cardExpiry.delete(id); }
     for (const p of this.players) {
       if (!p.alive || p.npc || this.phase === 'warmup') { p.lastPos = null; continue; }

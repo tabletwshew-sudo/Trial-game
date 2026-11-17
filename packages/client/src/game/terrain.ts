@@ -8,7 +8,7 @@ import {
 import { softRamp } from '../lobby/toon';
 import { FOG_GLSL } from './atmosphere';
 import { GeoBuilder, mat4, mergeColored } from './geo';
-import { buildBuildingMeshes, buildingMat } from './buildings';
+import { buildBuildingMeshes, buildingMat, collapseRanges } from './buildings';
 import { Grass, addWind, wind } from './grass';
 import { buildProps } from './props3d';
 
@@ -508,6 +508,8 @@ export interface IslandView {
   /** Per-vertex colours of the main field (re-used to paint the map). */
   mainColors: Float32Array;
   update(dt: number, cam: THREE.Vector3, camera?: THREE.Camera): void;
+  /** Hide a smashed wall or piece of furniture; returns its colour (for debris), null if not drawn. */
+  breakSolid(id: number): THREE.Color | null;
 }
 
 export function buildIsland(w: World, q: Quality): IslandView {
@@ -516,7 +518,7 @@ export function buildIsland(w: World, q: Quality): IslandView {
   fieldChunks(w, w.main, 60, group, mainColors);
   fieldChunks(w, w.spawn, 80, group);
   buildRoads(w, group);
-  buildBuildingMeshes(w, group);
+  const breakRanges = buildBuildingMeshes(w, group);
   const scatter = buildScatter(w, group, q);
   const props = buildProps(w, group);
   const grass = new Grass(w, group, q.grass);
@@ -525,6 +527,12 @@ export function buildIsland(w: World, q: Quality): IslandView {
   let t = 0;
   return {
     group, water, mainColors, props,
+    breakSolid(id) {
+      const rs = breakRanges.get(id);
+      if (!rs) return null;
+      breakRanges.delete(id);
+      return collapseRanges(rs);
+    },
     update(dt, cam, camera) {
       t += dt;
       wind.value = t;

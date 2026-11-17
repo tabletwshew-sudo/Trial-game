@@ -290,11 +290,18 @@ export class AudioEngine {
     else this.noise(to, t, 0.03, 0.3, 'bandpass', 2600, 2, 0.001);
   }
   /** Pickaxe: the swing through the air, a clank off stone or metal, a dull thud on a player. */
-  melee(kind: 'swing' | 'wall' | 'flesh', pos: V3 | null) {
+  melee(kind: 'swing' | 'wall' | 'flesh' | 'break', pos: V3 | null) {
     const to = this.dest(pos, 4, 1.0); if (!to) return;
     const t = this.ctx!.currentTime, j = 0.9 + Math.random() * 0.2;
     if (kind === 'swing') this.noise(to, t, 0.22, 0.28, 'bandpass', 700 * j, 0.9, 0.06, 2200 * j);
     else if (kind === 'wall') { this.tone(to, t + 0.12, 'triangle', 1500 * j, 1350 * j, 0.18, 0.22); this.tone(to, t + 0.12, 'sine', 2350 * j, 2300 * j, 0.12, 0.1); this.noise(to, t + 0.12, 0.06, 0.35, 'bandpass', 3200, 2, 0.001); }
+    else if (kind === 'break') {
+      // a wall giving way: a crack, a crunching rumble, rubble settling
+      this.noise(to, t, 0.08, 0.6, 'bandpass', 2600, 1.2, 0.001);
+      this.noise(to, t + 0.02, 0.7, 0.55, 'lowpass', 1200, 0.8, 0.01, 180);
+      this.tone(to, t, 'sine', 90, 40, 0.5, 0.5);
+      for (let i = 0; i < 4; i++) this.noise(to, t + 0.25 + i * 0.09 + Math.random() * 0.05, 0.06, 0.15, 'bandpass', 1800 + Math.random() * 1500, 2, 0.001);
+    }
     else { this.tone(to, t + 0.12, 'sine', 150 * j, 70, 0.14, 0.45); this.noise(to, t + 0.12, 0.08, 0.3, 'lowpass', 900, 1, 0.002); }
   }
   /** You took damage. */

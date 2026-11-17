@@ -38,6 +38,7 @@ export class CombatHud {
   readonly el: HTMLElement;
   private hpFill = h('div.bar-fill.hp'); private hpText = h('b');
   private shFill = h('div.bar-fill.sh'); private shText = h('b');
+  private osFill = h('div.bar-fill.os'); private osText = h('b'); private osBar!: HTMLElement;
   private slots: { tile: HTMLElement; name: HTMLElement; count: HTMLElement; icon: HTMLElement; id: number }[] = [];
   private pickKey = h('span.s-key');
   private ammoEl = h('div.ammo');
@@ -59,6 +60,8 @@ export class CombatHud {
   private bossEl = h('div.boss-bar', h('b'), h('div.boss-track', h('span')));
   private bossUntil = 0;
   private cardsEl = h('div.cards-ui');
+  private structEl = h('div.struct-hp', h('span'));
+  private structUntil = 0;
   private confetti: HTMLCanvasElement | null = null;
   private pickTile!: HTMLElement;
   private lastHp = 100;
@@ -66,7 +69,9 @@ export class CombatHud {
   private resultShown = false;
 
   constructor(private roster: RosterEntry[], private selfIdx: number, private cb: { onLeave: (again?: boolean) => void; onSpectate: () => void; onSpecNext: (dir: number) => void }) {
+    this.osBar = h('div.bar.over', this.osFill, h('div.bar-label', h('span', '⬢'), this.osText));
     const bars = h('div.vitals',
+      this.osBar,
       h('div.bar.shield', this.shFill, h('div.bar-label', h('span', '🛡'), this.shText)),
       h('div.bar.health', this.hpFill, h('div.bar-label', h('span', '✚'), this.hpText)));
     const hotbar = h('div.hotbar');
@@ -85,7 +90,7 @@ export class CombatHud {
       this.vignette, this.scope, this.dirs, this.nums,
       this.cross, this.hit, this.prompt, this.ring, this.center, this.knocked,
       h('div.bottom-left', bars), h('div.bottom-right', this.ammoEl, hotbar),
-      this.feed, this.killsEl, this.specEl, this.bossEl, this.cardsEl, this.resultEl);
+      this.feed, this.killsEl, this.specEl, this.bossEl, this.cardsEl, this.structEl, this.resultEl);
   }
 
   // ------------------------------------------------------------ events
@@ -126,6 +131,14 @@ export class CombatHud {
     setTimeout(() => line.classList.add('fade'), 6000);
     setTimeout(() => line.remove(), 7000);
     if (mine(killer) && killer !== victim && !how) this.popCenter(knock ? 'KNOCKED' : 'ELIMINATED', name(victim), knock);
+  }
+
+  /** Health left on the wall you're hitting (shown under the crosshair for a moment). */
+  structureHp(hp: number) {
+    (this.structEl.firstElementChild as HTMLElement).style.width = `${Math.max(0, Math.min(1, hp)) * 100}%`;
+    this.structEl.classList.toggle('low', hp < 0.35);
+    this.structEl.classList.add('show');
+    this.structUntil = performance.now() + 1400;
   }
 
   boss(name: string, hp: number) {
@@ -196,6 +209,9 @@ export class CombatHud {
     // vitals
     this.hpFill.style.width = `${s.hp}%`; this.hpText.textContent = String(s.hp);
     this.shFill.style.width = `${s.shield}%`; this.shText.textContent = String(s.shield);
+    // overshield: an extra 50 on top, shown as its own bar while you have any
+    this.osFill.style.width = `${(s.os / 50) * 100}%`; this.osText.textContent = String(Math.round(s.os));
+    this.osBar.classList.toggle('none', s.os <= 0.5);
     if (s.hp < this.lastHp && !knocked) this.vignette.classList.add('hit');
     else if (this.frame % 20 === 0) this.vignette.classList.remove('hit');
     this.vignette.classList.toggle('low', s.hp > 0 && s.hp <= 25);
@@ -264,6 +280,7 @@ export class CombatHud {
         h('button', { onclick: () => this.cb.onSpecNext(1) }, '▶'));
     }
     if (this.bossUntil && performance.now() > this.bossUntil) { this.bossEl.classList.remove('show'); this.bossUntil = 0; }
+    if (this.structUntil && performance.now() > this.structUntil) { this.structEl.classList.remove('show'); this.structUntil = 0; }
     this.cardsEl.classList.toggle('show', v.cards.length > 0 && !dead);
     if (v.cards.length && this.cardsEl.dataset.n !== v.cards.join()) {
       this.cardsEl.dataset.n = v.cards.join();

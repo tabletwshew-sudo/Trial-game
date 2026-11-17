@@ -22,6 +22,19 @@ export interface Solid {
   inner?: boolean;
   /** Vault door: solid until that vault is opened in this match. */
   vault?: number;
+  /** Index in world.solids (set when the world is built); breakable pieces are tracked by it. */
+  id?: number;
+}
+
+/**
+ * How much punishment a piece can take before it breaks (0 = unbreakable). Building walls
+ * and furniture break; floors, stairs, roofs, the ground, rocks, trunks and vault bunkers don't.
+ */
+export function structureHp(o: Solid): number {
+  if (o.vault !== undefined || !o.b || o.b.shape !== 0) return 0;
+  if (o.k === SK.Wall) return o.inner ? 150 : 300;
+  if (o.k === SK.Furn) return 100;
+  return 0;
 }
 
 export type BuildingType = 'house' | 'hall' | 'shop' | 'tower' | 'solid';

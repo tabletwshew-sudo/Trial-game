@@ -32,11 +32,14 @@ class Client implements Sock {
 function inPlay(teamSizes: number[], humanTeams: number[], mode: Match['mode'] = 'squad') {
   let now = 50_000_000;
   const inst = new MatchInstance(makeMatch(teamSizes, humanTeams, mode), { warmupS: 1, onEnd: () => {} }, now);
+  inst.overshield = false; // these tests check exact shield/health numbers (the overshield has its own test)
   const clients = new Map<string, Client>();
   for (const p of inst.players) if (!p.bot) { const c = new Client(); clients.set(p.id, c); inst.join(p.id, c, now); }
   const step = (ms = 1000 / 30) => { now += ms; inst.step(now); };
-  while (inst.phase !== 'play') step(200);
-  for (let i = 0; i < 300; i++) step(200); // everyone lands
+  // (the match brings NPCs to life when the dropship leaves: keep them stood down the whole drop)
+  const standDown = () => { for (const p of inst.players) if (p.npc) { p.alive = false; p.s.mode = PM.Dead; } };
+  while (inst.phase !== 'play') { step(200); standDown(); }
+  for (let i = 0; i < 300; i++) { step(200); standDown(); } // everyone lands
   // no storm unless a test asks for one; NPC crews stood down
   inst.storm = null;
   for (const p of inst.players) if (p.npc) { p.alive = false; p.s.mode = PM.Dead; }
@@ -65,14 +68,31 @@ describe('pickaxe', () => {
     c.send(g.inst, a.id, { keys: K.FIRE, yaw: 0, pitch: 0 }); g.step();
     expect(b.s.hp).toBe(80);
     expect(c.events().some((e) => e.e === 'dmg')).toBe(true);
-    // holding the button keeps swinging, about two a second
-    for (let i = 0; i < 30; i++) { c.send(g.inst, a.id, { keys: K.FIRE, yaw: 0, pitch: 0 }); g.step(); }
-    expect(b.s.hp).toBeGreaterThanOrEqual(20);
+    // holding the button keeps swinging, a little under once a second
+    for (let i = 0; i < 30; i++) { c.send(g.inst, a.id, { keys: K.FIRE, yaw: 0, pitch: 0 }); g.step(); } // 2 s
+    expect(b.s.hp).toBeGreaterThanOrEqual(40);
     expect(b.s.hp).toBeLessThanOrEqual(60);
     // facing away: misses
     const before = b.s.hp;
     for (let i = 0; i < 40; i++) { c.send(g.inst, a.id, { keys: K.FIRE, yaw: Math.PI, pitch: 0 }); g.step(); }
     expect(b.s.hp).toBe(before);
+  });
+  it('four pickaxe hits break an outside wall for everyone; then shots go through the gap', () => {
+    const g = inPlay([1, 1, 1, 1, 1, 1, 1, 1], [0, 1], 'solo');
+    const w = g.inst.world;
+    const wall = w.solids.find((o) => o.k === SK.Wall && !o.inner && o.face === 1 && o.b && o.z1 - o.z0 >= 4 && o.y0 <= o.b.fy + 0.05 && o.y1 >= o.b.fy + 2.6
+      && Math.abs(surfaceAt(w, o.x0 - 0.42, (o.z0 + o.z1) / 2, o.b.fy + 1) - o.b.fy) < 0.3)!;
+    const a = g.inst.players[0], c = g.clients.get(a.id)!, watcher = g.clients.get(g.inst.players[1].id)!;
+    const z = (wall.z0 + wall.z1) / 2;
+    g.place(a.idx, wall.x0 - 0.42, z, -Math.PI / 2); a.s.y = surfaceAt(w, a.s.x, a.s.z, wall.b!.fy + 1); // facing +x, into the wall
+    c.send(g.inst, a.id, { keys: 0, yaw: -Math.PI / 2, pitch: 0, slot: 6 }); g.step();
+    const through = () => raycastWorld(w, { x: a.s.x, y: a.s.y + 1.4, z: a.s.z }, { x: 1, y: 0, z: 0 }, 3, false).kind;
+    expect(through()).toBe('building');
+    for (let i = 0; i < 280 && !w.broken!.has(wall.id!); i++) { c.send(g.inst, a.id, { keys: K.FIRE, yaw: -Math.PI / 2, pitch: 0 }); g.step(); }
+    expect(w.broken!.has(wall.id!)).toBe(true);
+    expect(c.events().filter((e) => e.e === 'struct').length).toBeGreaterThanOrEqual(4);
+    expect(watcher.events().some((e) => e.e === 'broke' && e.id === wall.id)).toBe(true);
+    expect(through()).not.toBe('building');
   });
   it('a pickaxe cannot hit through a wall', () => {
     const g = inPlay([1, 1, 1, 1, 1, 1, 1, 1], [0, 1], 'solo');
@@ -87,6 +107,30 @@ describe('pickaxe', () => {
     c.send(g.inst, a.id, { keys: 0, yaw: -Math.PI / 2, pitch: 0, slot: 6 }); g.step();
     for (let i = 0; i < 60; i++) { c.send(g.inst, a.id, { keys: K.FIRE, yaw: -Math.PI / 2, pitch: 0 }); g.step(); }
     expect(b.s.hp).toBe(100);
+  });
+});
+
+describe('overshield', () => {
+  it('absorbs damage before the shield and refills after a few seconds without damage', () => {
+    const g = inPlay([1, 1, 1, 1, 1, 1, 1, 1], [0, 1], 'solo');
+    g.inst.overshield = true;
+    const [a, b] = [g.inst.players[0], g.inst.players[1]];
+    g.place(a.idx, AT.x, AT.z, 0);
+    g.place(b.idx, AT.x, AT.z - 20, 0);
+    b.s.os = 50; b.s.shield = 50;
+    a.s.inv[0] = { id: ITEM.ar, r: 0, n: 1, mag: 30 }; a.s.slot = 0; a.s.ammo[1] = 90;
+    const c = g.clients.get(a.id)!;
+    const o = aimOrigin(a.s.x, a.s.y, a.s.z, 0);
+    const pitch = Math.atan2(b.s.y + 1.1 - o.y, Math.hypot(b.s.x - o.x, b.s.z - o.z));
+    for (let i = 0; i < 40 && b.s.os === 50; i++) { c.send(g.inst, a.id, { keys: K.FIRE | K.ADS, yaw: Math.atan2(-(b.s.x - o.x), -(b.s.z - o.z)), pitch }); g.step(); }
+    expect(b.s.os).toBeLessThan(50);
+    expect(b.s.shield).toBe(50);               // the shield is untouched while overshield is left
+    expect(b.s.hp).toBe(100);
+    const hurt = b.s.os;
+    for (let i = 0; i < 30 * 5; i++) { c.send(g.inst, a.id, { keys: 0, yaw: 0, pitch: 0 }); g.step(); }
+    expect(b.s.os).toBe(hurt);                 // still waiting (6 s)
+    for (let i = 0; i < 30 * 5; i++) { c.send(g.inst, a.id, { keys: 0, yaw: 0, pitch: 0 }); g.step(); }
+    expect(b.s.os).toBe(50);                   // refilled
   });
 });
 

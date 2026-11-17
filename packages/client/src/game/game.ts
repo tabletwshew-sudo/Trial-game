@@ -77,6 +77,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
     // this match's own view of the island (vault doors open per match)
     const world: World = Object.create(getWorld(init.seed)) as World;
     world.openVaults = new Set(init.vaultsOpen);
+    world.broken = new Set(init.broken ?? []);
     const q = pickQuality();
     const roster = init.players, selfIdx = init.you;
     const team = roster.filter((r) => r.team === roster[selfIdx].team).map((r) => r.idx);
@@ -125,6 +126,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
     let cards: number[] = [], beaconReady = [...init.beacons];
     const myTeam = roster[selfIdx].team;
     island.props.setVaults(world.openVaults);
+    for (const id of world.broken) island.breakSolid(id);
     let settingsEl: HTMLElement | null = null;
     const openSettings = () => {
       if (settingsEl) return;
@@ -283,6 +285,21 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
           else if (e.h[3] === 1 || e.h[3] === 2) { tmpB.set(at.x, at.y, at.z); fx.impact(tmpB, e.h[3]); audio.melee('flesh', at); }
           break;
         }
+        case 'broke': {
+          world.broken!.add(e.id);
+          const col = island.breakSolid(e.id);
+          const o = world.solids[e.id];
+          if (o && col) {
+            const cx = (o.x0 + o.x1) / 2, cy = (o.y0 + o.y1) / 2, cz = (o.z0 + o.z1) / 2;
+            const hex = '#' + col.getHexString();
+            const n = Math.min(26, 6 + Math.round((o.x1 - o.x0 + o.z1 - o.z0) * (o.y1 - o.y0) * 0.6));
+            fx.burst(cx, cy, cz, n, hex, 4, 3, 0.22, 0.9, 0.6);
+            fx.burst(cx, o.y0 + 0.3, cz, Math.ceil(n / 2), '#d8d0c0', 3, 1, 0.5, 1.4, 1.8);
+            audio.melee('break', { x: cx, y: cy, z: cz });
+          }
+          break;
+        }
+        case 'struct': combat.structureHp(e.hp); break;
         case 'dmg': {
           combat.hitMarker(e.hd, !!e.ko);
           audio.hit(e.ko ? 'knock' : e.hd ? 'head' : e.sh ? 'shield' : 'body');

@@ -84,7 +84,7 @@ export interface ForageDef { kind: 'forage'; name: string; heal: number; shield:
  * The pickaxe: always carried, never dropped, in its own slot. A short swing that hits the
  * nearest enemy in front of you (and chips sparks off walls).
  */
-export interface MeleeDef { kind: 'melee'; name: string; damage: number; /** ticks between swings */ interval: number; range: number; rarity: Rarity }
+export interface MeleeDef { kind: 'melee'; name: string; damage: number; /** ticks between swings */ interval: number; range: number; rarity: Rarity; /** damage to walls and furniture */ structure: number }
 
 /** Special items: a teammate's recall card (picked up into a pocket, not a slot) and the vault keycard (takes a slot). */
 export interface SpecialDef { kind: 'card' | 'keycard'; name: string; rarity: Rarity }
@@ -119,7 +119,7 @@ export const ITEMS: (ItemDef | null)[] = [
   { kind: 'forage', name: 'Glow Cap', heal: 0, shield: 5, rarity: 'rare' },
   { kind: 'card', name: 'Recall Card', rarity: 'epic' },
   { kind: 'keycard', name: 'Vault Keycard', rarity: 'legendary' },
-  { kind: 'melee', name: 'Pickaxe', damage: 20, interval: 33, range: 2.5, rarity: 'common' },
+  { kind: 'melee', name: 'Pickaxe', damage: 20, interval: 54, range: 2.5, rarity: 'common', structure: 75 },
 ];
 
 export const ITEM = {

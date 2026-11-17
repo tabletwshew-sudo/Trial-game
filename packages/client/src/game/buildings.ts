@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { ROOF_FLAT, ROOF_GABLE_X, SK, hash2, lerp, type Box, type Furniture, type Layout, type PoiKind, type Solid, type World } from '@dropzone/shared';
+import { ROOF_FLAT, ROOF_GABLE_X, SK, hash2, lerp, structureHp, type Box, type Furniture, type Layout, type PoiKind, type Solid, type World } from '@dropzone/shared';
 import { softRamp } from '../lobby/toon';
 import { GeoBuilder } from './geo';
 import { SURF, withGlass, withSurfaces } from './surface';
@@ -290,11 +290,24 @@ function addFurniture(g: GeoBuilder, glow: GeoBuilder, f: Furniture, p: Paint, s
 }
 
 /** The whole building: shell from solids, roof, windows, doors, furniture, ceiling lamps. */
-export function buildBuildingMeshes(w: World, group: THREE.Group) {
+/** Where a breakable wall or piece of furniture sits in the merged building meshes (vertex ranges). */
+export type BreakRanges = Map<number, { geo: THREE.BufferGeometry; start: number; end: number }[]>;
+
+export function buildBuildingMeshes(w: World, group: THREE.Group): BreakRanges {
   const solidsByBox = new Map<Box, Solid[]>();
   for (const o of w.solids) if (o.b) { let l = solidsByBox.get(o.b); if (!l) solidsByBox.set(o.b, (l = [])); l.push(o); }
+  const breakRanges: BreakRanges = new Map();
   for (const poi of w.pois) {
     const g = new GeoBuilder(), gi = new GeoBuilder(), glass = new GeoBuilder();
+    // per breakable solid: [builder 0 outside / 1 inside / 2 glass, first vertex, end vertex]
+    const local = new Map<number, [number, number, number][]>();
+    const mark = () => [g.vertexCount, gi.vertexCount, glass.vertexCount];
+    const keep = (o: Solid, a: number[]) => {
+      if (o.id === undefined || !structureHp(o)) return;
+      const r = local.get(o.id) ?? [];
+      [g.vertexCount, gi.vertexCount, glass.vertexCount].forEach((end, k) => { if (end > a[k]) r.push([k, a[k], end]); });
+      local.set(o.id, r);
+    };
     w.layouts.forEach((L, i) => {
       const b = w.boxes[i];
       if (b.poi !== poi.id) return;
@@ -304,6 +317,7 @@ export function buildBuildingMeshes(w: World, group: THREE.Group) {
       const solids = solidsByBox.get(b) ?? [];
       const storeys = L.floors.map((y, k) => ({ y, h: (k + 1 < L.floors.length ? L.floors[k + 1] : b.fy + L.access) - y }));
       for (const o of solids) {
+        const a = mark();
         addSolidOutline(g, gi, o, p, L);
         if (o.k === SK.Wall && !o.inner && o.y0 <= b.fy + 0.01) addWindows(g, gi, glass, o, L, p, storeys);
         if (o.k === SK.Block) for (const face of [0, 1, 2, 3]) {
@@ -311,11 +325,17 @@ export function buildBuildingMeshes(w: World, group: THREE.Group) {
           const n = Math.floor((o.y1 - o.y0) / 3.4);
           addWindows(g, gi, glass, fake, L, p, Array.from({ length: n }, (_, k) => ({ y: o.y0 + k * 3.4, h: 3.4 })));
         }
+        keep(o, a);
       }
       addRoof(g, b, p);
       g.surf = SURF.plain;
       addDoors(g, gi, L, p);
-      L.furniture.forEach((f, k) => addFurniture(gi, glass, f, p, (b.style >> 3) + k));
+      L.furniture.forEach((f, k) => {
+        const a = mark();
+        addFurniture(gi, glass, f, p, (b.style >> 3) + k);
+        const o = solids.find((q) => q.k === SK.Furn && Math.abs(q.x0 - f.x0) < 1e-4 && Math.abs(q.z0 - f.z0) < 1e-4 && Math.abs(q.x1 - f.x1) < 1e-4 && Math.abs(q.z1 - f.z1) < 1e-4 && Math.abs(q.y0 - f.y) < 1e-4);
+        if (o) keep(o, a);
+      });
       // ceiling lamps in each room
       for (let k = 0; k < L.floors.length; k++) {
         const top = (k + 1 < L.floors.length ? L.floors[k + 1] - 0.22 : b.fy + L.access - 0.28);
@@ -324,18 +344,38 @@ export function buildBuildingMeshes(w: World, group: THREE.Group) {
         gi.box(cx - 0.03, top - 0.02, cz - 0.03, cx + 0.03, top, cz + 0.03, '#333');
       }
     });
+    const geos: (THREE.BufferGeometry | null)[] = [null, null, null];
     if (g.vertexCount) {
-      const m = new THREE.Mesh(g.build(), buildingMat);
+      const m = new THREE.Mesh((geos[0] = g.build()), buildingMat);
       m.castShadow = true; m.receiveShadow = true;
       group.add(m);
     }
     if (gi.vertexCount) {
-      const m = new THREE.Mesh(gi.build(), interiorMat);
+      const m = new THREE.Mesh((geos[1] = gi.build()), interiorMat);
       m.castShadow = true; m.receiveShadow = true;
       group.add(m);
     }
-    if (glass.vertexCount) group.add(new THREE.Mesh(glass.build(), glowMat));
+    if (glass.vertexCount) group.add(new THREE.Mesh((geos[2] = glass.build()), glowMat));
+    for (const [id, rs] of local) breakRanges.set(id, rs.filter(([k]) => geos[k]).map(([k, start, end]) => ({ geo: geos[k]!, start, end })));
   }
+  return breakRanges;
+}
+
+/**
+ * Hide a broken piece: its triangles are collapsed to a point in place (no rebuilding).
+ * Returns the middle of the piece and its main colour, for the debris.
+ */
+export function collapseRanges(rs: { geo: THREE.BufferGeometry; start: number; end: number }[]) {
+  let col: THREE.Color | null = null;
+  for (const r of rs) {
+    const pos = r.geo.getAttribute('position') as THREE.BufferAttribute, c = r.geo.getAttribute('color') as THREE.BufferAttribute;
+    if (!col && c) col = new THREE.Color(c.getX(r.start), c.getY(r.start), c.getZ(r.start));
+    const x = pos.getX(r.start), y = pos.getY(r.start), z = pos.getZ(r.start);
+    for (let i = r.start; i < r.end; i++) pos.setXYZ(i, x, y, z);
+    pos.addUpdateRange(r.start * 3, (r.end - r.start) * 3);
+    pos.needsUpdate = true;
+  }
+  return col;
 }
 
 function addContainerOrSilo(g: GeoBuilder, b: Box) {

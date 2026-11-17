@@ -428,7 +428,7 @@ export class Hud {
     const s = v.self;
     // banner
     let big = '', sub = '', hint = '';
-    if (v.phase === 'warmup') { big = 'WARM-UP'; sub = `Dropship leaves in ${fmtTime(Math.max(0, (v.warmupEndsAt - v.serverNow) / 1000))}`; hint = 'WASD move · SHIFT sprint · SPACE jump · M map'; }
+    if (v.phase === 'warmup') { big = 'WARM-UP'; sub = `Dropship leaves in ${fmtTime(Math.max(0, (v.warmupEndsAt - v.serverNow) / 1000))} · no damage until then`; hint = 'WASD move · SHIFT sprint · SPACE jump · F pickaxe · TAB inventory · M map'; }
     else if (s.mode === PM.Bus && v.route) {
       const toDoors = (v.route.doorsAt - v.serverNow) / 1000;
       if (toDoors > 0) { big = 'GET READY'; sub = `Doors open in ${Math.ceil(toDoors)}`; hint = 'M map · click the map to mark where your squad should land'; }

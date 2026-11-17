@@ -59,6 +59,10 @@ export type GameEvent =
   | { e: 'shot'; i: number; w: number; o: V3; h: number[] }
   /** A pickaxe swing: who swung, and where it landed + what it hit (same kinds as shots; 5 = only air). */
   | { e: 'melee'; i: number; h: [number, number, number, number] }
+  /** A wall or piece of furniture was smashed (solid id). */
+  | { e: 'broke'; id: number }
+  /** You hit a breakable piece: how much of it is left (0..1). */
+  | { e: 'struct'; id: number; hp: number }
   /** Damage you dealt (for hit markers and damage numbers). */
   | { e: 'dmg'; t: number; d: number; sh: boolean; hd: boolean; p: V3; ko?: boolean }
   /** Damage you took, and the direction it came from. */
@@ -101,6 +105,8 @@ export interface GameInit {
   vaultsOpen: number[];
   /** Server time each recall beacon is usable again. */
   beacons: number[];
+  /** Walls and furniture already broken in this match (solid ids). */
+  broken?: number[];
 }
 export interface StormPlanView { t0: number; circles: { x: number; z: number; r: number }[] }
 

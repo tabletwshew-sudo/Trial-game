@@ -35,6 +35,8 @@ export interface PlayerState {
   /** Keys held on the previous step (for edge-triggered actions like jump). */
   keys: number;
   hp: number; shield: number;
+  /** Overshield: an extra layer (up to 50) on top of your shield that refills itself out of combat. */
+  os: number;
   /** Bleed-out health while knocked. */
   knock: number;
   slot: number;
@@ -74,7 +76,7 @@ export interface PlayerState {
 
 export const newPlayerState = (): PlayerState => ({
   x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, yaw: 0, pitch: 0, mode: PM.Walk, grounded: true, keys: 0,
-  hp: 100, shield: 0, knock: 0, slot: 0, inv: [emptySlot(), emptySlot(), emptySlot(), emptySlot(), emptySlot()], ammo: [0, 0, 0, 0, 0],
+  hp: 100, shield: 0, os: 0, knock: 0, slot: 0, inv: [emptySlot(), emptySlot(), emptySlot(), emptySlot(), emptySlot()], ammo: [0, 0, 0, 0, 0],
   cd: 0, burst: 0, reload: 0, use: 0, bloom: 0, shots: 0, seed: 1, act: ACT.None, veh: -1, seat: 0, vh: 0, vs: 0, emote: 0,
   mv: 0, mt: 0, tx: 0, ty: 0, tz: 0, my: 0, mh: 0, air: 0, jbuf: 0, li: -1, zt: 0, zv: 0, scd: 0, wk: 0,
 });
@@ -120,6 +122,8 @@ function approach2(s: PlayerState, tx: number, tz: number, maxDelta: number) {
 }
 const approach = (v: number, t: number, d: number) => (v < t ? Math.min(v + d, t) : Math.max(v - d, t));
 
+/** Overshield: how much you get, how long without damage before it refills, and how fast. */
+export const OVERSHIELD = { max: 50, delayMs: 6000, perSecond: 20 } as const;
 export const KNOCKED_SPEED = 1.7;
 export const USE_WALK_SPEED = 2.4;
 
@@ -601,11 +605,14 @@ function stepZip(s: PlayerState, cmd: InputCmd, prev: number, jumpEdge: boolean,
 export function applyDamage(s: PlayerState, dmg: number, ignoreShield = false): [number, number] {
   dmg = Math.max(0, Math.round(dmg));
   if (s.mode === PM.Knocked) { const d = Math.min(s.knock, dmg); s.knock -= d; return [0, d]; }
-  const toShield = ignoreShield ? 0 : Math.min(s.shield, dmg);
+  // overshield first, then shield, then health (the storm and falls go straight to health)
+  const toOs = ignoreShield ? 0 : Math.min(s.os, dmg);
+  s.os -= toOs;
+  const toShield = ignoreShield ? 0 : Math.min(s.shield, dmg - toOs);
   s.shield -= toShield;
-  const toHp = Math.min(s.hp, dmg - toShield);
+  const toHp = Math.min(s.hp, dmg - toOs - toShield);
   s.hp -= toHp;
-  return [toShield, toHp];
+  return [toOs + toShield, toHp];
 }
 
 /** Add an item to the inventory. Returns how many were taken (0 = no room). */

@@ -207,8 +207,8 @@ export function spawnIslandLoot(w: World, store: LootStore, rnd: () => number, n
 
 /** The warm-up island: a ring of weapons to play with. */
 export function spawnWarmupLoot(w: World, store: LootStore, rnd: () => number) {
-  for (let i = 0; i < 26; i++) {
-    const a = (i / 26) * Math.PI * 2, r = 20 + rnd() * 20;
+  for (let i = 0; i < 48; i++) {
+    const a = (i / 48) * Math.PI * 2 + rnd() * 0.3, r = 18 + rnd() * 80;
     const x = SPAWN_ISLAND.x + Math.cos(a) * r, z = SPAWN_ISLAND.z + Math.sin(a) * r;
     if (terrainAt(w, x, z) < 1.5) continue;
     rollFloor(store, rnd, x, surfaceAt(w, x, z, 50), z);
