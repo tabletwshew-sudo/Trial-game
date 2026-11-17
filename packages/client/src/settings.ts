@@ -5,13 +5,13 @@ import { h } from './ui/dom';
  * Player settings, saved in this browser. Changes apply immediately where they can
  * (sensitivity, FOV, keys, FPS counter, colours) and graphics apply from the next match.
  */
-export type Action = 'forward' | 'back' | 'left' | 'right' | 'jump' | 'sprint' | 'crouch' | 'reload' | 'interact' | 'map' | 'inventory' | 'emote' | 'slot1' | 'slot2' | 'slot3' | 'slot4' | 'slot5' | 'pickaxe';
+export type Action = 'forward' | 'back' | 'left' | 'right' | 'jump' | 'sprint' | 'crouch' | 'reload' | 'interact' | 'map' | 'inventory' | 'emote' | 'slot1' | 'slot2' | 'slot3' | 'slot4' | 'slot5' | 'pickaxe' | 'fire' | 'aim' | 'ping';
 export const ACTION_LABELS: Record<Action, string> = {
-  forward: 'Move forward', back: 'Move back', left: 'Move left', right: 'Move right', jump: 'Jump / glider', sprint: 'Sprint', crouch: 'Crouch / slide',
-  reload: 'Reload', interact: 'Interact / pick up', map: 'Map', inventory: 'Inventory', emote: 'Emote', slot1: 'Slot 1', slot2: 'Slot 2', slot3: 'Slot 3', slot4: 'Slot 4', slot5: 'Slot 5', pickaxe: 'Pickaxe',
+  fire: 'Fire / swing', aim: 'Aim / scope', forward: 'Move forward', back: 'Move back', left: 'Move left', right: 'Move right', jump: 'Jump / glider', sprint: 'Sprint', crouch: 'Crouch / slide',
+  reload: 'Reload', interact: 'Interact / pick up', map: 'Map', inventory: 'Inventory', emote: 'Emote', slot1: 'Slot 1', slot2: 'Slot 2', slot3: 'Slot 3', slot4: 'Slot 4', slot5: 'Slot 5', pickaxe: 'Pickaxe', ping: 'Mark a spot',
 };
 export const DEFAULT_KEYS: Record<Action, string> = {
-  forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', jump: 'Space', sprint: 'ShiftLeft', crouch: 'KeyC',
+  fire: 'Mouse0', aim: 'Mouse2', ping: 'Mouse1', forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', jump: 'Space', sprint: 'ShiftLeft', crouch: 'KeyC',
   reload: 'KeyR', interact: 'KeyE', map: 'KeyM', inventory: 'KeyI', emote: 'KeyB', slot1: 'Digit1', slot2: 'Digit2', slot3: 'Digit3', slot4: 'Digit4', slot5: 'Digit5', pickaxe: 'KeyF',
 };
 export type ColorMode = 'normal' | 'deuteranopia' | 'protanopia' | 'tritanopia';
@@ -29,6 +29,8 @@ export interface Settings {
   showFps: boolean;
   autoSprint: boolean;   // sprint by default (Shift walks)
   toggleAds: boolean;
+  /** Toggle aim only for scoped weapons (DMR, sniper). */
+  toggleScope: boolean;
   colorMode: ColorMode;
   master: number; effects: number; music: number; // 0..1
   hudScale: number;      // 0.6 .. 1.2: size of the in-game HUD
@@ -37,7 +39,7 @@ export interface Settings {
 
 const DEFAULTS: Settings = {
   sensitivity: 1, adsMul: 0.7, scopeMul: 0.55, invertY: false, fov: 75, graphics: 'auto', graphicsV: 2, showFps: false,
-  autoSprint: false, toggleAds: false, colorMode: 'normal', master: 0.8, effects: 0.9, music: 0.6, hudScale: 0.8, keys: { ...DEFAULT_KEYS },
+  autoSprint: false, toggleAds: false, toggleScope: false, colorMode: 'normal', master: 0.8, effects: 0.9, music: 0.6, hudScale: 0.8, keys: { ...DEFAULT_KEYS },
 };
 
 const KEY = 'dz.settings';
@@ -78,7 +80,7 @@ function applyColorMode() {
 }
 applyColorMode();
 
-export const keyName = (code: string) => code.replace(/^Key/, '').replace(/^Digit/, '').replace('ShiftLeft', 'L-Shift').replace('ShiftRight', 'R-Shift').replace('ControlLeft', 'L-Ctrl').replace('Space', 'Space').replace(/^Arrow/, '↑').replace('AltLeft', 'L-Alt');
+export const keyName = (code: string) => ({ Mouse0: 'L-Click', Mouse1: 'M-Click', Mouse2: 'R-Click', Mouse3: 'Mouse 4', Mouse4: 'Mouse 5' } as Record<string, string>)[code] ?? code.replace(/^Key/, '').replace(/^Digit/, '').replace('ShiftLeft', 'L-Shift').replace('ShiftRight', 'R-Shift').replace('ControlLeft', 'L-Ctrl').replace('Space', 'Space').replace(/^Arrow/, '↑').replace('AltLeft', 'L-Alt');
 
 // ------------------------------------------------------------------ the panel
 export function settingsPanel(onClose: () => void): HTMLElement {
@@ -113,7 +115,8 @@ export function settingsPanel(onClose: () => void): HTMLElement {
       slider('Scope sensitivity', 'scopeMul', 0.2, 1.5, 0.05, (v) => `${Math.round(v * 100)}%`),
       toggle('Invert mouse Y', 'invertY'),
       toggle('Sprint by default', 'autoSprint', 'Hold Sprint to walk instead'),
-      toggle('Toggle aim', 'toggleAds', 'Right-click once to aim, again to stop'),
+      toggle('Toggle aim', 'toggleAds', 'Press aim once to aim, again to stop (all weapons)'),
+      toggle('Toggle scope', 'toggleScope', 'Same, but only for scoped weapons (DMR, sniper)'),
     );
     if (tab === 'video') body.replaceChildren(
       slider('Field of view', 'fov', 60, 100, 1, (v) => `${v}°`),
@@ -131,25 +134,30 @@ export function settingsPanel(onClose: () => void): HTMLElement {
     if (tab === 'keys') {
       const rows = (Object.keys(ACTION_LABELS) as Action[]).map((a) => {
         const btn = h('button.keycap', keyName(settings.keys[a]));
-        btn.onclick = () => {
-          btn.textContent = 'press a key…'; btn.classList.add('listening');
-          const grab = (e: KeyboardEvent) => {
-            e.preventDefault(); e.stopPropagation();
-            if (e.code !== 'Escape') {
+        btn.onclick = (ev) => {
+          ev.stopPropagation();
+          btn.textContent = 'press a key or button…'; btn.classList.add('listening');
+          const bind = (code: string | null) => {
+            if (code) {
               // swap with whatever already used that key so nothing ends up unbound
-              const clash = (Object.keys(settings.keys) as Action[]).find((k) => settings.keys[k] === e.code && k !== a);
+              const clash = (Object.keys(settings.keys) as Action[]).find((k) => settings.keys[k] === code && k !== a);
               if (clash) settings.keys[clash] = settings.keys[a];
-              settings.keys[a] = e.code;
+              settings.keys[a] = code;
               saveSettings();
             }
-            removeEventListener('keydown', grab, true);
+            removeEventListener('keydown', grabKey, true); removeEventListener('mousedown', grabMouse, true); removeEventListener('contextmenu', noMenu, true);
             render();
           };
-          addEventListener('keydown', grab, true);
+          const grabKey = (e: KeyboardEvent) => { e.preventDefault(); e.stopPropagation(); bind(e.code === 'Escape' ? null : e.code); };
+          // any mouse button works too (left, right, middle, side buttons)
+          const grabMouse = (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); bind(`Mouse${e.button}`); };
+          const noMenu = (e: Event) => e.preventDefault();
+          addEventListener('keydown', grabKey, true);
+          setTimeout(() => { addEventListener('mousedown', grabMouse, true); addEventListener('contextmenu', noMenu, true); }, 0);
         };
         return h('div.set-row', h('span', ACTION_LABELS[a]), btn);
       });
-      body.replaceChildren(h('div.keys-grid', ...rows), h('div.set-note', 'Mouse: left = fire, right = aim, wheel = switch slot, middle = ping. Esc opens the menu.'));
+      body.replaceChildren(h('div.keys-grid', ...rows), h('div.set-note', 'Click a binding, then press a key or a mouse button. Mouse wheel switches slots. Esc opens the menu.'));
     }
   }
   render();

@@ -3,6 +3,7 @@ import { settings, type Action } from '../settings';
 
 const ACTION_BITS: Partial<Record<Action, number>> = {
   forward: K.F, back: K.B, left: K.L, right: K.R, jump: K.JUMP, sprint: K.SPRINT, crouch: K.CROUCH, reload: K.RELOAD, interact: K.USE, emote: K.EMOTE,
+  fire: K.FIRE, aim: K.ADS,
 };
 /** Key code -> input bits, from the player's key bindings (arrow keys always move too). */
 function keymap(): Record<string, number> {
@@ -16,6 +17,8 @@ export class Input {
   /** Raw key bits as held. Read `keys` for what the game should act on. */
   private held = 0;
   private adsLatched = false;
+  /** Set by the game each frame: is the weapon in your hands a scoped one (for "toggle scope")? */
+  scopedHeld = false;
   yaw = 0;
   pitch = -0.15;
   /** Base sensitivity; scaled down while aiming down sights (see `zoom`). */
@@ -36,7 +39,7 @@ export class Input {
   get keys() {
     let k = this.held | this.tapped;
     if (settings.autoSprint) k ^= K.SPRINT;
-    if (settings.toggleAds) k = (k & ~K.ADS) | (this.adsLatched ? K.ADS : 0);
+    if (this.scopedHeld ? settings.toggleScope || settings.toggleAds : settings.toggleAds) k = (k & ~K.ADS) | (this.adsLatched ? K.ADS : 0);
     return k;
   }
   set keys(v: number) { this.held = v & ~(this.tapped & ~this.held); if (!(v & K.ADS)) this.adsLatched = false; }
@@ -58,7 +61,8 @@ export class Input {
     on(document, 'keydown', (e) => {
       if ((e.target as HTMLElement)?.tagName === 'INPUT' || document.querySelector('.settings-overlay')) return;
       const bit = keymap()[e.code];
-      if (bit) { this.held |= bit; if (!e.repeat) this.tapped |= bit; e.preventDefault(); }
+      if (bit) { this.held |= bit; if (!e.repeat) this.tapped |= bit; if ((bit & K.ADS) && !e.repeat) this.adsLatched = !this.adsLatched; e.preventDefault(); }
+      if (!e.repeat && e.code === settings.keys.ping) this.onAction?.('ping');
       if (e.repeat) return;
       for (let i = 1; i <= 5; i++) if (settings.keys[`slot${i}` as Action] === e.code) this.pendingSlot = i;
       if (e.code === settings.keys.pickaxe || e.code === 'Digit6') this.pendingSlot = 6;
@@ -88,14 +92,17 @@ export class Input {
       if (!this.locked) { this.lock(); return; }
       e.preventDefault();
       if (this.spectating && (e.button === 0 || e.button === 2)) { this.onSpec?.(e.button === 0 ? 1 : -1); return; }
-      if (e.button === 0) this.held |= K.FIRE;
-      else if (e.button === 2) { this.held |= K.ADS; this.adsLatched = !this.adsLatched; }
-      else if (e.button === 1) this.onAction?.('ping');
+      // mouse buttons go through the same bindings as keys (fire, aim, or anything else you bound)
+      const code = `Mouse${e.button}`, bit = keymap()[code];
+      if (bit) { this.held |= bit; this.tapped |= bit; if (bit & K.ADS) this.adsLatched = !this.adsLatched; }
+      if (code === settings.keys.ping) this.onAction?.('ping');
+      for (let i = 1; i <= 5; i++) if (settings.keys[`slot${i}` as Action] === code) this.pendingSlot = i;
+      if (code === settings.keys.pickaxe) this.pendingSlot = 6;
       this.mouse |= 1 << e.button;
     });
     on(document, 'mouseup', (e) => {
-      if (e.button === 0) this.held &= ~K.FIRE;
-      else if (e.button === 2) this.held &= ~K.ADS;
+      const bit = keymap()[`Mouse${e.button}`];
+      if (bit) this.held &= ~bit;
       this.mouse &= ~(1 << e.button);
     });
     on(el, 'contextmenu', (e) => e.preventDefault());

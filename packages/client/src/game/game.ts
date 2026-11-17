@@ -166,7 +166,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
     const combat = new CombatHud(roster, selfIdx, {
       onLeave: (again) => leave(true, !!again),
       onSpecNext: (dir) => net.send({ t: 'spec_next', dir }),
-      onSpectate: () => input.lock(),
+      onSpectate: () => input.unlock(),
     });
     // inventory screen (Tab / I): rearrange, inspect and drop things
     const inv = new InventoryPanel({
@@ -547,6 +547,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       const air = !inBus && (me.mode === PM.Fall || me.mode === PM.Glide);
       const driving = !!pred && (pred.mode === PM.Drive || pred.mode === PM.Ride);
       const heldDef = pred ? weaponDef(heldItemId(pred)) : null;
+      input.scopedHeld = !!heldDef?.scope;
       const ads = !!pred && !!heldDef && (input.keys & K.ADS) !== 0 && (pred.mode === PM.Walk || pred.mode === PM.Ride) && pred.act === ACT.None;
       const kCam = 1 - Math.exp(-dt * (ads ? 14 : 6));
       camDist += ((inBus ? 46 : air ? 8.5 : driving ? 8 : ads ? 2.2 : dead ? 5 : 4.3) - camDist) * kCam;
@@ -670,7 +671,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
           const y = Math.max(0, terrainAt(world, m.x, m.z)) + 14, p = project(m.x, y, m.z);
           return [idx, { ...m, sx: p.sx, sy: p.sy, show: p.show, dist: Math.hypot(m.x - selfPos.x, m.z - selfPos.z) }];
         })),
-        locked: input.locked, fps,
+        locked: input.locked || (!!pred && pred.mode === PM.Dead), fps,
         drops: [...chestR.chests.values()].filter((c) => c.k === 2 && !c.open).map((c) => ({ x: c.x, z: c.z })),
         storm: storm.state, kills: kills[selfIdx] ?? 0,
         beacons: world.beacons.map((b, i) => ({ x: b.x, z: b.z, ready: serverNow >= beaconReady[i] })),

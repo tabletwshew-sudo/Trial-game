@@ -541,3 +541,15 @@ kbd { font-family: var(--body); font-weight: 900; font-size: 11px; padding: 2px 
 .struct-hp.show { opacity: 1; }
 .struct-hp span { display: block; height: 100%; background: linear-gradient(90deg, #ffd23f, #fff3b0); transition: width .1s; }
 .struct-hp.low span { background: linear-gradient(90deg, #ff4d6d, #ff9aa2); }
+
+/* death card (teammates still alive) and the spectate bar's extra buttons */
+.death-panel { position: absolute; left: 50%; top: 22%; transform: translateX(-50%); display: none; text-align: center; padding: 18px 26px 20px; border-radius: 18px; background: linear-gradient(170deg, rgba(60,20,50,.92), rgba(20,15,52,.94)); border: 1px solid rgba(255,77,109,.45); box-shadow: 0 16px 50px rgba(0,0,0,.5); pointer-events: auto; z-index: 15; }
+.death-panel.show { display: block; animation: fade .2s; }
+.d-title { font-family: var(--display); font-size: 36px; color: #ff6b81; letter-spacing: 1px; }
+.d-sub { font-weight: 900; font-size: 15px; margin-top: 2px; }
+.d-note { color: var(--muted); font-weight: 700; font-size: 13px; margin: 8px 0 14px; }
+.d-actions { display: flex; gap: 10px; justify-content: center; }
+.spec-actions { display: flex; gap: 6px; margin-left: 8px; }
+
+.hint-keys { transition: opacity .8s; }
+.hint-keys.faded { opacity: 0; }

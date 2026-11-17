@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   ACT, CAR, ITEM, ITEMS, K, PM, SIM_HZ, SK, SPAWN_ISLAND, addToInventory, aimDir, aimOrigin, shotOrigin, applyDamage, blastDamage, falloff, getWorld, newPlayerState,
-  rayPlayer, raycastWorld, spreadDir, stepCar, stepPlayer, surfaceAt, weaponDef, type InputCmd, type ShotEvent,
+  rayPlayer, raycastWorld, spreadDir, stepCar, stepPlayer, surfaceAt, terrainAt, weaponDef, type InputCmd, type ShotEvent,
 } from '../src/index';
 
 const w = getWorld();
@@ -194,7 +194,14 @@ describe('raycasts', () => {
 describe('cars', () => {
   const road = w.roads.find((r) => !r.street)!;
   it('accelerates along a road, steers, and brakes', () => {
-    const c = { x: road.pts[40], y: 0, z: road.pts[41], vy: 0, vh: 0, vs: 0, grounded: true };
+    // start somewhere along the road with no buildings in the way (places grow and move as the map changes)
+    const clearAt = (k: number) => !w.boxes.some((b) => Math.hypot((b.x0 + b.x1) / 2 - road.pts[k], (b.z0 + b.z1) / 2 - road.pts[k + 1]) < 80)
+      && [0, 4, 8, 12].every((o) => k + o + 1 < road.pts.length && terrainAt(w, road.pts[k + o], road.pts[k + o + 1]) > 3);
+    let k = 40;
+    while (k + 14 < road.pts.length && !clearAt(k)) k += 2;
+    // facing along the road
+    const vh = Math.atan2(-(road.pts[k + 2] - road.pts[k]), -(road.pts[k + 3] - road.pts[k + 1]));
+    const c = { x: road.pts[k], y: 0, z: road.pts[k + 1], vy: 0, vh, vs: 0, grounded: true };
     c.y = surfaceAt(w, c.x, c.z, 100);
     for (let i = 0; i < SIM_HZ * 3; i++) stepCar(c, 1, 0, false, w, 1 / SIM_HZ);
     expect(c.vs).toBeGreaterThan(15);

@@ -70,7 +70,9 @@ describe('match instance', () => {
     expect(landed.length).toBe(80); // everyone is down (some may already be fighting, knocked or out)
     const onLand = inst.players.filter((p) => !p.npc).filter((p) => terrainAt(inst.world, p.s.x, p.s.z) > 0 || p.s.y > 0);
     expect(onLand.length).toBeGreaterThanOrEqual(72); // almost everyone hits dry land
-    expect(mates.every((p) => Math.hypot(p.s.x - me.s.x, p.s.z - me.s.z) < 90)).toBe(true); // squad landed together (and has been looting the same town for 45 s)
+    // squad dropped together: teammates still standing are in the same part of the map after 45 s
+    // (if you land in the sea, they make for the nearest town on land; eliminated teammates don't count)
+    expect(mates.filter((p) => p.s.mode !== PM.Dead).every((p) => Math.hypot(p.s.x - me.s.x, p.s.z - me.s.z) < 260)).toBe(true);
     // bot squads spread across several locations
     const spots = new Set(inst.players.filter((p) => p.bot && !p.npc && p.team !== me.team).map((p) => `${Math.round(p.s.x / 250)},${Math.round(p.s.z / 250)}`));
     expect(spots.size).toBeGreaterThanOrEqual(5);

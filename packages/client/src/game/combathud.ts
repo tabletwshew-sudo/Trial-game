@@ -67,6 +67,12 @@ export class CombatHud {
   private lastHp = 100;
   private hitTimer = 0;
   private resultShown = false;
+  /** Shown the moment you go down for good (before your team's result, if they're still alive). */
+  private deathEl = h('div.death-panel');
+  private deathShown = false;
+  private killedBy = '';
+  /** You closed the result card to watch: a button brings it back. */
+  private lastResult: GameResult | null = null;
 
   constructor(private roster: RosterEntry[], private selfIdx: number, private cb: { onLeave: (again?: boolean) => void; onSpectate: () => void; onSpecNext: (dir: number) => void }) {
     this.osBar = h('div.bar.over', this.osFill, h('div.bar-label', h('span', '⬢'), this.osText));
@@ -90,7 +96,7 @@ export class CombatHud {
       this.vignette, this.scope, this.dirs, this.nums,
       this.cross, this.hit, this.prompt, this.ring, this.center, this.knocked,
       h('div.bottom-left', bars), h('div.bottom-right', this.ammoEl, hotbar),
-      this.feed, this.killsEl, this.specEl, this.bossEl, this.cardsEl, this.structEl, this.resultEl);
+      this.feed, this.killsEl, this.specEl, this.bossEl, this.cardsEl, this.structEl, this.deathEl, this.resultEl);
   }
 
   // ------------------------------------------------------------ events
@@ -131,6 +137,7 @@ export class CombatHud {
     setTimeout(() => line.classList.add('fade'), 6000);
     setTimeout(() => line.remove(), 7000);
     if (mine(killer) && killer !== victim && !how) this.popCenter(knock ? 'KNOCKED' : 'ELIMINATED', name(victim), knock);
+    if (mine(victim) && !knock) this.killedBy = how ? how.replace(/^was /, '') : killer >= 0 && killer !== victim ? `by ${name(killer)}` : '';
   }
 
   /** Health left on the wall you're hitting (shown under the crosshair for a moment). */
@@ -155,6 +162,8 @@ export class CombatHud {
 
   showResult(r: GameResult) {
     this.resultShown = true;
+    this.lastResult = r;
+    this.deathEl.classList.remove('show');
     const st = r.stats;
     const stat = (v: string | number, label: string) => h('div', h('b', String(v)), h('small', label));
     this.resultEl.replaceChildren(
@@ -195,7 +204,7 @@ export class CombatHud {
     };
     tick();
   }
-  get resultOpen() { return this.resultEl.classList.contains('show'); }
+  get resultOpen() { return this.resultEl.classList.contains('show') || this.deathEl.classList.contains('show'); }
 
   // ------------------------------------------------------------ per frame
   private frame = 0;
@@ -271,14 +280,30 @@ export class CombatHud {
     if (prog > 0) { this.ring.style.setProperty('--p', String(Math.min(1, prog))); this.ringLabel.textContent = label; }
 
     // spectating + kills
-    this.specEl.classList.toggle('show', !!v.spectating && !this.resultOpen);
-    if (v.spectating && this.specEl.dataset.n !== v.spectating) {
-      this.specEl.dataset.n = v.spectating;
+    this.specEl.classList.toggle('show', !!v.spectating && !this.resultOpen && !this.deathEl.classList.contains('show'));
+    if (v.spectating && this.specEl.dataset.n !== v.spectating + (this.lastResult ? '1' : '0')) {
+      this.specEl.dataset.n = v.spectating + (this.lastResult ? '1' : '0');
       this.specEl.replaceChildren(
-        h('button', { onclick: () => this.cb.onSpecNext(-1) }, '◀'),
+        h('button', { title: 'Previous player (←)', onclick: () => this.cb.onSpecNext(-1) }, '◀'),
         h('div', h('small', 'SPECTATING'), h('b', v.spectating)),
-        h('button', { onclick: () => this.cb.onSpecNext(1) }, '▶'));
+        h('button', { title: 'Next player (→)', onclick: () => this.cb.onSpecNext(1) }, '▶'),
+        h('div.spec-actions',
+          this.lastResult ? h('button.btn.btn-ghost.small', { onclick: () => { if (this.lastResult) this.showResult(this.lastResult); } }, 'RESULTS') : null,
+          h('button.btn.btn-ghost.small', { onclick: () => this.cb.onLeave(false) }, 'LOBBY')));
     }
+    // went down for good with teammates still fighting: a death card with what to do next
+    if (dead && !this.resultShown && !this.deathShown) {
+      this.deathShown = true;
+      this.deathEl.replaceChildren(
+        h('div.d-title', 'ELIMINATED'),
+        h('div.d-sub', this.killedBy || ' '),
+        h('div.d-note', 'Your squad is still in the fight.'),
+        h('div.d-actions',
+          h('button.btn.btn-primary', { onclick: () => { this.deathEl.classList.remove('show'); this.cb.onSpectate(); } }, 'SPECTATE'),
+          h('button.btn.btn-ghost', { onclick: () => this.cb.onLeave(false) }, 'LOBBY')));
+      this.deathEl.classList.add('show');
+    }
+    if (!dead) { this.deathShown = false; this.deathEl.classList.remove('show'); }
     if (this.bossUntil && performance.now() > this.bossUntil) { this.bossEl.classList.remove('show'); this.bossUntil = 0; }
     if (this.structUntil && performance.now() > this.structUntil) { this.structEl.classList.remove('show'); this.structUntil = 0; }
     this.cardsEl.classList.toggle('show', v.cards.length > 0 && !dead);

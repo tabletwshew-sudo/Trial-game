@@ -42,7 +42,7 @@ export class HeightField {
 
 // ------------------------------------------------------------------ locations
 export type PoiKind = 'city' | 'town' | 'industrial' | 'farm' | 'camp' | 'harbor' | 'station' | 'resort' | 'quarry';
-export interface Poi { id: number; name: string; x: number; z: number; r: number; kind: PoiKind; h: number }
+export interface Poi { id: number; name: string; x: number; z: number; r: number; kind: PoiKind; h: number; /** A small unnamed hamlet along a road (not labelled on the map). */ minor?: boolean }
 
 const POI_DEFS: Omit<Poi, 'id' | 'h'>[] = [
   { name: 'Brickwell', kind: 'city', x: -140, z: 40, r: 125 },
@@ -335,49 +335,52 @@ export function roadEdgeDist(w: World, x: number, z: number) {
 interface Spec { n: number; w: [number, number]; d: [number, number]; h: [number, number]; roof: 'flat' | 'gable' | 'mix'; roofH: [number, number]; shape?: number }
 const SPECS: Record<PoiKind, Spec[]> = {
   city: [
-    { n: 9, w: [16, 24], d: [16, 24], h: [20, 44], roof: 'flat', roofH: [0, 0] },
-    { n: 16, w: [10, 16], d: [10, 14], h: [8, 16], roof: 'flat', roofH: [0, 0] },
+    { n: 13, w: [16, 24], d: [16, 24], h: [20, 44], roof: 'flat', roofH: [0, 0] },
+    { n: 22, w: [10, 16], d: [10, 14], h: [8, 16], roof: 'flat', roofH: [0, 0] },
   ],
   town: [
-    { n: 3, w: [14, 20], d: [10, 14], h: [6.5, 8], roof: 'flat', roofH: [0, 0] },
-    { n: 16, w: [9, 13], d: [8, 11], h: [3.6, 6.6], roof: 'gable', roofH: [2.4, 3.4] },
+    { n: 4, w: [14, 20], d: [10, 14], h: [6.5, 8], roof: 'flat', roofH: [0, 0] },
+    { n: 22, w: [9, 13], d: [8, 11], h: [5.8, 6.8], roof: 'gable', roofH: [2.4, 3.4] },
   ],
   industrial: [
-    { n: 6, w: [24, 36], d: [16, 24], h: [9, 13], roof: 'mix', roofH: [2, 3] },
-    { n: 5, w: [6, 6], d: [6, 6], h: [13, 17], roof: 'flat', roofH: [0, 0], shape: 2 },
-    { n: 10, w: [2.6, 2.6], d: [6.2, 6.2], h: [2.7, 2.7], roof: 'flat', roofH: [0, 0], shape: 1 },
+    { n: 8, w: [24, 36], d: [16, 24], h: [9, 13], roof: 'mix', roofH: [2, 3] },
+    { n: 7, w: [6, 6], d: [6, 6], h: [13, 17], roof: 'flat', roofH: [0, 0], shape: 2 },
+    { n: 14, w: [2.6, 2.6], d: [6.2, 6.2], h: [2.7, 2.7], roof: 'flat', roofH: [0, 0], shape: 1 },
   ],
   farm: [
-    { n: 2, w: [16, 20], d: [11, 13], h: [6, 7], roof: 'gable', roofH: [4.5, 5.5] },
-    { n: 2, w: [5, 5], d: [5, 5], h: [10, 12], roof: 'flat', roofH: [0, 0], shape: 2 },
-    { n: 6, w: [7, 10], d: [6, 8], h: [3.2, 4], roof: 'gable', roofH: [2, 2.6] },
+    { n: 3, w: [16, 20], d: [11, 13], h: [6, 7], roof: 'gable', roofH: [4.5, 5.5] },
+    { n: 3, w: [5, 5], d: [5, 5], h: [10, 12], roof: 'flat', roofH: [0, 0], shape: 2 },
+    { n: 8, w: [7, 10], d: [6, 8], h: [5.8, 6.4], roof: 'gable', roofH: [2, 2.6] },
   ],
-  camp: [{ n: 9, w: [6, 8], d: [6, 7], h: [3, 3.4], roof: 'gable', roofH: [1.8, 2.4] }],
+  camp: [{ n: 13, w: [7, 9], d: [6.5, 8], h: [5.6, 6], roof: 'gable', roofH: [1.8, 2.4] }],
   harbor: [
-    { n: 5, w: [16, 22], d: [22, 30], h: [7, 9], roof: 'gable', roofH: [2, 2.8] },
-    { n: 14, w: [2.6, 2.6], d: [6.2, 6.2], h: [2.7, 2.7], roof: 'flat', roofH: [0, 0], shape: 1 },
-    { n: 5, w: [8, 11], d: [7, 9], h: [3.4, 4.2], roof: 'flat', roofH: [0, 0] },
+    { n: 7, w: [16, 22], d: [22, 30], h: [7, 9], roof: 'gable', roofH: [2, 2.8] },
+    { n: 20, w: [2.6, 2.6], d: [6.2, 6.2], h: [2.7, 2.7], roof: 'flat', roofH: [0, 0], shape: 1 },
+    { n: 7, w: [8, 11], d: [7, 9], h: [6, 6.8], roof: 'flat', roofH: [0, 0] },
   ],
   station: [
     { n: 1, w: [16, 16], d: [14, 14], h: [6, 6], roof: 'flat', roofH: [0, 0] },
-    { n: 3, w: [6, 7], d: [5, 6], h: [3.2, 3.6], roof: 'gable', roofH: [1.6, 2] },
+    { n: 4, w: [7, 8], d: [6.5, 7.5], h: [5.8, 6.2], roof: 'gable', roofH: [1.6, 2] },
   ],
   resort: [
     { n: 1, w: [32, 36], d: [14, 16], h: [15, 18], roof: 'flat', roofH: [0, 0] },
-    { n: 11, w: [7, 9], d: [7, 9], h: [3.4, 3.8], roof: 'gable', roofH: [2.2, 2.8] },
+    { n: 15, w: [7, 9], d: [7, 9], h: [5.8, 6.4], roof: 'gable', roofH: [2.2, 2.8] },
   ],
   quarry: [
-    { n: 3, w: [8, 12], d: [7, 9], h: [3.6, 4.5], roof: 'flat', roofH: [0, 0] },
-    { n: 8, w: [2.6, 2.6], d: [6.2, 6.2], h: [2.7, 2.7], roof: 'flat', roofH: [0, 0], shape: 1 },
+    { n: 4, w: [8, 12], d: [7, 9], h: [6, 6.8], roof: 'flat', roofH: [0, 0] },
+    { n: 11, w: [2.6, 2.6], d: [6.2, 6.2], h: [2.7, 2.7], roof: 'flat', roofH: [0, 0], shape: 1 },
   ],
 };
+
+/** Hamlets: a few two-storey houses beside a road between the named places. */
+const HAMLET: Spec[] = [{ n: 4, w: [8, 11], d: [7, 10], h: [5.8, 6.8], roof: 'gable', roofH: [2.2, 3] }];
 
 function genBoxes(w: World) {
   const rnd = mulberry32(w.seed * 7 + 99);
   const range = (r: [number, number]) => r[0] + (r[1] - r[0]) * rnd();
   for (const p of w.pois) {
     const placed: Box[] = [];
-    for (const spec of SPECS[p.kind]) {
+    for (const spec of p.minor ? HAMLET : SPECS[p.kind]) {
       let made = 0;
       for (let tries = 0; tries < spec.n * 40 && made < spec.n; tries++) {
         let bw = Math.round(range(spec.w) * 2) / 2, bd = Math.round(range(spec.d) * 2) / 2;
@@ -610,14 +613,40 @@ function buildSolidGrid(w: World) {
   }
 }
 
+/** Spots beside the roads, away from the named places and from each other, for small hamlets. */
+function genHamlets(seed: number, pois: Poi[], roads: Road[], river: Float32Array): Poi[] {
+  const rnd = mulberry32(seed * 13 + 5);
+  const out: Poi[] = [];
+  const kinds: PoiKind[] = ['town', 'farm', 'camp'];
+  for (const road of roads) {
+    const pts = road.pts;
+    for (let i = 4; i + 2 < pts.length / 2 && out.length < 16; i += 6) {
+      const x = pts[i * 2], z = pts[i * 2 + 1];
+      const tx = pts[i * 2 + 2] - pts[i * 2 - 2], tz = pts[i * 2 + 3] - pts[i * 2 - 1], tl = Math.hypot(tx, tz) || 1;
+      const side = rnd() < 0.5 ? -1 : 1;
+      const hx = x + (-tz / tl) * 24 * side, hz = z + (tx / tl) * 24 * side;
+      if ([...pois, ...out].some((p) => Math.hypot(p.x - hx, p.z - hz) < p.r + (p.minor ? 200 : 90))) continue;
+      const g = rawHeight(hx, hz, seed, river);
+      if (g < 3 || g > 45 || Math.abs(hx) > MAP.size / 2 - 120 || Math.abs(hz) > MAP.size / 2 - 120) continue;
+      // not on a steep slope
+      const slope = Math.abs(rawHeight(hx + 15, hz, seed, river) - rawHeight(hx - 15, hz, seed, river)) + Math.abs(rawHeight(hx, hz + 15, seed, river) - rawHeight(hx, hz - 15, seed, river));
+      if (slope > 9) continue;
+      out.push({ id: pois.length + out.length, name: '', kind: kinds[out.length % 3], x: Math.round(hx), z: Math.round(hz), r: 30, h: 0, minor: true });
+    }
+  }
+  return out;
+}
+
 // ------------------------------------------------------------------ entry
 const cache = new Map<number, World>();
 export function getWorld(seed: number = MAP.seed): World {
   let w = cache.get(seed);
   if (w) return w;
-  const pois: Poi[] = POI_DEFS.map((p, id) => ({ ...p, id, h: 0 }));
+  // places are a fifth bigger than they were drawn (Stillwater Camp keeps its size: it sits close to Brickwell)
+  const pois: Poi[] = POI_DEFS.map((p, id) => ({ ...p, id, h: 0, r: Math.round(p.r * (p.name === 'Stillwater Camp' ? 1 : p.name === 'Brickwell' ? 1.15 : 1.22)) }));
   const river = smoothPath(RIVER, 30);
   const roads = genRoads(seed, pois);
+  pois.push(...genHamlets(seed, pois, roads, river));
   w = {
     seed, pois, roads, river,
     main: genMain(seed, pois, river),

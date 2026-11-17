@@ -422,7 +422,8 @@ describe('chests, supply drops, forage', () => {
   it('bots go indoors through the door to loot a chest', () => {
     const g = inPlay([1, 1, 1], [0], 'solo');
     const bot = g.inst.players[1];
-    const L = g.inst.world.layouts.find((x) => x.type === 'house' && x.floors.length === 1 && x.chests.length)!;
+    // every house has an upstairs now, and the chest is up there: in through the door, then up the stairs
+    const L = g.inst.world.layouts.find((x) => x.type === 'house' && x.floors.length === 2 && x.stairs && x.chests.length && x.chests[0].y > x.floors[0] + 1)!;
     const sp = L.chests[0];
     // clear the area, put one chest inside, the bot outside the front door
     for (const c of g.inst.chests.values()) if (Math.hypot(c.x - sp.x, c.z - sp.z) < 60) c.open = true;

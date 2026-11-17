@@ -298,8 +298,8 @@ export function genProps(w: World, solids: Solid[]): { props: Prop[]; caves: Cav
   const zips: Zip[] = [];
   const ZIP_END = 3.6;
   const sites: [number, number, number][] = [];
-  for (let t = 0; t < 900; t++) {
-    const x = (rnd() - 0.5) * 2000, z = (rnd() - 0.5) * 2000;
+  for (let t = 0; t < 1600; t++) {
+    const x = (rnd() - 0.5) * 2100, z = (rnd() - 0.5) * 2100;
     if (!clear(x, z, 4)) continue;
     const g = ground(x, z);
     // prefer high ground: compare to the ring around it
@@ -326,8 +326,8 @@ export function genProps(w: World, solids: Solid[]): { props: Prop[]; caves: Cav
   }
   cands.sort((p, q) => q.len - p.len);
   for (const c of cands) {
-    if (zips.length >= 5) break;
-    const far = (x: number, z: number) => zips.every((Z) => Math.hypot(Z.ax - x, Z.az - z) > 200 && Math.hypot(Z.bx - x, Z.bz - z) > 200);
+    if (zips.length >= 12) break;
+    const far = (x: number, z: number) => zips.every((Z) => Math.hypot(Z.ax - x, Z.az - z) > 140 && Math.hypot(Z.bx - x, Z.bz - z) > 140);
     if (!far(c.ax, c.az) || !far(c.bx, c.bz)) continue;
     zips.push(c);
     put('zippole', c.ax, c.az, Math.atan2(c.bx - c.ax, c.bz - c.az), ZIP_END + 0.9, { hx: 0.2, hz: 0.2, h: ZIP_END + 0.9 });
@@ -336,9 +336,7 @@ export function genProps(w: World, solids: Solid[]): { props: Prop[]; caves: Cav
 
   // ---------------------------------------------------------------- spring pads
   const pads: { x: number; y: number; z: number }[] = [];
-  for (const name of ['Brickwell', 'Northgate', 'Rustworks', 'Quarry Nine', 'Coral Cove', 'Summit Station', 'Mosshollow']) {
-    const p = w.pois.find((q) => q.name === name);
-    if (!p) continue;
+  for (const p of w.pois.filter((q) => !q.minor)) for (let n = 0; n < 2; n++) {
     for (let t = 0; t < 60; t++) {
       const x = p.x + (rnd() - 0.5) * p.r * 1.2, z = p.z + (rnd() - 0.5) * p.r * 1.2;
       if (!clear(x, z, 3)) continue;

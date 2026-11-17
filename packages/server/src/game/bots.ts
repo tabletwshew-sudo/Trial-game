@@ -1,5 +1,5 @@
 import {
-  ITEM, ITEMS, K, MV, PICK_SLOT, PM, SPAWN_ISLAND, shotOrigin, consumableDef, layoutAt, raycastWorld, routeParamNear, surfaceAt, throwableDef, weaponDef,
+  ITEM, ITEMS, K, MV, PICK_SLOT, PM, SPAWN_ISLAND, clearColumn, shotOrigin, consumableDef, layoutAt, raycastWorld, routeParamNear, surfaceAt, throwableDef, weaponDef,
   type BusRoute, type InputCmd, type Layout, type PlayerState, type StormState, type World,
 } from '@dropzone/shared';
 import type { LootStore } from './loot.js';
@@ -142,6 +142,9 @@ function stormGoal(s: PlayerState, bw: BotWorld, now: number): { x: number; z: n
   return { x: st.next.x + (s.x - st.next.x) * k, z: st.next.z + (s.z - st.next.z) * k, urgent: outNow };
 }
 
+/** Which way a staircase rises, by its face index (0 +z, 1 +x, 2 -z, 3 -x). */
+const STAIR_DIR: [number, number][] = [[0, 1], [1, 0], [0, -1], [-1, 0]];
+
 /**
  * Where to walk next to reach (tx, ty, tz): through a door if the target is in a different
  * building (or outside), up or down the stairs if it's on another floor.
@@ -177,7 +180,15 @@ export function navStep(w: World, s: PlayerState, tx: number, ty: number, tz: nu
   if (A && A === B && A.stairs) {
     const st = A.stairs, up = ty > st.y0 + 1.5, onUpper = s.y > st.y0 + 1.5;
     const onStairs = s.x > st.x0 - 0.1 && s.x < st.x1 + 0.1 && s.z > st.z0 - 0.1 && s.z < st.z1 + 0.1;
-    if (up && !onUpper) return onStairs || Math.hypot(s.x - st.bx, s.z - st.bz) < 0.7 ? { x: st.tx, z: st.tz } : { x: st.bx, z: st.bz };
+    if (up && !onUpper) {
+      // straight up the middle of the stairs (they're narrow: cutting across to the landing walks you off the side),
+      // then step across onto the landing at the top
+      const [fx, fz] = STAIR_DIR[st.face % 4];
+      const half = fx ? (st.x1 - st.x0) / 2 : (st.z1 - st.z0) / 2;
+      const top = { x: (st.x0 + st.x1) / 2 + fx * (half - 0.15), z: (st.z0 + st.z1) / 2 + fz * (half - 0.15) };
+      if (onStairs) return s.y > st.y1 - 0.5 ? { x: st.tx, z: st.tz } : top;
+      return Math.hypot(s.x - st.bx, s.z - st.bz) < 0.7 ? top : { x: st.bx, z: st.bz };
+    }
     if (!up && onUpper) return onStairs || Math.hypot(s.x - st.tx, s.z - st.tz) < 0.7 ? { x: st.bx, z: st.bz } : { x: st.tx, z: st.tz };
   }
   return { x: tx, z: tz };
@@ -280,10 +291,18 @@ export function findCover(w: World, s: PlayerState, e: { x: number; y: number; z
       const x = s.x + dx * r, z = s.z + dz * r;
       const y = surfaceAt(w, x, z, s.y + 1.5);
       if (Math.abs(y - s.y) > 1.2) continue;
-      if (raycastWorld(w, { x: s.x, y: s.y + 0.7, z: s.z }, { x: dx, y: 0, z: dz }, r, false).kind !== 'none') continue;
-      const tx = x - eye.x, ty = y + 1.2 - eye.y, tz = z - eye.z, tl = Math.hypot(tx, ty, tz);
-      if (tl < 4) continue;
-      if (raycastWorld(w, eye, { x: tx / tl, y: ty / tl, z: tz / tl }, tl, false).kind === 'none') continue;
+      // room to stand there (not hard against a wall, which you could never actually reach)
+      if (!clearColumn(w, x, z, y + 0.1, y + 1.8, 0.55)) continue;
+      if (raycastWorld(w, { x: s.x, y: s.y + 0.7, z: s.z }, { x: dx, y: 0, z: dz }, r + 0.5, false).kind !== 'none') continue;
+      // hidden at chest and head height, by something solid well short of the spot (not a grazed corner)
+      let hidden = true;
+      for (const hgt of [1.1, 1.7]) {
+        const tx = x - eye.x, ty = y + hgt - eye.y, tz = z - eye.z, tl = Math.hypot(tx, ty, tz);
+        if (tl < 4) { hidden = false; break; }
+        const hit = raycastWorld(w, eye, { x: tx / tl, y: ty / tl, z: tz / tl }, tl, false);
+        if (hit.kind === 'none' || hit.t > tl - 0.8) { hidden = false; break; }
+      }
+      if (!hidden) continue;
       const score = r - Math.hypot(x - e.x, z - e.z) * 0.25;
       if (score < bestScore) { bestScore = score; best = { x, z }; }
     }
@@ -428,7 +447,7 @@ function decide(s: PlayerState, b: BotBrain, bw: BotWorld, home: { x: number; z:
       if (b.cover && (now > b.cover.until || (!wantCover && !(weak && healAt >= 0)))) b.cover = null;
       if (b.cover) {
         const cdx = b.cover.x - s.x, cdz = b.cover.z - s.z, cd = Math.hypot(cdx, cdz);
-        if (cd > 0.8) {
+        if (cd > 1.0) {
           cmd.yaw = yawTo(cdx, cdz); cmd.pitch = 0;
           cmd.keys = (cmd.keys & ~(K.B | K.L | K.R)) | K.F | K.SPRINT;
           if (reloading) cmd.keys |= K.RELOAD;

@@ -114,10 +114,12 @@ export function genLayout(w: World, b: Box, out: Solid[]): Layout {
   // how much of the building you can walk around in
   const T = type === 'hall' ? 0.35 : 0.3;
   L.wallT = T;
+  // every building you can walk into has an upstairs when it's tall enough (and they're built tall enough)
   let access = h, storeys = 1;
   if (type === 'house') storeys = h >= 5.6 ? 2 : 1;
   if (type === 'shop') { access = Math.min(h, 7); storeys = access >= 6.4 ? 2 : 1; }
-  if (type === 'tower') access = 4.2;
+  if (type === 'tower') { access = Math.min(h, 8.4); storeys = access >= 8 ? 2 : 1; }
+  if (type === 'hall') { access = Math.min(h, 9.6); storeys = access >= 6 ? 2 : 1; } // a loft or mezzanine
   if (h - access < 0.4) access = h;
   const sh = access / storeys;
   L.access = access;
@@ -129,7 +131,7 @@ export function genLayout(w: World, b: Box, out: Solid[]): Layout {
 
   // doors: front always, back door when the building is deep enough
   const doorW = type === 'hall' ? 4.6 : type === 'tower' ? 2.4 : type === 'shop' ? 2.0 : 1.6;
-  const doorH = type === 'hall' ? Math.min(4.2, access - 0.8) : type === 'tower' ? 3.0 : 2.3;
+  const doorH = type === 'hall' ? Math.min(4.2, access / storeys - 0.5) : type === 'tower' ? 3.0 : 2.3;
   const back = type === 'hall' || type === 'tower' || D >= 8.5;
   const backW = type === 'hall' ? 1.8 : 1.6, backH = 2.3;
 

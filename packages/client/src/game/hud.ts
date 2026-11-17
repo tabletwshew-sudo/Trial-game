@@ -130,6 +130,7 @@ export class Hud {
   private mini: HTMLCanvasElement; private big: HTMLCanvasElement; private compass: HTMLCanvasElement;
   private banner = h('div.banner'); private bannerSub = h('div.banner-sub');
   private hint = h('div.hint-keys');
+  private hintText = ''; private hintSince = 0;
   private alt = h('div.altimeter');
   private aliveEl = h('b', '0');
   private teamEl = h('div.team');
@@ -353,6 +354,7 @@ export class Hud {
     if (this.nearSpawn(s.x, s.z)) this.drawSpawn(c, toX, toY);
     // names of places in view
     if (!air) for (const p of this.w.pois) {
+      if (p.minor) continue; // hamlets have no name
       const x = toX(p.x), y = toY(p.z);
       if (x > -60 && x < S + 60 && y > -20 && y < S + 20) this.label(c, p.name.toUpperCase(), x, y, 17, '#ffffff');
     }
@@ -379,7 +381,7 @@ export class Hud {
     c.restore();
     // place names grow a little as you zoom in
     const fs = Math.min(24, 15 + (MAP.size / vw.span - 1) * 3);
-    for (const p of this.w.pois) this.label(c, p.name.toUpperCase(), toX(p.x), toY(p.z - p.r) - fs * 0.6, fs, '#ffffff');
+    for (const p of this.w.pois) if (!p.minor) this.label(c, p.name.toUpperCase(), toX(p.x), toY(p.z - p.r) - fs * 0.6, fs, '#ffffff');
     this.drawOverlays(c, v, toX, toY, 1.35, true);
     // grid letters along the top, numbers down the side (they stay on screen while you pan)
     for (let i = 0; i < GRID; i++) {
@@ -437,7 +439,11 @@ export class Hud {
     else if (s.mode === PM.Glide) hint = s.height > 85 ? 'W to glide · SPACE fold glider' : 'W to glide';
     this.banner.textContent = big; this.bannerSub.textContent = sub;
     this.banner.classList.toggle('pulse', big === 'SPACE TO DROP');
+    // keep the screen clean: a hint shows when it changes, then fades after 15 s (the dropship's stay up)
+    if (hint !== this.hintText) { this.hintText = hint; this.hintSince = performance.now(); }
+    const keepHint = v.phase === 'bus' || performance.now() - this.hintSince < 15_000;
     this.hint.textContent = hint;
+    this.hint.classList.toggle('faded', !keepHint);
 
     const air = s.mode === PM.Fall || s.mode === PM.Glide;
     this.alt.classList.toggle('show', air);
@@ -467,7 +473,7 @@ export class Hud {
 
     // location name pops up when you walk into a named place
     if (s.mode === PM.Walk && v.phase !== 'warmup') {
-      const poi = this.w.pois.find((p) => Math.hypot(s.x - p.x, s.z - p.z) < p.r);
+      const poi = this.w.pois.find((p) => !p.minor && Math.hypot(s.x - p.x, s.z - p.z) < p.r);
       const id = poi ? poi.id : -1;
       if (id !== this.lastPoi) { this.lastPoi = id; if (poi) { this.place.textContent = poi.name.toUpperCase(); this.placeTimer = 3.2; } }
     }
@@ -518,7 +524,7 @@ export class Hud {
       this.drawBig(v);
       // header: where you are, the storm, who's left
       const here = s.mode === PM.Bus ? 'On the dropship' : this.nearSpawn(s.x, s.z) ? 'Warm-up island'
-        : (() => { const p = this.w.pois.find((q) => Math.hypot(s.x - q.x, s.z - q.z) < q.r * 1.2); const g = gridRef(s.x, s.z); return p ? `${p.name} · ${g}` : g || 'At sea'; })();
+        : (() => { const p = this.w.pois.find((q) => !q.minor && Math.hypot(s.x - q.x, s.z - q.z) < q.r * 1.2); const g = gridRef(s.x, s.z); return p ? `${p.name} · ${g}` : g || 'At sea'; })();
       this.bmWhere.textContent = here;
       const st = v.storm;
       this.bmStorm.textContent = v.phase === 'warmup' ? `Dropship leaves in ${fmtTime(Math.max(0, (v.warmupEndsAt - v.serverNow) / 1000))}`
