@@ -108,6 +108,14 @@ function itemPieces(id: number, rarity: number): Piece[] {
       { geo: new THREE.CylinderGeometry(0.045, 0.06, 0.02, 12), color: '#c0c0c0', matrix: mat4(0, 0.21, 0) },
     ];
   }
+  if (id === ITEM.gold) {
+    // a little heap of gold coins
+    const coin = (x: number, y: number, z: number, tilt = 0) => ({ geo: new THREE.CylinderGeometry(0.075, 0.075, 0.022, 12), color: '#ffcf3f', matrix: mat4(x, y, z, tilt, 0, 0) });
+    return [
+      ...[0, 1, 2, 3, 4].map((k) => coin(0, 0.012 + k * 0.024, 0)), ...[0, 1, 2].map((k) => coin(0.13, 0.012 + k * 0.024, 0.04)),
+      coin(-0.1, 0.02, 0.09, 0.3), coin(0.05, 0.02, -0.12, -0.4), { geo: new THREE.CylinderGeometry(0.05, 0.05, 0.024, 10), color: '#d9a441', matrix: mat4(0, 0.13, 0) },
+    ];
+  }
   if (id === ITEM.pickaxe) {
     // an original pick: ash handle with a wrapped grip and a brass end cap, a steel head with a
     // curved spike on one side and a broad blade on the other, and a teal collar. Like the

@@ -93,25 +93,52 @@ export class LobbyScene {
     lip.position.y = -0.42;
     const rock = part(new THREE.ConeGeometry(5.4, 5, 10, 3), '#8a6a52');
     rock.rotation.x = Math.PI; rock.position.y = -3.0;
-    const glow = new THREE.Mesh(new THREE.RingGeometry(2.0, 2.15, 64), new THREE.MeshBasicMaterial({ color: '#fff36b', transparent: true, opacity: 0.85 }));
+    // a round stone stage: a raised dais with a darker kerb and a glowing gold inlay
+    const dais = part(new THREE.CylinderGeometry(2.35, 2.5, 0.22, 48), '#d9d2c3');
+    dais.position.y = 0.11;
+    const kerb = part(new THREE.CylinderGeometry(2.62, 2.7, 0.12, 48), '#9a9284', false);
+    kerb.position.y = 0.06;
+    const inlay = new THREE.Mesh(new THREE.RingGeometry(1.75, 1.9, 64), new THREE.MeshBasicMaterial({ color: new THREE.Color('#ffd23f').multiplyScalar(1.4), transparent: true, opacity: 0.9 }));
+    inlay.rotation.x = -Math.PI / 2; inlay.position.y = 0.225;
+    const glow = new THREE.Mesh(new THREE.RingGeometry(2.0, 2.15, 64), new THREE.MeshBasicMaterial({ color: '#fff36b', transparent: true, opacity: 0.0 }));
     glow.rotation.x = -Math.PI / 2; glow.position.y = 0.012;
-    this.scene.add(top, lip, rock, glow);
+    this.scene.add(top, lip, rock, dais, kerb, inlay, glow);
+    // four short stone posts with little gold lamps round the dais
+    for (let k = 0; k < 4; k++) {
+      const a = Math.PI / 4 + (k / 4) * Math.PI * 2;
+      const post = part(new THREE.CylinderGeometry(0.16, 0.2, 0.7, 8), '#cfc7b6');
+      post.position.set(Math.cos(a) * 2.9, 0.35, Math.sin(a) * 2.9);
+      const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.13, 12, 10), new THREE.MeshBasicMaterial({ color: new THREE.Color('#ffe08a').multiplyScalar(1.3) }));
+      lamp.position.set(post.position.x, 0.8, post.position.z);
+      this.scene.add(post, lamp);
+    }
 
-    // flowers / tufts on the platform rim
-    const tuft = new THREE.ConeGeometry(0.08, 0.35, 5);
+    // grass round the stage: clumps of tapered blades (like the island's), and a few flowers
+    const blades: number[] = [], bcol: number[] = [];
     const flowerColors = ['#ffffff', '#ffe066', '#ff8fab', '#a0c4ff'];
-    for (let i = 0; i < 70; i++) {
-      const a = Math.random() * Math.PI * 2, r = 3.2 + Math.random() * 1.9;
-      const g = new THREE.Mesh(tuft, toon(i % 3 ? '#57c454' : '#3fa63d'));
-      g.position.set(Math.cos(a) * r, 0.15, Math.sin(a) * r);
-      g.rotation.z = (Math.random() - 0.5) * 0.4;
-      this.scene.add(g);
-      if (i % 4 === 0) {
+    for (let i = 0; i < 260; i++) {
+      const a = Math.random() * Math.PI * 2, r = 2.85 + Math.random() * 2.3;
+      const cx = Math.cos(a) * r, cz = Math.sin(a) * r;
+      for (let b = 0; b < 6; b++) {
+        const ba = Math.random() * Math.PI * 2, h = 0.22 + Math.random() * 0.22, w = 0.03;
+        const lean = 0.05 + Math.random() * 0.1, ox = cx + Math.cos(ba) * 0.05, oz = cz + Math.sin(ba) * 0.05;
+        const px = -Math.sin(ba) * w, pz = Math.cos(ba) * w;
+        blades.push(ox - px, 0, oz - pz, ox + px, 0, oz + pz, ox + Math.cos(ba) * lean, h, oz + Math.sin(ba) * lean);
+        const g = 0.75 + Math.random() * 0.25;
+        bcol.push(0.04 * g, 0.2 * g, 0.03 * g, 0.04 * g, 0.2 * g, 0.03 * g, 0.22, 0.55, 0.1);
+      }
+      if (i % 9 === 0) {
         const f = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), toon(flowerColors[i % 4], 0.15));
-        f.position.set(g.position.x, 0.34, g.position.z);
+        f.position.set(cx, 0.3, cz);
         this.scene.add(f);
       }
     }
+    const bg = new THREE.BufferGeometry();
+    bg.setAttribute('position', new THREE.Float32BufferAttribute(blades, 3));
+    bg.setAttribute('color', new THREE.Float32BufferAttribute(bcol, 3));
+    bg.computeVertexNormals();
+    for (let i = 0; i < bg.attributes.normal.count; i++) bg.attributes.normal.setXYZ(i, 0, 1, 0); // lit like the ground they grow from
+    this.scene.add(new THREE.Mesh(bg, new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide })));
     // a couple of props: supply crate and a tree
     const crate = part(new THREE.BoxGeometry(0.9, 0.9, 0.9), '#c98b4a');
     crate.position.set(3.4, 0.45, -2.2); crate.rotation.y = 0.5;
@@ -129,7 +156,7 @@ export class LobbyScene {
     g.add(trunk);
     const greens = ['#3fae49', '#56c45a', '#2f9a3d'];
     [[0, 2.1, 0, 1.0], [0.45, 1.8, 0.2, 0.7], [-0.4, 1.85, -0.1, 0.75], [0.05, 2.65, 0, 0.7]].forEach(([px, py, pz, r], i) => {
-      const leaf = part(new THREE.IcosahedronGeometry(r, 1), greens[i % 3]);
+      const leaf = part(new THREE.IcosahedronGeometry(r, 1), greens[i % 3], false);
       leaf.position.set(px, py, pz);
       g.add(leaf);
     });

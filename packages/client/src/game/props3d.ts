@@ -216,6 +216,7 @@ export function buildProps(w: World, scene: THREE.Group): PropsView {
   const flames: THREE.Object3D[] = [];
   const blinkers: THREE.Mesh[] = [];
   const bobbers: { o: THREE.Object3D; phase: number; y: number }[] = [];
+  const merchantFigs: { o: THREE.Object3D; phase: number }[] = [];
   /** Signposts are three draw calls each: only drawn within 160 m. */
   const signs: THREE.Object3D[] = [];
   const smokeSources: THREE.Vector3[] = [];
@@ -299,6 +300,58 @@ export function buildProps(w: World, scene: THREE.Group): PropsView {
     const g = new THREE.Group(); g.add(mesh(hull));
     add(g, p);
     bobbers.push({ o: g, phase: p.x * 0.1, y: p.y + 0.35 });
+  }
+  // pirate merchants' stalls: a striped awning over a plank counter, a chest of gold, barrels,
+  // a flag, and the trader behind the counter (an original character: navy coat, red sash,
+  // three-cornered hat, big beard, eye patch) who bobs and looks about
+  for (const p of byType.get('merchant') ?? []) {
+    const g = new THREE.Group();
+    const stall: Piece[] = [
+      { geo: B(3.2, 0.12, 1.2), color: '#7a4a2b', matrix: mat4(0, 1.0, 0) },
+      { geo: B(3.1, 0.95, 0.08), color: WOOD, matrix: mat4(0, 0.5, -0.55) }, { geo: B(0.08, 0.95, 1.1), color: WOOD, matrix: mat4(-1.55, 0.5, 0) }, { geo: B(0.08, 0.95, 1.1), color: WOOD, matrix: mat4(1.55, 0.5, 0) },
+      ...[-0.9, 0, 0.9].map((x) => ({ geo: B(0.04, 0.9, 0.02), color: '#6b4226', matrix: mat4(x, 0.5, -0.6) })),
+      ...[-1.55, 1.55].flatMap((x) => [{ geo: CY(0.06, 0.06, 2.9, 6), color: '#5c3a21', matrix: mat4(x, 1.45, 0.75) }, { geo: CY(0.06, 0.06, 2.5, 6), color: '#5c3a21', matrix: mat4(x, 1.25, -0.6) }]),
+      // striped awning, sloping toward the front
+      ...Array.from({ length: 8 }, (_, i) => ({ geo: B(0.42, 0.06, 1.75), color: i % 2 ? '#f1faee' : '#c1121f', matrix: mat4(-1.47 + i * 0.42, 2.75, 0.1, 0.22, 0, 0) })),
+      ...Array.from({ length: 8 }, (_, i) => ({ geo: new THREE.ConeGeometry(0.21, 0.22, 3).rotateX(Math.PI), color: i % 2 ? '#f1faee' : '#c1121f', matrix: mat4(-1.47 + i * 0.42, 2.5, -0.72) })),
+      // a chest of gold on the counter, coins spilling out
+      { geo: B(0.7, 0.32, 0.45), color: '#6b3e1f', matrix: mat4(0.9, 1.22, 0.05) }, { geo: B(0.72, 0.06, 0.47), color: '#d9a441', matrix: mat4(0.9, 1.4, 0.05) },
+      { geo: B(0.6, 0.1, 0.36), color: '#ffcf3f', matrix: mat4(0.9, 1.45, 0.05) },
+      ...[[0.4, 0.2], [0.55, -0.15], [0.3, -0.05]].map(([x, z]) => ({ geo: CY(0.06, 0.06, 0.02, 8), color: '#ffcf3f', matrix: mat4(x, 1.07, z) })),
+      // barrels and a crate beside the stall
+      { geo: CY(0.34, 0.3, 0.9, 10), color: '#8b5a2b', matrix: mat4(-2.15, 0.45, 0.2) }, { geo: CY(0.35, 0.35, 0.06, 10), color: DARK, matrix: mat4(-2.15, 0.62, 0.2) },
+      { geo: CY(0.3, 0.27, 0.8, 10), color: '#8b5a2b', matrix: mat4(-2.1, 0.4, -0.55) },
+      { geo: B(0.7, 0.6, 0.7), color: '#a47148', matrix: mat4(2.15, 0.3, -0.3, 0, 0.3, 0) },
+      // flag on a pole: black with a gold coin mark
+      { geo: CY(0.04, 0.04, 4.2, 6), color: '#3d2a1a', matrix: mat4(1.75, 2.1, -0.65) },
+      { geo: B(0.04, 0.6, 0.9), color: '#1b1b24', matrix: mat4(1.75, 3.85, -0.2) }, { geo: CY(0.13, 0.13, 0.05, 10).rotateZ(Math.PI / 2), color: '#ffcf3f', matrix: mat4(1.78, 3.85, -0.2) },
+    ];
+    g.add(mesh(stall));
+    // the trader, stood behind the counter (front of the stall is +z)
+    const fig = new THREE.Group();
+    fig.add(mesh([
+      { geo: CY(0.13, 0.15, 0.7, 8), color: '#3b2a1e', matrix: mat4(-0.15, 0.35, 0) }, { geo: CY(0.13, 0.15, 0.7, 8), color: '#3b2a1e', matrix: mat4(0.15, 0.35, 0) },
+      { geo: CY(0.36, 0.42, 0.85, 10), color: '#1d3557', matrix: mat4(0, 1.1, 0) },                 // coat
+      { geo: CY(0.43, 0.43, 0.14, 10), color: '#c1121f', matrix: mat4(0, 0.95, 0) },                // sash
+      { geo: B(0.2, 0.5, 0.05), color: '#f1faee', matrix: mat4(0, 1.25, 0.37) },                   // shirt front
+      ...[1.32, 1.18, 1.04].map((y) => ({ geo: CY(0.03, 0.03, 0.02, 6).rotateX(Math.PI / 2), color: '#ffcf3f', matrix: mat4(0.15, y, 0.4) })),
+      { geo: CY(0.1, 0.11, 0.6, 6), color: '#1d3557', matrix: mat4(-0.46, 1.25, 0.15, -0.6, 0, 0.2) }, { geo: CY(0.1, 0.11, 0.6, 6), color: '#1d3557', matrix: mat4(0.46, 1.25, 0.15, -0.6, 0, -0.2) },
+      { geo: new THREE.SphereGeometry(0.1, 8, 6), color: '#e0a77a', matrix: mat4(-0.5, 1.1, 0.4) }, { geo: new THREE.SphereGeometry(0.1, 8, 6), color: '#e0a77a', matrix: mat4(0.5, 1.1, 0.4) },
+      { geo: new THREE.SphereGeometry(0.27, 12, 10), color: '#e0a77a', matrix: mat4(0, 1.78, 0) },  // head
+      { geo: new THREE.SphereGeometry(0.24, 10, 8, 0, Math.PI * 2, Math.PI * 0.45, Math.PI * 0.55), color: '#5a3825', matrix: mat4(0, 1.74, 0.06, 0.2, 0, 0) }, // beard
+      { geo: new THREE.SphereGeometry(0.06, 8, 6), color: '#d48a6a', matrix: mat4(0, 1.8, 0.26) },  // nose
+      { geo: new THREE.SphereGeometry(0.035, 6, 5), color: '#14123a', matrix: mat4(-0.1, 1.86, 0.23) }, // eye
+      { geo: CY(0.07, 0.07, 0.02, 8).rotateX(Math.PI / 2), color: '#14123a', matrix: mat4(0.1, 1.86, 0.24) }, // eye patch
+      { geo: B(0.42, 0.02, 0.02), color: '#14123a', matrix: mat4(0, 1.9, 0.18, 0, 0, 0.35) },        // patch strap
+      // three-cornered hat: a flat brim folded into a triangle, the crown, a gold trim
+      { geo: CY(0.46, 0.46, 0.05, 3), color: '#1b1b24', matrix: mat4(0, 2.03, 0, 0, Math.PI / 6, 0) },
+      { geo: CY(0.2, 0.25, 0.22, 10), color: '#1b1b24', matrix: mat4(0, 2.15, 0) },
+      { geo: CY(0.47, 0.47, 0.02, 3), color: '#d9a441', matrix: mat4(0, 2.06, 0, 0, Math.PI / 6, 0) },
+    ]));
+    fig.position.set(0, 0, -0.95);
+    g.add(fig);
+    add(g, p);
+    merchantFigs.push({ o: fig, phase: p.x * 0.07 });
   }
   for (const p of byType.get('sign') ?? []) {
     const cv = document.createElement('canvas'); cv.width = 512; cv.height = 128;
@@ -431,7 +484,7 @@ export function buildProps(w: World, scene: THREE.Group): PropsView {
     setBeacons(ready) { beaconLights.forEach((g, i) => { (g.material as THREE.MeshBasicMaterial).color.set(ready[i] === false ? '#8a8a99' : '#4ade80').multiplyScalar(ready[i] === false ? 1 : 5); }); },
     setVaults(open) { for (const [id, d] of vaultDoors) d.visible = !open.has(id); },
     update(dt, t, cam) {
-      for (const sg of signs) sg.visible = (sg.position.x - cam.x) ** 2 + (sg.position.z - cam.z) ** 2 < 160 * 160;
+      for (const sg of signs) sg.visible = (sg.position.x - cam.x) ** 2 + (sg.position.z - cam.z) ** 2 < 260 * 260;
       for (const s of spinners) s.o.rotation[s.axis] += s.speed * dt;
       for (const f of flames) { const k = 0.85 + Math.sin(t * 13 + f.position.x) * 0.1 + Math.sin(t * 7.3) * 0.08; f.scale.set(1, k, 1); f.rotation.y += dt * 2; }
       for (const b of blinkers) b.visible = Math.sin(t * 3) > 0;
@@ -440,6 +493,7 @@ export function buildProps(w: World, scene: THREE.Group): PropsView {
         r.position.y = 0.2 + k * 2.4; r.scale.setScalar(1 - k * 0.45);
         (r.material as THREE.MeshBasicMaterial).opacity = (1 - k) * 0.8;
       }
+      for (const m of merchantFigs) { m.o.position.y = Math.abs(Math.sin(t * 1.6 + m.phase)) * 0.04; m.o.rotation.y = Math.sin(t * 0.5 + m.phase) * 0.45; }
       for (const b of bobbers) { b.o.position.y = b.y + Math.sin(t * 1.3 + b.phase) * 0.12; b.o.rotation.z = Math.sin(t * 0.9 + b.phase) * 0.04; }
       smokeT -= dt;
       if (smokeT <= 0) {

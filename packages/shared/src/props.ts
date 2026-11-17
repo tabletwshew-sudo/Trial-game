@@ -17,7 +17,7 @@ export interface Exclusion { x: number; z: number; r: number }
 const BOX_CELL = 32;
 const gridKey = (cx: number, cz: number) => (cx + 512) * 1024 + (cz + 512);
 
-export function genProps(w: World, solids: Solid[]): { props: Prop[]; caves: Cave[]; excl: Exclusion[]; extraChests: Spot[]; beacons: { x: number; y: number; z: number }[]; vaults: Vault[]; ladders: Ladder[]; zips: Zip[]; pads: { x: number; y: number; z: number }[] } {
+export function genProps(w: World, solids: Solid[]): { props: Prop[]; caves: Cave[]; excl: Exclusion[]; extraChests: Spot[]; beacons: { x: number; y: number; z: number }[]; vaults: Vault[]; ladders: Ladder[]; zips: Zip[]; pads: { x: number; y: number; z: number }[]; merchants: { x: number; y: number; z: number; rot: number }[] } {
   const props: Prop[] = [];
   const excl: Exclusion[] = [];
   const extraChests: Spot[] = [];
@@ -447,7 +447,23 @@ export function genProps(w: World, solids: Solid[]): { props: Prop[]; caves: Cav
     excl.push({ x: c.x, z: c.z, r: half + 8 });
     caves.push(c);
   }
-  return { props, caves, excl, extraChests, beacons, vaults, ladders, zips, pads };
+  // ---------------------------------------------------------------- pirate merchants' stalls (coastal places)
+  const merchants: { x: number; y: number; z: number; rot: number }[] = [];
+  for (const name of ['Harborlight', 'Coral Cove', 'Sandbar Shacks']) {
+    const p = w.pois.find((q) => q.name === name);
+    if (!p) continue;
+    for (let t = 0; t < 120; t++) {
+      const a = rnd() * Math.PI * 2, r = p.r * (0.35 + rnd() * 0.45);
+      const x = p.x + Math.cos(a) * r, z = p.z + Math.sin(a) * r;
+      if (!clear(x, z, 5) || excl.some((e) => Math.hypot(e.x - x, e.z - z) < e.r + 3)) continue;
+      // face the middle of the place, squared to the nearest quarter turn (solid props are axis-aligned)
+      const rot = Math.round(Math.atan2(p.x - x, p.z - z) / (Math.PI / 2)) * (Math.PI / 2);
+      put('merchant', x, z, rot, 1, { hx: 1.6, hz: 0.6, h: 1.05 });
+      merchants.push({ x, y: ground(x, z), z, rot });
+      break;
+    }
+  }
+  return { props, caves, excl, extraChests, beacons, vaults, ladders, zips, pads, merchants };
 }
 
 function genHarbor(w: World, p: Poi, put: (t: string, x: number, z: number, rot: number, s?: number, solid?: { hx: number; hz: number; h: number }, extra?: Partial<Prop>) => void, solids: Solid[], props: Prop[], excl: Exclusion[], extraChests: Spot[]) {

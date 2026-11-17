@@ -96,7 +96,7 @@ export class CarRenderer {
       if (!s) continue;
       // far cars are a few pixels: skip them (5 draw calls each), and only near ones cast shadows
       const d2 = cam ? (s.x - cam.x) ** 2 + (s.z - cam.z) ** 2 : 0;
-      c.root.visible = d2 < 300 * 300;
+      c.root.visible = d2 < 450 * 450;
       if (!c.root.visible) continue;
       const shadow = d2 < 90 * 90;
       if (c.wheels[0].castShadow !== shadow) { c.wheels.forEach((wh) => (wh.castShadow = shadow)); (c.body.children[0] as THREE.Mesh).castShadow = shadow; }

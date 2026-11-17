@@ -45,7 +45,7 @@ export function charSheet(host: HTMLElement) {
   const hold = !item ? 'none' : meleeDef(item) ? 'melee' : 'gun';
   for (let t = 0; t < at; t += 1 / 60) {
     if (swing >= 0 && Math.abs(t - (at - swing * 0.42)) < 0.5 / 60) for (const c of chars) c.swing();
-    for (const c of chars) c.animate(1 / 60, t, { mode: pose, speed: pose === 'run' ? 7 : 0, dive: 0.5, pitch: 0.1, hold, crouch: q.get('crouch') === '1', phase: 0.4, vy: 2 });
+    for (const c of chars) c.animate(1 / 60, t, { mode: pose, speed: pose === 'run' ? (q.get('sprint') === '1' ? 7.6 : 5.5) : 0, sprint: q.get('sprint') === '1', dive: 0.5, pitch: 0.1, hold, crouch: q.get('crouch') === '1', phase: 0.4, vy: 2 });
   }
   renderer.render(scene, camera);
   (window as unknown as { __sheet: boolean; __chars: Character[] }).__chars = chars;

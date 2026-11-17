@@ -61,6 +61,8 @@ export function paintMap(w: World, colors: Float32Array): HTMLCanvasElement {
     for (const [x, z] of [[Z.ax, Z.az], [Z.bx, Z.bz]]) { c.fillStyle = '#2b2d42'; c.beginPath(); c.arc(px(x), px(z), 3.2 * u, 0, Math.PI * 2); c.fill(); c.fillStyle = '#ffb703'; c.beginPath(); c.arc(px(x), px(z), 1.9 * u, 0, Math.PI * 2); c.fill(); }
   }
   for (const p of w.pads) { c.fillStyle = '#2b2d42'; c.beginPath(); c.arc(px(p.x), px(p.z), 3.4 * u, 0, Math.PI * 2); c.fill(); c.fillStyle = '#38f8b8'; c.beginPath(); c.arc(px(p.x), px(p.z), 2.2 * u, 0, Math.PI * 2); c.fill(); }
+  // merchants: a gold coin with a dark rim
+  for (const m of w.merchants) { c.fillStyle = '#2b2d42'; c.beginPath(); c.arc(px(m.x), px(m.z), 5.2 * u, 0, Math.PI * 2); c.fill(); c.fillStyle = '#ffcf3f'; c.beginPath(); c.arc(px(m.x), px(m.z), 3.8 * u, 0, Math.PI * 2); c.fill(); c.fillStyle = '#b8860b'; c.beginPath(); c.arc(px(m.x), px(m.z), 1.6 * u, 0, Math.PI * 2); c.fill(); }
   return out;
 }
 

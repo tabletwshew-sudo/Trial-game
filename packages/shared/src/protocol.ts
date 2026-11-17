@@ -63,6 +63,8 @@ export type GameEvent =
   | { e: 'broke'; id: number }
   /** You hit a breakable piece: how much of it is left (0..1). */
   | { e: 'struct'; id: number; hp: number }
+  /** You bought something from a merchant. */
+  | { e: 'bought'; item: number; r: number }
   /** Damage you dealt (for hit markers and damage numbers). */
   | { e: 'dmg'; t: number; d: number; sh: boolean; hd: boolean; p: V3; ko?: boolean }
   /** Damage you took, and the direction it came from. */
@@ -136,7 +138,9 @@ export type ClientMsg =
   /** Inventory: swap two slots (0..4), drop (part of) a slot, or drop some of an ammo type. */
   | { t: 'inv_swap'; a: number; b: number }
   | { t: 'inv_drop'; slot: number; n?: number }
-  | { t: 'ammo_drop'; ammo: number; n: number };
+  | { t: 'ammo_drop'; ammo: number; n: number }
+  /** Buy offer `offer` from merchant `merchant` (both indexes). */
+  | { t: 'shop_buy'; merchant: number; offer: number };
 
 // ---------- server -> client ----------
 export type ServerMsg =

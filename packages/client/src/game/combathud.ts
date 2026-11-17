@@ -57,6 +57,8 @@ export class CombatHud {
   private resultEl = h('div.result');
   private specEl = h('div.spectating');
   private killsEl = h('div.kills', h('span', '⦿'), h('b', '0'));
+  /** Gold carried (spend it at the merchants' stalls). */
+  private goldEl = h('div.gold-count', h('span', { html: itemIconSvg(ITEM.gold) }), h('b', '0'));
   private bossEl = h('div.boss-bar', h('b'), h('div.boss-track', h('span')));
   private bossUntil = 0;
   private cardsEl = h('div.cards-ui');
@@ -96,7 +98,7 @@ export class CombatHud {
       this.vignette, this.scope, this.dirs, this.nums,
       this.cross, this.hit, this.prompt, this.ring, this.center, this.knocked,
       h('div.bottom-left', bars), h('div.bottom-right', this.ammoEl, hotbar),
-      this.feed, this.killsEl, this.specEl, this.bossEl, this.cardsEl, this.structEl, this.deathEl, this.resultEl);
+      this.feed, this.killsEl, this.goldEl, this.specEl, this.bossEl, this.cardsEl, this.structEl, this.deathEl, this.resultEl);
   }
 
   // ------------------------------------------------------------ events
@@ -312,6 +314,8 @@ export class CombatHud {
       this.cardsEl.replaceChildren(h('span.card-ico'), h('div', h('b', `${v.cards.join(', ')}`), h('small', 'Take their recall card to a beacon (green ◆ on your map)')));
     }
     (this.killsEl.querySelector('b') as HTMLElement).textContent = String(v.kills);
+    (this.goldEl.querySelector('b') as HTMLElement).textContent = String(s.gold);
+    this.goldEl.classList.toggle('show', s.gold > 0 && !dead);
     if (dead && !this.resultShown) { /* result message will arrive from the server */ }
   }
 

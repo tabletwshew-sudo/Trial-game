@@ -129,6 +129,8 @@ export interface World {
   ladders: Ladder[];
   zips: Zip[];
   pads: { x: number; y: number; z: number }[];
+  /** Pirate merchants' stalls: where you trade gold for gear (the stall faces `rot`). */
+  merchants: { x: number; y: number; z: number; rot: number }[];
 }
 
 /** Where you hang while climbing (x, z), from y0 to y1; n = outward from the wall; (tx, tz) = where you step off at the top. */
@@ -652,12 +654,12 @@ export function getWorld(seed: number = MAP.seed): World {
     main: genMain(seed, pois, river),
     spawn: genSpawn(seed),
     boxes: [], boxGrid: new Map(), roadGrid: buildRoadGrid(roads),
-    layouts: [], solids: [], solidGrid: new Map(), props: [], caves: [], outdoorChests: [], scatter: [], beacons: [], vaults: [], ladders: [], zips: [], pads: [],
+    layouts: [], solids: [], solidGrid: new Map(), props: [], caves: [], outdoorChests: [], scatter: [], beacons: [], vaults: [], ladders: [], zips: [], pads: [], merchants: [],
   };
   genBoxes(w);
   for (const b of w.boxes) w.layouts.push(genLayout(w, b, w.solids));
   const extra = genProps(w, w.solids);
-  w.props = extra.props; w.caves = extra.caves; w.beacons = extra.beacons; w.vaults = extra.vaults; w.ladders = extra.ladders; w.zips = extra.zips; w.pads = extra.pads;
+  w.props = extra.props; w.caves = extra.caves; w.beacons = extra.beacons; w.vaults = extra.vaults; w.ladders = extra.ladders; w.zips = extra.zips; w.pads = extra.pads; w.merchants = extra.merchants;
   w.outdoorChests = [...extra.extraChests, ...extra.caves.map((c) => c.chest)];
   w.scatter = genScatter(w, extra.excl);
   addScatterSolids(w);

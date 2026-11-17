@@ -123,7 +123,7 @@ export class ChestRenderer {
     if (this.timer <= 0) {
       this.timer = 0.3;
       for (const [id, c] of this.chests) {
-        const range = c.k === CHEST_KIND.Supply ? 900 : 90;
+        const range = c.k === CHEST_KIND.Supply ? 900 : 130;
         const near = (c.x - cam.x) ** 2 + (c.z - cam.z) ** 2 < range * range;
         const v = this.views.get(id);
         if (near && !v && !c.open) this.views.set(id, this.make(c));

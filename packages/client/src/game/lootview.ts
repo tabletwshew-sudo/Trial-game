@@ -7,7 +7,7 @@ import { itemMesh } from './items3d';
  * above a glowing rarity-coloured ring. Far ones aren't drawn at all, and middle-distance ones
  * skip their outline and shadow.
  */
-const SHOW = 56;
+const SHOW = 72;
 /** Closer than this the model gets its outline and casts a shadow (both cost a draw call each). */
 const DETAIL = 24;
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ACT, ITEM, K, MV, PICK_SLOT, PM, SK, aimOrigin, decodeSnapshot, encodeInputs, makeStormPlan, raycastWorld, surfaceAt, weaponDef, type InputCmd, type ServerMsg, type Snapshot } from '@dropzone/shared';
+import { ACT, ITEM, K, MV, PICK_SLOT, PM, SK, aimOrigin, merchantStock, decodeSnapshot, encodeInputs, makeStormPlan, raycastWorld, surfaceAt, weaponDef, type InputCmd, type ServerMsg, type Snapshot } from '@dropzone/shared';
 import { MatchInstance, type Sock } from '../src/game/match';
 import type { Match } from '../src/hub';
 
@@ -107,6 +107,52 @@ describe('pickaxe', () => {
     c.send(g.inst, a.id, { keys: 0, yaw: -Math.PI / 2, pitch: 0, slot: 6 }); g.step();
     for (let i = 0; i < 60; i++) { c.send(g.inst, a.id, { keys: K.FIRE, yaw: -Math.PI / 2, pitch: 0 }); g.step(); }
     expect(b.s.hp).toBe(100);
+  });
+});
+
+describe('gold and merchants', () => {
+  it('gold is picked up by walking over it, and buys gear at a merchant stall (only there, only if you can afford it)', () => {
+    const g = inPlay([1, 1], [0], 'solo');
+    const a = g.inst.players[0], c = g.clients.get(a.id)!;
+    expect(g.inst.world.merchants.length).toBeGreaterThanOrEqual(3);
+    // walking over a pile of gold
+    g.place(a.idx, AT.x, AT.z);
+    for (const it of g.inst.loot.near(AT.x, AT.z, 5)) g.inst.loot.remove(it.id);
+    g.inst.loot.add(ITEM.gold, 0, 40, a.s.x, a.s.y, a.s.z);
+    c.send(g.inst, a.id, { keys: 0, yaw: 0, pitch: 0 }); g.step();
+    expect(a.s.gold).toBe(40);
+    // too far from any stall: nothing happens
+    g.inst.onShop(a.id, 0, 4);
+    expect(a.s.gold).toBe(40);
+    // at the stall
+    const m = g.inst.world.merchants[0];
+    g.place(a.idx, m.x + Math.sin(m.rot) * 2.2, m.z + Math.cos(m.rot) * 2.2);
+    a.s.inv = a.s.inv.map(() => ({ id: 0, r: 0, n: 0, mag: 0 }));
+    a.s.gold = 55;
+    const offers = merchantStock(0);
+    const cheap = offers.findIndex((o) => o.price <= 55), dear = offers.findIndex((o) => o.price > 55);
+    expect(cheap).toBeGreaterThanOrEqual(0); expect(dear).toBeGreaterThanOrEqual(0);
+    g.inst.onShop(a.id, 0, dear);
+    expect(a.s.gold).toBe(55);                       // can't afford it
+    g.inst.onShop(a.id, 0, cheap);
+    expect(a.s.gold).toBe(55 - offers[cheap].price);
+    expect(a.s.inv.some((sl) => sl.id === offers[cheap].item)).toBe(true);
+    c.send(g.inst, a.id, { keys: 0, yaw: 0, pitch: 0 }); g.step(); // events go out with the next tick
+    expect(c.events().some((e) => e.e === 'bought')).toBe(true);
+  });
+
+  it('an elimination pays a 15 gold bounty, and the gold the loser carried drops where they fell', () => {
+    const g = inPlay([1, 1, 1], [0], 'solo');
+    const [a, b] = [g.inst.players[0], g.inst.players[1]];
+    g.place(a.idx, AT.x, AT.z); g.place(b.idx, AT.x + 6, AT.z);
+    for (const it of g.inst.loot.near(AT.x, AT.z, 20)) g.inst.loot.remove(it.id);
+    a.s.gold = 5; b.s.gold = 30;
+    b.s.hp = 0; b.lastHit = { by: a.idx, at: g.now, w: ITEM.ar, cause: 'gun' }; (g.inst as any).checkDown(b);
+    expect(b.alive).toBe(false);
+    expect(a.s.gold).toBe(20);
+    expect(b.s.gold).toBe(0);
+    const pile = g.inst.loot.near(b.s.x, b.s.z, 4).filter((it) => it.item === ITEM.gold);
+    expect(pile.reduce((n, it) => n + it.n, 0)).toBe(30);
   });
 });
 

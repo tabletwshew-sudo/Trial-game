@@ -192,11 +192,24 @@ export function lobbyScreen(net: Net, you: UserView, onSignOut: () => void, onMa
   // ---------------------------------------------------------- render
   function setTab(t: typeof tab) { tab = t; scene.focusYou = t === 'locker'; render(); }
 
+  /** What's new on the island (bottom left of the play screen). */
+  function newsCard() {
+    const items: [string, string][] = [
+      ['⛏', 'Pickaxe: F to swing, smash walls and furniture'],
+      ['◈', 'Gold: spend it at the pirate merchants on the coast'],
+      ['⬢', 'Overshield: 50 extra that refills out of combat'],
+      ['⌂', 'Bigger towns, an upstairs in every building, hamlets on the roads'],
+      ['⇄', 'Tab opens your inventory; rebind fire and aim in Settings'],
+    ];
+    return h('div.news-card', h('div.news-title', "WHAT'S NEW"), ...items.map(([i, t]) => h('div.news-row', h('span', i), h('small', t))));
+  }
+
   function render() {
     ui.replaceChildren(
       topbar(),
       tab === 'play' ? partyPanel() : h('div'),
       tab === 'play' ? playPanel() : lockerPanel(),
+      tab === 'play' ? newsCard() : h('div'),
       friendsPanel(),
     );
   }

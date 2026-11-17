@@ -553,3 +553,40 @@ kbd { font-family: var(--body); font-weight: 900; font-size: 11px; padding: 2px 
 
 .hint-keys { transition: opacity .8s; }
 .hint-keys.faded { opacity: 0; }
+
+/* gold carried */
+.gold-count { position: absolute; right: 14px; bottom: 150px; display: none; align-items: center; gap: 4px; padding: 4px 10px 4px 6px; border-radius: 10px; background: rgba(20,18,58,.72); border: 1px solid rgba(255,207,63,.45); transform: scale(var(--hud, .8)); transform-origin: bottom right; }
+.gold-count.show { display: flex; }
+.gold-count .ico { width: 34px; height: 17px; color: #fff; --rc: #ffcf3f; }
+.gold-count b { font-size: 17px; color: #ffe08a; }
+
+/* the merchant's stall */
+.shop-panel { position: absolute; inset: 0; display: none; place-items: center; z-index: 21; background: rgba(10,8,30,.5); pointer-events: auto; }
+.shop-panel.open { display: grid; animation: fade .15s; }
+.shop-card { width: min(640px, calc(100vw - 32px)); max-height: calc(100vh - 40px); overflow: auto; padding: 16px 18px; border-radius: 18px; background: linear-gradient(170deg, rgba(70,40,20,.95), rgba(26,18,40,.96)); border: 1px solid rgba(255,207,63,.4); box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+.shop-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.shop-head > div:first-child { flex: 1; }
+.shop-title { font-family: var(--display); font-size: 26px; color: #ffcf3f; letter-spacing: 1px; display: block; }
+.shop-head small { color: var(--muted); font-weight: 700; font-size: 12px; }
+.shop-gold { display: flex; align-items: center; gap: 4px; padding: 6px 12px; border-radius: 12px; background: rgba(0,0,0,.3); }
+.shop-gold .ico { width: 40px; height: 20px; color: #fff; --rc: #ffcf3f; }
+.shop-gold b { font-size: 20px; color: #ffe08a; }
+.shop-list { display: grid; gap: 8px; }
+.shop-offer { --rc: #fff; display: grid; grid-template-columns: 110px 1fr auto; gap: 12px; align-items: center; padding: 8px 10px; border-radius: 12px; background: linear-gradient(100deg, color-mix(in srgb, var(--rc) 30%, transparent), rgba(255,255,255,.04) 60%); border: 1px solid var(--line); }
+.shop-offer.poor { opacity: .55; }
+.so-icon .ico { width: 104px; height: 52px; color: #fff; filter: drop-shadow(0 1px 0 rgba(0,0,0,.6)); }
+.so-name small { display: block; font-weight: 900; font-size: 10px; letter-spacing: 1px; }
+.so-name b { display: block; font-size: 16px; }
+.so-name small + b + small { color: var(--muted); letter-spacing: 0; font-weight: 700; font-size: 11px; }
+.so-buy { display: flex; align-items: center; gap: 2px; min-width: 96px; justify-content: center; }
+.so-buy .ico { width: 30px; height: 15px; --rc: #ffcf3f; color: #3a2a00; }
+.so-buy:disabled { filter: grayscale(.7); cursor: not-allowed; }
+.shop-foot { margin-top: 10px; color: var(--muted); font-size: 12px; font-weight: 700; text-align: center; }
+
+/* lobby: what's new */
+.news-card { position: absolute; left: 16px; bottom: 16px; width: 300px; padding: 12px 14px; border-radius: 16px; background: linear-gradient(170deg, rgba(40,34,110,.85), rgba(18,15,52,.88)); border: 1px solid var(--line); box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+.news-title { font-family: var(--display); font-size: 18px; color: var(--sun); letter-spacing: 1px; margin-bottom: 6px; }
+.news-row { display: flex; gap: 10px; align-items: center; padding: 4px 0; }
+.news-row span { width: 24px; height: 24px; flex: none; display: grid; place-items: center; border-radius: 8px; background: rgba(255,255,255,.1); font-size: 13px; }
+.news-row small { font-size: 12px; font-weight: 800; color: rgba(255,255,255,.88); }
+@media (max-width: 860px) { .news-card { display: none; } }

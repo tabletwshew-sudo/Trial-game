@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import {
-  ACT, DROP, EF, EF_EMOTE_SHIFT, ITEM, ITEMS, K, MV, PICK_SLOT, consumableDef, heldItemId, meleeDef, PM, SIM_DT, WATER_FLOAT_Y, isLow, zipNear, busPos, clamp, currentSpread, decodeSnapshot, encodeInputs, getWorld, raycastWorld, seatWorld, stepPlayer, surfaceAt, terrainAt, weaponDef,
+  ACT, DROP, EF, EF_EMOTE_SHIFT, ITEM, ITEMS, K, MV, PICK_SLOT, consumableDef, heldItemId, itemName, meleeDef, PM, SIM_DT, WATER_FLOAT_Y, isLow, zipNear, busPos, clamp, currentSpread, decodeSnapshot, encodeInputs, getWorld, raycastWorld, seatWorld, stepPlayer, surfaceAt, terrainAt, weaponDef,
   type EntSnap, type GameEvent, type GameInit, type GamePhase, type InputCmd, type MatchFoundView, type PlayerState, type RouteView, type ServerMsg, type SimEvents, type UserView, type World,
 } from '@dropzone/shared';
 import { STORM_PHASES } from '@dropzone/shared';
@@ -11,6 +11,7 @@ import { Actors } from './actors';
 import { CarRenderer } from './cars';
 import { CombatHud } from './combathud';
 import { InventoryPanel } from './inventory';
+import { ShopPanel } from './shop';
 import { Effects } from './effects';
 import { LootRenderer } from './lootview';
 import { StormView } from './storm3d';
@@ -175,10 +176,20 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       dropAmmo: (ammo, n) => { net.send({ t: 'ammo_drop', ammo, n }); audio.item('ammo'); },
       equip: (slot) => { input.pendingSlot = slot + 1; },
     }, () => toggleInv(false));
-    root.append(hud.el, combat.el, inv.el);
+    // pirate merchants' stalls (E at the stall)
+    const shop = new ShopPanel((merchant, offer) => net.send({ t: 'shop_buy', merchant, offer }), () => toggleShop(false));
+    let nearMerchant = -1;
+    function toggleShop(open = !shop.open, merchant = nearMerchant) {
+      if (open && (!pred || merchant < 0 || phase !== 'play')) return;
+      if (open) { if (inv.open) toggleInv(false); if (hud.mapOpen) hud.setMap(false); }
+      shop.setOpen(open, merchant, pred?.gold ?? 0);
+      if (open) input.unlock(); else if (!hud.menuOpen && !hud.mapOpen && !inv.open) input.lock();
+    }
+    root.append(hud.el, combat.el, inv.el, shop.el);
     function toggleInv(open = !inv.open) {
       if (open && (!pred || pred.mode === PM.Dead || pred.mode === PM.Bus)) return;
       if (open && hud.mapOpen) hud.setMap(false);
+      if (open && shop.open) toggleShop(false);
       inv.setOpen(open, pred);
       if (open) input.unlock(); else if (!hud.menuOpen && !hud.mapOpen) input.lock();
     }
@@ -193,11 +204,12 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
     let lockLostAt = 0;
     input.onAction = (a) => {
       if (a === 'map') { if (hud.menuOpen || settingsEl) return; if (inv.open) toggleInv(false); toggleMap(); }
-      else if (a === 'inventory') { if (hud.menuOpen || settingsEl) return; toggleInv(); }
+      else if (a === 'inventory') { if (hud.menuOpen || settingsEl) return; if (shop.open) return toggleShop(false); toggleInv(); }
       else if (a === 'menu') {
         if (settingsEl) { settingsEl.remove(); settingsEl = null; return; }
         if (hud.mapOpen) return toggleMap(false);
         if (inv.open) return toggleInv(false);
+        if (shop.open) return toggleShop(false);
         if (input.locked) return input.unlock(); // -> onLockChange opens the menu
         // Esc while locked is consumed by the browser (it just unlocks); see onLockChange
         if (!input.locked && performance.now() - lockLostAt > 150) { hud.setMenu(!hud.menuOpen); if (!hud.menuOpen) input.lock(); }
@@ -211,7 +223,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
     input.onLockChange = (locked) => {
       if (locked) { hud.setMenu(false); return; }
       lockLostAt = performance.now();
-      if (!hud.mapOpen && !inv.open && !disposed) hud.setMenu(true); // Esc pressed
+      if (!hud.mapOpen && !inv.open && !shop.open && !disposed) hud.setMenu(true); // Esc pressed
     };
 
     // ---------------------------------------------------------------- state
@@ -300,6 +312,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
           break;
         }
         case 'struct': combat.structureHp(e.hp); break;
+        case 'bought': audio.item('pickup'); toast(`Bought ${itemName(e.item, e.r)}`, 'success'); break;
         case 'dmg': {
           combat.hitMarker(e.hd, !!e.ko);
           audio.hit(e.ko ? 'knock' : e.hd ? 'head' : e.sh ? 'shield' : 'body');
@@ -407,6 +420,9 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       const frozen = hud.menuOpen || hud.mapOpen || combat.resultOpen;
       const slot = pred ? input.takeSlot(pred.slot, (i) => i === PICK_SLOT || pred!.inv[i].id !== 0) : 0;
       const cmd: InputCmd = { keys: frozen ? 0 : input.keys, yaw: Math.fround(input.yaw), pitch: Math.fround(input.pitch), slot };
+      if ((cmd.keys & K.USE) && !(lastKeys & K.USE) && (nearMerchant >= 0 || shop.open)) toggleShop(!shop.open);
+      lastKeys = cmd.keys;
+      if (nearMerchant >= 0 || shop.open) cmd.keys &= ~K.USE;
       input.consumeTaps();
       seq++;
       pending.push({ seq, cmd });
@@ -431,6 +447,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
     let prevReload = 0, prevSlot = -1, prevItems = -1, prevAmmo = -1, landedOnce = false;
     input.onSpec = (dir) => net.send({ t: 'spec_next', dir });
     let acc = 0, last = performance.now(), time = 0, fps = 60, slowFor = 0, fastFor = 0, resTimer = 0, resizePending = false;
+    let lastKeys = 0;
     let debugCam: { x: number; y: number; z: number; yaw: number; pitch: number } | null = null;
 
     function resize() {
@@ -693,7 +710,8 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
           const fx2 = -Math.sin(input.yaw), fz2 = -Math.cos(input.yaw);
           const score = (x: number, z: number) => { const dx = x - pred!.x, dz = z - pred!.z, d = Math.hypot(dx, dz); return d + (1 - (d > 0.01 ? (dx * fx2 + dz * fz2) / d : 1)) * 1.5; };
           const chestWins = chest && (!it || score(chest.x, chest.z) - 0.3 < score(it.x, it.z));
-          if (downed !== undefined) prompt = `Hold to revive ${roster[downed].name}`;
+          if (nearMerchant >= 0) { prompt = 'Trade with the merchant'; promptRarity = 4; promptItem = ITEM.gold; }
+          else if (downed !== undefined) prompt = `Hold to revive ${roster[downed].name}`;
           else if (car !== null) prompt = 'Get in';
           else if (vault) { prompt = hasKey ? 'Open vault' : 'Vault locked: the boss carries the keycard'; promptRarity = 4; }
           else if (bi >= 0 && cards.length) { prompt = serverNow >= beaconReady[bi] ? `Hold to recall ${cards.map((c) => roster[c].name).join(', ')}` : `Beacon recharging (${Math.ceil((beaconReady[bi] - serverNow) / 1000)}s)`; promptRarity = 3; }
@@ -711,6 +729,11 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
         const rp = performance.now() - revive.at < 200 ? revive.p : 0;
         if (inv.open && (pred.mode === PM.Dead || pred.mode === PM.Bus)) toggleInv(false);
         inv.update(pred);
+        // a merchant's stall within reach?
+        nearMerchant = -1;
+        if (pred.mode === PM.Walk && phase === 'play') world.merchants.forEach((m, i) => { if (Math.hypot(m.x - pred!.x, m.z - pred!.z) < 3.4 && Math.abs(m.y - pred!.y) < 2.5) nearMerchant = i; });
+        if (shop.open && (nearMerchant < 0 || pred.mode !== PM.Walk)) toggleShop(false);
+        shop.update(pred.gold);
         combat.update({
           s: pred, spread: heldDef ? currentSpread(pred, heldDef) : 0, fov, prompt, promptRarity, promptItem,
           revive: rp, reviveLabel: pred.act === ACT.Reviving ? 'REVIVING' : 'BEING REVIVED', scoped,
@@ -750,7 +773,9 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       drop: () => (net as unknown as { ws: WebSocket | null }).ws?.close(),
       self: selfIdx, roster, actors: actors.states,
       get pred() { return pred; }, loot: lootR, cars, fx, world, chests: chestR, combat, storm,
-      scene, renderer,
+      scene, renderer, shop,
+      /** Run game events through the real handler (screenshots / tests). */
+      events: (ev: GameEvent[]) => ev.forEach(onEvent),
       get perf() { return { ...perf, ratio: pixelRatio, w: renderer.domElement.width, h: renderer.domElement.height, programs: renderer.info.programs?.length ?? 0, geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures }; },
       get state() { return { phase, mode: pred?.mode ?? -1, hp: pred?.hp ?? 0, shield: pred?.shield ?? 0, slot: pred?.slot ?? 0, inv: pred?.inv.map((x) => x.id) ?? [], veh: pred?.veh ?? -1, alive: aliveCount, x: selfPos.x, y: selfPos.y, z: selfPos.z, grounded: pred?.grounded ?? false, fps, pending: pending.length, visible: actors.states.filter((s) => s.visible).length, doorsOpen: !!route && performance.now() + clockOffset >= route.doorsAt, err: err.length() }; },
     };

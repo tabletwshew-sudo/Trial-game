@@ -448,17 +448,23 @@ export class Character {
         // which way are we going relative to where we face? turn the hips toward it, run backwards when backing up
         const ma = p.moveAngle ?? 0, back = Math.abs(ma) > 2.2;
         const strafe = back ? 0 : Math.max(-1.1, Math.min(1.1, ma));
-        this.cycle += dt * (5.4 + p.speed * 1.12) * (back ? -1 : 1);
-        const c = this.cycle, sw = Math.sin(c), amp = 0.35 + sp * 0.6;
+        const sprinting = !!p.sprint && !back && p.speed > 6;
+        this.cycle += dt * (5.4 + p.speed * (sprinting ? 1.05 : 1.12)) * (back ? -1 : 1);
+        const c = this.cycle, sw = Math.sin(c), amp = (0.38 + sp * 0.62) * (sprinting ? 1.18 : 1);
         r.hipL = -sw * amp; r.hipR = sw * amp;
-        // knees fold as each leg swings through
-        r.kneeL = 0.12 + Math.max(0, Math.sin(c - 1.2)) * amp * 1.5;
-        r.kneeR = 0.12 + Math.max(0, Math.sin(c + Math.PI - 1.2)) * amp * 1.5;
-        r.shLx = sw * amp * 0.85; r.shRx = -sw * amp * 0.85; r.shLz = -0.12; r.shRz = 0.12;
-        r.elL = r.elR = -0.55 - sp * 0.7;
-        r.lean = back ? -0.05 : 0.05 + sp * 0.16;
-        r.by = Math.abs(Math.cos(c)) * 0.065 * amp - 0.025 * sp;
-        r.twist = sw * 0.16 * amp; r.headY = -r.twist * 0.8;
+        // knees fold as each leg swings through (higher knees when sprinting)
+        const lift = sprinting ? 1.9 : 1.55;
+        r.kneeL = 0.14 + Math.max(0, Math.sin(c - 1.2)) * amp * lift;
+        r.kneeR = 0.14 + Math.max(0, Math.sin(c + Math.PI - 1.2)) * amp * lift;
+        // arms: a loose swing when jogging, a strong pump with bent elbows when sprinting
+        const arm = sprinting ? 1.25 : 0.85;
+        r.shLx = sw * amp * arm; r.shRx = -sw * amp * arm; r.shLz = -0.14; r.shRz = 0.14;
+        r.elL = (sprinting ? -1.45 : -0.6 - sp * 0.65) - Math.max(0, sw) * 0.25;
+        r.elR = (sprinting ? -1.45 : -0.6 - sp * 0.65) - Math.max(0, -sw) * 0.25;
+        r.lean = back ? -0.06 : sprinting ? 0.3 : 0.06 + sp * 0.15;
+        // a springy bounce on each step, and the head stays steady
+        r.by = Math.abs(Math.cos(c)) * (sprinting ? 0.095 : 0.075) * amp - 0.03 * sp;
+        r.twist = sw * (sprinting ? 0.24 : 0.17) * amp; r.headY = -r.twist * 0.85; r.headX = sprinting ? -0.18 : 0;
         r.hipsYaw = -strafe * 0.85; // (the body is mirrored, so a negative turn points the legs to the character's left)
         break;
       }

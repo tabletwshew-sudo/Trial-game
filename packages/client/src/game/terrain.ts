@@ -22,9 +22,9 @@ export interface Quality {
   life: boolean;
 }
 export const QUALITY: Record<'low' | 'medium' | 'high', Quality> = {
-  low: { shadows: false, shadowSize: 1024, treeRange: 380, bushes: false, pixelRatio: 1, grass: 2500, bloom: false, fxaa: false, direct: true, softShadows: false, life: false },
-  medium: { shadows: true, shadowSize: 1024, treeRange: 600, bushes: true, pixelRatio: 1.1, grass: 6000, bloom: true, fxaa: true, direct: false, softShadows: false, life: true },
-  high: { shadows: true, shadowSize: 2048, treeRange: 900, bushes: true, pixelRatio: 1.5, grass: 10000, bloom: true, fxaa: true, direct: false, softShadows: true, life: true },
+  low: { shadows: false, shadowSize: 1024, treeRange: 560, bushes: false, pixelRatio: 1, grass: 2500, bloom: false, fxaa: false, direct: true, softShadows: false, life: false },
+  medium: { shadows: true, shadowSize: 1024, treeRange: 950, bushes: true, pixelRatio: 1.1, grass: 6000, bloom: true, fxaa: true, direct: false, softShadows: false, life: true },
+  high: { shadows: true, shadowSize: 2048, treeRange: 1400, bushes: true, pixelRatio: 1.5, grass: 10000, bloom: true, fxaa: true, direct: false, softShadows: true, life: true },
 };
 
 const C = (hex: string) => new THREE.Color(hex);

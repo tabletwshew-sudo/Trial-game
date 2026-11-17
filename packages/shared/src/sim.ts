@@ -37,6 +37,8 @@ export interface PlayerState {
   hp: number; shield: number;
   /** Overshield: an extra layer (up to 50) on top of your shield that refills itself out of combat. */
   os: number;
+  /** Gold carried (spent at merchants). */
+  gold: number;
   /** Bleed-out health while knocked. */
   knock: number;
   slot: number;
@@ -76,7 +78,7 @@ export interface PlayerState {
 
 export const newPlayerState = (): PlayerState => ({
   x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, yaw: 0, pitch: 0, mode: PM.Walk, grounded: true, keys: 0,
-  hp: 100, shield: 0, os: 0, knock: 0, slot: 0, inv: [emptySlot(), emptySlot(), emptySlot(), emptySlot(), emptySlot()], ammo: [0, 0, 0, 0, 0],
+  hp: 100, shield: 0, os: 0, gold: 0, knock: 0, slot: 0, inv: [emptySlot(), emptySlot(), emptySlot(), emptySlot(), emptySlot()], ammo: [0, 0, 0, 0, 0],
   cd: 0, burst: 0, reload: 0, use: 0, bloom: 0, shots: 0, seed: 1, act: ACT.None, veh: -1, seat: 0, vh: 0, vs: 0, emote: 0,
   mv: 0, mt: 0, tx: 0, ty: 0, tz: 0, my: 0, mh: 0, air: 0, jbuf: 0, li: -1, zt: 0, zv: 0, scd: 0, wk: 0,
 });
@@ -618,7 +620,7 @@ export function applyDamage(s: PlayerState, dmg: number, ignoreShield = false): 
 /** Add an item to the inventory. Returns how many were taken (0 = no room). */
 export function addToInventory(s: PlayerState, id: number, r: number, n: number, mag: number): number {
   const def = ITEMS[id];
-  if (!def || def.kind === 'forage' || def.kind === 'card') return 0;
+  if (!def || def.kind === 'forage' || def.kind === 'card' || def.kind === 'coin' || def.kind === 'melee') return 0;
   if (def.kind === 'ammo') {
     const room = AMMO_MAX[def.ammo] - s.ammo[def.ammo];
     const take = Math.min(room, n);

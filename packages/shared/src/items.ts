@@ -86,9 +86,12 @@ export interface ForageDef { kind: 'forage'; name: string; heal: number; shield:
  */
 export interface MeleeDef { kind: 'melee'; name: string; damage: number; /** ticks between swings */ interval: number; range: number; rarity: Rarity; /** damage to walls and furniture */ structure: number }
 
+/** Gold: picked up by walking over it, spent at merchants. */
+export interface CoinDef { kind: 'coin'; name: string; rarity: Rarity }
+
 /** Special items: a teammate's recall card (picked up into a pocket, not a slot) and the vault keycard (takes a slot). */
 export interface SpecialDef { kind: 'card' | 'keycard'; name: string; rarity: Rarity }
-export type ItemDef = WeaponDef | ConsumableDef | ThrowableDef | AmmoDef | ForageDef | SpecialDef | MeleeDef;
+export type ItemDef = WeaponDef | ConsumableDef | ThrowableDef | AmmoDef | ForageDef | SpecialDef | MeleeDef | CoinDef;
 
 const ALL: Rarity[] = ['common', 'uncommon', 'rare', 'epic', 'legendary'];
 const W = (d: Omit<WeaponDef, 'kind'>): WeaponDef => ({ kind: 'weapon', ...d });
@@ -120,11 +123,12 @@ export const ITEMS: (ItemDef | null)[] = [
   { kind: 'card', name: 'Recall Card', rarity: 'epic' },
   { kind: 'keycard', name: 'Vault Keycard', rarity: 'legendary' },
   { kind: 'melee', name: 'Pickaxe', damage: 20, interval: 54, range: 2.5, rarity: 'common', structure: 75 },
+  { kind: 'coin', name: 'Gold', rarity: 'legendary' },
 ];
 
 export const ITEM = {
   pistol: 1, smg: 2, ar: 3, burst: 4, pump: 5, autoshotgun: 6, dmr: 7, sniper: 8, rocket: 9, grenade: 10,
-  bandage: 11, medpack: 12, shieldSip: 13, shieldJug: 14, fizz: 15, ammoLight: 16, ammoMedium: 17, ammoHeavy: 18, ammoShells: 19, ammoRockets: 20, apple: 21, glowcap: 22, card: 23, keycard: 24, pickaxe: 25,
+  bandage: 11, medpack: 12, shieldSip: 13, shieldJug: 14, fizz: 15, ammoLight: 16, ammoMedium: 17, ammoHeavy: 18, ammoShells: 19, ammoRockets: 20, apple: 21, glowcap: 22, card: 23, keycard: 24, pickaxe: 25, gold: 26,
 } as const;
 /** The pickaxe's slot index (after the five inventory slots); key 6 / F selects it. */
 export const PICK_SLOT = 5;
@@ -168,3 +172,27 @@ export const stackMax = (id: number) => {
   const d = ITEMS[id];
   return !d ? 0 : d.kind === 'consumable' || d.kind === 'throwable' ? d.stack : 1;
 };
+
+// ------------------------------------------------------------------ merchants
+/** Most gold you can carry. */
+export const GOLD_MAX = 9999;
+export interface Offer { item: number; r: number; n: number; price: number }
+/**
+ * What each pirate merchant sells (by merchant index), and for how much gold. Fixed, so the
+ * browser can show the stall's stock without asking the server.
+ */
+export const MERCHANT_STOCK: Offer[][] = [
+  [
+    { item: ITEM.ar, r: 3, n: 1, price: 120 }, { item: ITEM.pump, r: 2, n: 1, price: 100 }, { item: ITEM.shieldJug, r: 0, n: 1, price: 70 },
+    { item: ITEM.medpack, r: 0, n: 1, price: 60 }, { item: ITEM.grenade, r: 0, n: 3, price: 50 },
+  ],
+  [
+    { item: ITEM.dmr, r: 4, n: 1, price: 180 }, { item: ITEM.smg, r: 3, n: 1, price: 110 }, { item: ITEM.fizz, r: 0, n: 2, price: 60 },
+    { item: ITEM.shieldSip, r: 0, n: 3, price: 50 }, { item: ITEM.bandage, r: 0, n: 5, price: 30 },
+  ],
+  [
+    { item: ITEM.rocket, r: 4, n: 1, price: 250 }, { item: ITEM.burst, r: 3, n: 1, price: 130 }, { item: ITEM.autoshotgun, r: 2, n: 1, price: 100 },
+    { item: ITEM.shieldJug, r: 0, n: 1, price: 70 }, { item: ITEM.medpack, r: 0, n: 1, price: 60 },
+  ],
+];
+export const merchantStock = (i: number) => MERCHANT_STOCK[((i % MERCHANT_STOCK.length) + MERCHANT_STOCK.length) % MERCHANT_STOCK.length];

@@ -79,6 +79,7 @@ export class LootStore {
     let k = 0;
     for (const sl of s.inv) if (sl.id) this.drop(sl.id, sl.r, sl.id && ITEMS[sl.id]?.kind === 'weapon' ? sl.mag : sl.n, s.x, s.y, s.z, k++);
     s.ammo.forEach((n, i) => { if (n > 0) this.drop(AMMO_ITEM[i], 0, n, s.x, s.y, s.z, k++); });
+    if (s.gold > 0) { this.drop(ITEM.gold, 0, s.gold, s.x, s.y, s.z, k++); s.gold = 0; }
   }
 }
 
@@ -123,9 +124,12 @@ export function rollFloor(store: LootStore, rnd: () => number, x: number, y: num
   } else if (roll < 0.78) {
     const id = pickWeighted(CONSUMABLE_POOL, rnd);
     store.drop(id, 0, defaultCount(id), x, y, z, 0);
-  } else {
+  } else if (roll < 0.93) {
     const a = Math.floor(rnd() * 4);
     store.drop(AMMO_ITEM[a], 0, AMMO_PICKUP[a], x, y, z, 0);
+  } else {
+    // a little pile of gold for the merchants
+    store.drop(ITEM.gold, 0, 10 + Math.floor(rnd() * 11), x, y, z, 0);
   }
 }
 
@@ -156,6 +160,8 @@ export function rollContainer(store: LootStore, rnd: () => number, kind: number,
   drop(c, 0, defaultCount(c));
   if (supply) drop(ITEM.shieldJug, 0, 1);
   else if (rnd() < 0.35) { const a = Math.floor(rnd() * 4); drop(AMMO_ITEM[a], 0, AMMO_PICKUP[a]); }
+  // gold: some in every chest, a lot in supply drops
+  drop(ITEM.gold, 0, supply ? 60 : 15 + Math.floor(rnd() * 16));
 }
 
 export interface ChestEnt extends ChestView { landY?: number; /** Vault chests roll supply-drop quality loot. */ rich?: boolean }

@@ -14,7 +14,7 @@ export const HAZE = new THREE.Color('#b3d4f2');
 /** Haze lit by the sun, looking toward it. */
 export const SUN_HAZE = new THREE.Color('#ffe2b0');
 /** Sea-level density (per metre) and how fast it thins with height (per metre). */
-export const FOG_DENSITY = 0.00022, FOG_FALLOFF = 0.003;
+export const FOG_DENSITY = 0.00016, FOG_FALLOFF = 0.003; // lighter haze: you can see further
 
 const v3 = (v: THREE.Vector3 | THREE.Color) => (v instanceof THREE.Color ? `vec3(${v.r.toFixed(4)}, ${v.g.toFixed(4)}, ${v.b.toFixed(4)})` : `vec3(${v.x.toFixed(4)}, ${v.y.toFixed(4)}, ${v.z.toFixed(4)})`);
 

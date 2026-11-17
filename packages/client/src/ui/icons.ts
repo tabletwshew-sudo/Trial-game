@@ -170,6 +170,11 @@ const ICONS: Record<string, Shape[]> = {
     ['r', 24, 4.5, 16, 2, 2],
     ['r', 30, 2, 5, 2.5],
   ],
+  gold: [
+    ['c', 26, 18, 10, 1], ['c', 26, 18, 7], ['c', 26, 18, 5, 1],
+    ['c', 40, 14, 9, 1], ['c', 40, 14, 6.3], ['c', 40, 14, 4.5, 1],
+    ['r', 22, 26, 22, 3, 1, 1.5], ['r', 24, 28.5, 18, 2.5, 2, 1],
+  ],
   card: [
     ['r', 13, 5.5, 38, 22, 0, 3],
     ['r', 18, 10.5, 8.5, 6.5, 1, 1.2],
@@ -206,6 +211,7 @@ export function itemIconSvg(id: number): string {
   else if (id === ITEM.shieldJug) shapes = ICONS.shieldJug;
   else if (id === ITEM.fizz) shapes = ICONS.fizz;
   else if (id === ITEM.card || id === ITEM.keycard) shapes = ICONS.card;
+  else if (id === ITEM.gold) shapes = ICONS.gold;
   else if (d?.kind === 'ammo') shapes = AMMO_ICONS[d.ammo];
   const out = shapes ? svg(shapes) : '';
   cache.set(id, out);

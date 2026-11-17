@@ -2,7 +2,7 @@ import {
   ACT, AMMO_ITEM, CAR, CHEST_KIND, SUPPLY_FALL, RECALL, ITEM, EF_EMOTE_SHIFT, makeStormPlan, stormAt, inStorm, consumableDef, ENT_BYTES, EF, ITEMS, K, MAP, PM, SIM_DT, SIM_HZ, SPAWN_ISLAND, TEAM_SIZE,
   addToInventory, applyDamage, blastDamage, busPos, decodeInputs, emptySlot, encodeEnt, encodeSnapshot, falloff, getWorld,
   MV, POSE, isLow, makeRoute, resetMove, mulberry32, newPlayerState, rayPlayer, raycastWorld, seatWorld, stepCar, stepPlayer, stepProjectile, surfaceAt, terrainAt,
-  weaponDamage, weaponDef, throwableDef, collideBoxes, clearColumn, meleeDef, OVERSHIELD, heldItemId, BODY_R, PICK_SLOT, SOLID_CELL, solidKey, structureHp,
+  weaponDamage, weaponDef, throwableDef, collideBoxes, clearColumn, meleeDef, OVERSHIELD, GOLD_MAX, AMMO_MAX, AMMO_PICKUP, merchantStock, heldItemId, BODY_R, PICK_SLOT, SOLID_CELL, solidKey, structureHp,
   type BusRoute, type CarBody, type FeedCause, type GameEvent, type GameInit, type GamePhase, type InputCmd, type LootView,
   type ChestView, type ClientMsg, type MatchStats, type Solid, type StormPlan, type PlayerState, type Projectile, type ServerMsg, type ShotEvent, type SimEvents, type SwingEvent, type ThrowEvent, type Vec3, type VehSnap, type World,
 } from '@dropzone/shared';
@@ -194,7 +194,7 @@ export class MatchInstance {
   private resetInventory(s: PlayerState) {
     s.inv = [emptySlot(), emptySlot(), emptySlot(), emptySlot(), emptySlot()];
     s.ammo = [0, 0, 0, 0, 0];
-    s.slot = PICK_SLOT; s.cd = 0; s.burst = 0; s.reload = 0; s.use = 0; s.bloom = 0;
+    s.slot = PICK_SLOT; s.cd = 0; s.burst = 0; s.reload = 0; s.use = 0; s.bloom = 0; s.gold = 0;
   }
 
   private spawnVehicles() {
@@ -302,6 +302,25 @@ export class MatchInstance {
     const ok = typeof x === 'number' && typeof z === 'number' && Number.isFinite(x) && Number.isFinite(z) && Math.abs(x) <= MAP.size / 2 && Math.abs(z) <= MAP.size / 2;
     p.marker = ok ? { x: x!, z: z! } : null;
     this.broadcast(ok ? { t: 'game_marker', idx: p.idx, x, z } : { t: 'game_marker', idx: p.idx }, p.team);
+  }
+
+  /**
+   * Buy from a pirate merchant: you have to be standing at their stall (within 4.5 m), have the
+   * gold, and room to carry it (or it's put at your feet).
+   */
+  onShop(userId: string, merchant: number, offer: number) {
+    const p = this.byId.get(userId);
+    if (!p || p.gone || !p.alive || this.phase !== 'play' || !Number.isInteger(merchant) || !Number.isInteger(offer)) return;
+    const s = p.s, m = this.world.merchants[merchant];
+    if (!m || s.mode !== PM.Walk || Math.hypot(m.x - s.x, m.z - s.z) > 4.5 || Math.abs(m.y - s.y) > 2.5) return;
+    const o = merchantStock(merchant)[offer];
+    if (!o || s.gold < o.price) return;
+    s.gold -= o.price;
+    const isWeapon = !!weaponDef(o.item);
+    const took = addToInventory(s, o.item, o.r, isWeapon ? 1 : o.n, isWeapon ? weaponDef(o.item)!.mag : 0);
+    if (took < (isWeapon ? 1 : o.n)) this.loot.add(o.item, o.r, isWeapon ? weaponDef(o.item)!.mag : o.n - took, s.x, s.y, s.z);
+    if (isWeapon) { const def = weaponDef(o.item)!; s.ammo[def.ammo] = Math.min(AMMO_MAX[def.ammo], s.ammo[def.ammo] + AMMO_PICKUP[def.ammo]); }
+    p.ev.push({ e: 'bought', item: o.item, r: o.r });
   }
 
   /**
@@ -480,7 +499,14 @@ export class MatchInstance {
   private damage(q: P, amount: number, by: P | null, cause: FeedCause, weapon: number, head = false, at?: Vec3) {
     if (!q.alive || q.s.mode === PM.Dead || q.s.mode === PM.Bus) return;
     // warm-up is for messing about: nobody can hurt anybody else (falls and the sea still count)
-    if (this.phase === 'warmup' && by && by !== q) return;
+    // (the shooter still gets a hit marker, with no number, so practice shots feel like they land)
+    if (this.phase === 'warmup' && by && by !== q) {
+      if (by.sock && amount > 0) {
+        const p = at ?? { x: q.s.x, y: q.s.y + 1.4, z: q.s.z };
+        by.ev.push({ e: 'dmg', t: q.idx, d: 0, sh: false, hd: head, p: [r1(p.x), r1(p.y), r1(p.z)], ko: undefined });
+      }
+      return;
+    }
     if (this.phase === 'warmup' && (cause === 'blast' || cause === 'car' || cause === 'gun')) return;
     const knockedBefore = q.s.mode === PM.Knocked;
     if (q.npc) amount *= q.armor;
@@ -561,7 +587,12 @@ export class MatchInstance {
     this.resetInventory(q.s);
     q.s.mode = PM.Dead; q.s.act = ACT.None; q.s.hp = 0; q.s.shield = 0; q.s.knock = 0; q.s.vx = q.s.vz = 0;
     q.alive = false; q.revive = null;
-    if (killer >= 0 && this.players[killer].team !== q.team) this.players[killer].kills++;
+    if (killer >= 0 && this.players[killer].team !== q.team) {
+      this.players[killer].kills++;
+      // a bounty in gold for every elimination
+      const k = this.players[killer];
+      if (this.phase === 'play') k.s.gold = Math.min(GOLD_MAX, k.s.gold + 15);
+    }
     this.feed(q, killer, false, cause);
 
     // everyone else on the team knocked? then the team is out
@@ -801,10 +832,16 @@ export class MatchInstance {
     if (s.mode !== PM.Walk) return;
     for (const it of this.loot.near(s.x, s.z, 1.5)) {
       const def = ITEMS[it.item];
-      if (def?.kind !== 'ammo' || Math.abs(it.y - s.y) > 1.5) continue;
+      if ((def?.kind !== 'ammo' && def?.kind !== 'coin') || Math.abs(it.y - s.y) > 1.5) continue;
       // ammo you just dropped doesn't jump straight back into your pockets
       const dropped = this.droppedBy.get(it.id);
       if (dropped && dropped.idx === p.idx && this.now < dropped.until) continue;
+      if (def.kind === 'coin') {
+        const took = Math.min(it.n, GOLD_MAX - s.gold);
+        s.gold += took;
+        if (took >= it.n) this.loot.remove(it.id); else if (took > 0) this.loot.setCount(it.id, it.n - took);
+        continue;
+      }
       const took = addToInventory(s, it.item, 0, it.n, 0);
       if (took >= it.n) this.loot.remove(it.id); else if (took > 0) this.loot.setCount(it.id, it.n - took);
     }
@@ -1370,4 +1407,5 @@ export class Games {
   onMarker(userId: string, x?: number, z?: number) { this.byUser.get(userId)?.onMarker(userId, x, z); }
   onSpecNext(userId: string, dir: number) { this.byUser.get(userId)?.onSpecNext(userId, dir); }
   onInventory(userId: string, msg: InventoryMsg) { this.byUser.get(userId)?.onInventory(userId, msg); }
+  onShop(userId: string, merchant: number, offer: number) { this.byUser.get(userId)?.onShop(userId, merchant, offer); }
 }

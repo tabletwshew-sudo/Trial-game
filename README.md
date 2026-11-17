@@ -22,17 +22,21 @@ Dev mode with hot reload: `npm run dev` (client on :5173, server on :8080).
 | Mouse | Look (click the game to capture the mouse) |
 | Shift | Sprint |
 | Space | Jump / climb a ledge / vault a fence / drop from the ship / open or fold the glider / handbrake |
-| Left mouse | Fire / use the item in your hands |
-| Right mouse | Aim down sights |
+| Left mouse | Fire / use the item in your hands / swing the pickaxe (it breaks walls and furniture) |
+| Right mouse | Aim down sights (scoped guns can toggle instead: Settings → Controls) |
 | R | Reload |
-| E | Pick up / get in or out of a car / ride a zipline / hold to revive |
+| E | Pick up / get in or out of a car / ride a zipline / hold to revive / trade at a merchant's stall |
 | 1–5, mouse wheel | Choose a slot |
+| F or 6 | Pickaxe |
+| Tab or I | Inventory (drag to swap, drop items and ammo) |
 | Ctrl or C | Crouch (while sprinting: slide) / let go of a ladder or zipline |
 | B | Emote (press again for the next one) |
 | ← → / left-right click | Switch who you're spectating |
 | M | Map (click to place a squad marker) |
 | Middle click | Mark the spot you're looking at |
 | Esc | Menu / leave match |
+
+Every key can be changed in Settings → Controls; fire, aim and ping can go on any mouse button too.
 
 ## Settings worth knowing
 - **Video:**
