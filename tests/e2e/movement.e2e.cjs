@@ -104,7 +104,10 @@ const X = -1450, Z = -1450;
   // ---- mantle the crate (X-12, Z-26, 1.5 m)
   s = await goTo(X - 12, Z - 21, 0.8, false);
   await look(0, -0.1);
-  await keys(true, 'KeyW'); await p.waitForTimeout(500); await p.keyboard.press('Space'); await p.waitForTimeout(180); await shot('72-mantle');
+  // walk up to the crate (not a fixed time: software rendering can run slowly), then jump
+  await keys(true, 'KeyW');
+  for (let i = 0; i < 75 && (await pred()).z > Z - 24.6; i++) await p.waitForTimeout(40);
+  await p.keyboard.press('Space'); await p.waitForTimeout(180); await shot('72-mantle');
   await p.waitForTimeout(400); await keys(false, 'KeyW');
   s = await pred(); log.mantle = (await watch()).seen[2] === 1; log.afterMantle = [+(s.x - X).toFixed(1), +s.y.toFixed(2), +(s.z - Z).toFixed(1)];
 
