@@ -17,18 +17,20 @@ const mat = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: softRa
  */
 const beamGeo = new THREE.CylinderGeometry(0.9, 0.9, 320, 12, 1, true).translate(0, 160, 0);
 const beamMat = new THREE.ShaderMaterial({
-  uniforms: { uTime: { value: 0 }, uColor: { value: new THREE.Color('#6cd0ff') } },
-  vertexShader: 'varying float vH; varying vec3 vN; varying vec3 vV; void main(){ vH = uv.y; vec4 wp = modelMatrix * vec4(position, 1.0); vN = normalize(mat3(modelMatrix) * normal); vV = normalize(cameraPosition - wp.xyz); gl_Position = projectionMatrix * viewMatrix * wp; }',
-  fragmentShader: `uniform float uTime; uniform vec3 uColor; varying float vH; varying vec3 vN; varying vec3 vV;
+  uniforms: { uTime: { value: 0 }, uColor: { value: new THREE.Color('#1fb8ff') } },
+  // vFar: the beam is scaled up with distance (see update), and far away it also gets brighter
+  vertexShader: 'varying float vH; varying vec3 vN; varying vec3 vV; varying float vFar; void main(){ vH = uv.y; vFar = clamp(length(modelMatrix[0].xyz) / 3.0, 1.0, 2.2); vec4 wp = modelMatrix * vec4(position, 1.0); vN = normalize(mat3(modelMatrix) * normal); vV = normalize(cameraPosition - wp.xyz); gl_Position = projectionMatrix * viewMatrix * wp; }',
+  fragmentShader: `uniform float uTime; uniform vec3 uColor; varying float vH; varying vec3 vN; varying vec3 vV; varying float vFar;
     void main(){
       float edge = pow(1.0 - abs(dot(normalize(vN), normalize(vV))), 1.5);  // soft edges, bright core
       float core = 1.0 - edge;
-      float fade = (1.0 - vH) * (1.0 - vH);
-      float shimmer = 0.75 + 0.25 * sin(vH * 120.0 - uTime * 3.0);
-      float a = (0.25 + core * 0.55) * fade * shimmer;
-      gl_FragColor = vec4(uColor * (1.2 + core), a);
+      float fade = 1.0 - vH * 0.85;
+      float shimmer = 0.82 + 0.18 * sin(vH * 120.0 - uTime * 3.0);
+      // pale, nearly white light (cyan at the edges): it reads against the blue sky as well as the ground
+      float a = min(0.92, (0.38 + core * 0.5) * fade * shimmer * min(vFar, 1.7));
+      gl_FragColor = vec4(mix(uColor, vec3(0.93, 1.0, 1.0), 0.55 + 0.45 * core), a);
     }`,
-  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, fog: false,
+  transparent: true, depthWrite: false, side: THREE.DoubleSide, fog: false,
 });
 const B = (w: number, h: number, d: number) => new THREE.BoxGeometry(w, h, d);
 
@@ -161,6 +163,8 @@ export class ChestRenderer {
     }
     for (const [id, v] of this.views) {
       const c = v.c;
+      // the beam keeps a few pixels' width however far away you are (1.8 m wide close up)
+      if (v.beam) { const k = Math.max(1, Math.hypot(c.x - cam.x, c.z - cam.z) / 110); v.beam.scale.set(k, 1, k); }
       if (c.k === CHEST_KIND.Supply) {
         const y = this.heightOf(c, serverNow);
         v.root.position.y = y;

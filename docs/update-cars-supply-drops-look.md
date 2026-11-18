@@ -24,7 +24,7 @@ All original: the cars, crates and art style are Dropzone's own, not copied from
 - **How many:** about eight a match, up from three. They leave the sky 35, 95 and 155 seconds after the dropship, then two at a time at 215, 280, 350, 420 and 500 seconds.
 - **Where they land:** always on open ground inside the storm's next safe circle, near where people are, and well apart from each other.
 - **Finding them:**
-  - A tall blue beam stands on the landing spot from the moment a drop is announced. You can see it from across the island, until someone opens the crate.
+  - A tall beam of pale blue light stands on the landing spot from the moment a drop is announced, until someone opens the crate. It gets wider and brighter with distance, so it still shows as a column over the treeline from most of a kilometre away.
   - A **SUPPLY** marker with the distance floats over every unopened drop, over the crate while it falls and over where it landed.
   - The announcement says to follow the blue beam, and the crate lands with a heavy thud.
 - **Loot:** better than a chest, as before, plus 60 gold.
