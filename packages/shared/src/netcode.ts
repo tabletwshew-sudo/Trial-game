@@ -55,7 +55,7 @@ export function encodeEnt(e: EntSnap, out: Uint8Array, o: number) {
 }
 
 // ------------------------------------------------------------------ cars
-export interface VehSnap { id: number; x: number; y: number; z: number; vh: number; vs: number; hp: number; driver: boolean }
+export interface VehSnap { id: number; x: number; y: number; z: number; vh: number; vs: number; hp: number; driver: boolean; /** the driver is boosting */ boost?: boolean }
 export const VEH_BYTES = 12;
 function encodeVeh(e: VehSnap, v: DataView, o: number) {
   v.setUint8(o, e.id);
@@ -63,12 +63,12 @@ function encodeVeh(e: VehSnap, v: DataView, o: number) {
   v.setUint8(o + 7, Math.round(((((e.vh % TAU) + TAU) % TAU) / TAU) * 256) & 255);
   v.setInt8(o + 8, Math.round(Math.max(-127, Math.min(127, e.vs * 3))));
   v.setUint16(o + 9, Math.max(0, Math.round(e.hp)), true);
-  v.setUint8(o + 11, e.driver ? 1 : 0);
+  v.setUint8(o + 11, (e.driver ? 1 : 0) | (e.boost ? 2 : 0));
 }
 
 // ------------------------------------------------------------------ snapshot
 export interface Snapshot { tick: number; time: number; ack: number; self: PlayerState | null; ents: EntSnap[]; vehs: VehSnap[] }
-const SELF_BYTES = 137;
+const SELF_BYTES = 138;
 
 function writeSelf(v: DataView, o: number, s: PlayerState) {
   for (const f of [s.x, s.y, s.z, s.vx, s.vy, s.vz]) { v.setFloat32(o, f, true); o += 4; }
@@ -86,6 +86,7 @@ function writeSelf(v: DataView, o: number, s: PlayerState) {
   for (const f of [s.tx, s.ty, s.tz, s.my, s.mh]) { v.setFloat32(o, f, true); o += 4; }
   v.setUint8(o++, s.air); v.setUint8(o++, s.jbuf); v.setInt16(o, s.li, true); o += 2;
   v.setFloat32(o, s.zt, true); o += 4; v.setFloat32(o, s.zv, true); o += 4; v.setUint8(o++, s.scd); v.setUint8(o++, s.wk); v.setUint8(o++, Math.round(s.os)); v.setUint16(o, Math.min(65535, s.gold), true); o += 2;
+  v.setUint8(o++, s.boost);
   return o;
 }
 function readSelf(v: DataView, o: number): PlayerState {
@@ -100,8 +101,8 @@ function readSelf(v: DataView, o: number): PlayerState {
   const yaw = f(), pitch = f(), emote = u8();
   const mv = u8(), mt = u8(), tx = f(), ty = f(), tz = f(), my = f(), mh = f(), air = u8(), jbuf = u8();
   const li = v.getInt16(o, true); o += 2;
-  const zt = f(), zv = f(), scd = u8(), wk = u8(), os = u8(), gold = u16();
-  return { gold, os, wk, mv, mt, tx, ty, tz, my, mh, air, jbuf, li, zt, zv, scd, emote, x, y, z, vx, vy, vz, yaw, pitch, mode, grounded, keys, hp, shield, knock, slot, inv, ammo, cd, burst, reload, use, bloom, shots, seed, act, veh, seat, vh, vs };
+  const zt = f(), zv = f(), scd = u8(), wk = u8(), os = u8(), gold = u16(), boost = u8();
+  return { boost, gold, os, wk, mv, mt, tx, ty, tz, my, mh, air, jbuf, li, zt, zv, scd, emote, x, y, z, vx, vy, vz, yaw, pitch, mode, grounded, keys, hp, shield, knock, slot, inv, ammo, cd, burst, reload, use, bloom, shots, seed, act, veh, seat, vh, vs };
 }
 
 /**
@@ -140,7 +141,7 @@ export function decodeSnapshot(v: DataView): Snapshot | null {
   for (let i = 0; i < nv; i++, o += VEH_BYTES) {
     snap.vehs.push({
       id: v.getUint8(o), x: v.getInt16(o + 1, true) / 16, y: v.getInt16(o + 3, true) / 32, z: v.getInt16(o + 5, true) / 16,
-      vh: (v.getUint8(o + 7) / 256) * TAU, vs: v.getInt8(o + 8) / 3, hp: v.getUint16(o + 9, true), driver: v.getUint8(o + 11) === 1,
+      vh: (v.getUint8(o + 7) / 256) * TAU, vs: v.getInt8(o + 8) / 3, hp: v.getUint16(o + 9, true), driver: (v.getUint8(o + 11) & 1) === 1, boost: (v.getUint8(o + 11) & 2) !== 0,
     });
   }
   return snap;

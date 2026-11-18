@@ -105,10 +105,11 @@ export function buildSky(scene: THREE.Scene, shadows: boolean, shadowSize = 2048
   };
   placeClouds();
 
-  // light: cool sky fill, warm sun. The ground colour of the hemisphere tints shadows.
-  const hemi = new THREE.HemisphereLight('#d6e8ff', '#b3a98a', 1.18);
+  // light: cool sky fill, warm sun. The hemisphere's ground colour is a green bounce, so shade reads
+  // cool and fresh rather than brown.
+  const hemi = new THREE.HemisphereLight('#cfe5ff', '#9fb59a', 1.28);
   scene.add(hemi);
-  const sun = new THREE.DirectionalLight('#ffedc8', 2.95);
+  const sun = new THREE.DirectionalLight('#fff0cf', 2.85);
   sun.castShadow = shadows;
   if (shadows) {
     sun.shadow.mapSize.set(shadowSize, shadowSize);

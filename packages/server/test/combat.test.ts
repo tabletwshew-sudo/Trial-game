@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ACT, ITEM, K, MV, PICK_SLOT, PM, SK, aimOrigin, clearColumn, merchantStock, decodeSnapshot, encodeInputs, makeStormPlan, raycastWorld, surfaceAt, weaponDef, type InputCmd, type ServerMsg, type Snapshot } from '@dropzone/shared';
+import { ACT, ITEM, K, MV, PICK_SLOT, PM, SK, aimOrigin, clearColumn, stormAt, terrainAt, merchantStock, decodeSnapshot, encodeInputs, makeStormPlan, raycastWorld, surfaceAt, weaponDef, type InputCmd, type ServerMsg, type Snapshot } from '@dropzone/shared';
 import { MatchInstance, type Sock } from '../src/game/match';
 import type { Match } from '../src/hub';
 
@@ -467,6 +467,26 @@ describe('chests, supply drops, forage', () => {
     c.send(g.inst, a.id, { keys: K.USE, yaw: 0, pitch: 0 }); g.step();
     const w = g.inst.loot.near(drop!.x, drop!.z, 5).find((x) => weaponDef(x.item));
     expect(w && w.r).toBeGreaterThanOrEqual(2);
+  });
+
+  it('about eight supply drops a match (two at a time from the fourth), each inside the next safe circle', () => {
+    const g = inPlay([1, 1], [0], 'solo');
+    g.inst.storm = makeStormPlan(g.inst.world, 7, g.now);
+    for (let i = 0; i < 30 * 230; i++) { g.step(); for (const p of g.inst.players) if (p.alive) p.s.hp = 100; }
+    // waves at 35, 95, 155 s (one each), then 215, 280, 350... s (two each) after the dropship left
+    const since = (g.now - (g.inst as any).playAt) / 1000;
+    const want = [35, 95, 155, 215, 280, 350, 420, 500].filter((t) => t <= since).reduce((n, _t, i) => n + (i >= 3 ? 2 : 1), 0);
+    const drops = [...g.inst.chests.values()].filter((x) => x.k === 2);
+    expect(want).toBeGreaterThanOrEqual(5);
+    expect(drops.length).toBe(want);
+    for (const d of drops) {
+      const st = stormAt(g.inst.storm!, d.t0!);
+      expect(Math.hypot(d.x - st.next.x, d.z - st.next.z)).toBeLessThanOrEqual(st.next.r);
+      expect(d.landY! - terrainAt(g.inst.world, d.x, d.z)).toBeLessThan(0.25); // on the ground, not a roof
+    }
+    const last = drops.filter((d) => d.t0 === drops[drops.length - 1].t0);
+    expect(last.length).toBe(2);
+    expect(Math.hypot(last[0].x - last[1].x, last[0].z - last[1].z)).toBeGreaterThan(150);
   });
 
   it('bots go indoors through the door to loot a chest', () => {

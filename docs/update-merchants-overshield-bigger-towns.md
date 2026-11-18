@@ -42,15 +42,11 @@ All of this is original to Dropzone. Nothing is copied from another game, includ
 - **Colour:** white by default, with yellow, green, cyan and pink in Settings → Video.
 
 ## Visual sound effects
-- **Markers:** markers on a ring around the middle of the screen point at what you can hear.
-  - **Footsteps:** white.
-  - **Gunfire:** red.
-  - **Explosions:** orange.
-  - **Chests, supply drops and vaults:** gold.
+- **Markers:** markers on a ring around the middle of the screen point at the four sounds that matter most:
+  - **Footsteps:** white. Landing, jumping and sliding count too.
+  - **Gunshots:** red.
+  - **Chests and supply drops:** gold.
   - **Cars:** blue.
-  - **Pickaxe hits and breaking walls:** grey.
-  - **Gliders:** purple.
-  - **Splashes:** blue.
 - **Reading them:**
   - Straight ahead is the top of the ring; behind you is the bottom.
   - Close sounds are bigger and brighter.

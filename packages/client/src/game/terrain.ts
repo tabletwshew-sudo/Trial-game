@@ -334,16 +334,16 @@ function roundFoliage(g: THREE.BufferGeometry, centre: (y: number) => [number, n
 /** Near and far versions of each scatter type: [oak, pine, palm, rock, bush]. */
 function scatterGeometries() {
   const ico = (r: number, d = 0) => new THREE.IcosahedronGeometry(r, d);
-  // oak: a trunk and a lumpy crown of six faceted lobes (~150 triangles)
+  // oak: a trunk and a soft, puffy crown of six round lobes, shaded as one mass (~500 triangles)
   const oakCrown: [number, number, number, number, string][] = [
-    [0, 4.9, 0, 2.35, '#4aae4a'], [1.45, 4.2, 0.5, 1.65, '#55bd55'], [-1.35, 4.3, -0.6, 1.6, '#3f9d43'],
-    [0.4, 4.1, -1.45, 1.5, '#4cb34c'], [-0.5, 4.0, 1.35, 1.45, '#58c058'], [0.3, 6.2, 0.2, 1.55, '#62c95c'],
+    [0, 4.9, 0, 2.35, '#4fbf4a'], [1.45, 4.2, 0.5, 1.65, '#5ccf55'], [-1.35, 4.3, -0.6, 1.6, '#45ad46'],
+    [0.4, 4.1, -1.45, 1.5, '#52c24f'], [-0.5, 4.0, 1.35, 1.45, '#63d35c'], [0.3, 6.2, 0.2, 1.55, '#6fdc63'],
   ];
   const oak = faceVary(shadeByHeight(mergeColored([
-    { geo: new THREE.CylinderGeometry(0.3, 0.5, 3.6, 7, 1, true), color: '#74472a', matrix: mat4(0, 1.8, 0) },
-    ...oakCrown.map(([x, y, z, r, c], i) => ({ geo: ico(r), color: c, matrix: mat4(x, y, z, i * 0.7, i * 1.3, 0, 1, 0.86, 1) })),
-  ]), 2.8, 2.8, 7.4, 0.55, 1.18, new THREE.Color('#9be06a')), 2.8, 0.12, 3);
-  roundFoliage(oak, () => [0, 4.4, 0]);
+    { geo: new THREE.CylinderGeometry(0.3, 0.5, 3.6, 7, 1, true), color: '#7a4b2c', matrix: mat4(0, 1.8, 0) },
+    ...oakCrown.map(([x, y, z, r, c], i) => ({ geo: ico(r, 1), color: c, matrix: mat4(x, y, z, i * 0.7, i * 1.3, 0, 1, 0.86, 1) })),
+  ]), 2.8, 2.8, 7.4, 0.58, 1.2, new THREE.Color('#b6f07a')), 2.8, 0.03, 3);
+  roundFoliage(oak, () => [0, 4.4, 0], 0.88);
   const oakFar = shadeByHeight(mergeColored([
     { geo: new THREE.CylinderGeometry(0.3, 0.5, 3.6, 5, 1, true), color: '#74472a', matrix: mat4(0, 1.8, 0) },
     { geo: ico(2.6), color: '#4cb04c', matrix: mat4(0, 4.8, 0, 0, 0, 0, 1.25, 0.95, 1.25) },
@@ -353,7 +353,7 @@ function scatterGeometries() {
   const pine = faceVary(shadeByHeight(mergeColored([
     { geo: new THREE.CylinderGeometry(0.22, 0.4, 3, 6, 1, true), color: '#5e3a22', matrix: mat4(0, 1.5, 0) },
     ...[0, 1, 2, 3, 4].map((k) => ({ geo: new THREE.ConeGeometry(2.5 - k * 0.42, 2.9 - k * 0.15, 8), color: ['#286f3e', '#2f7f46', '#358c4d', '#3d9a56', '#46a85e'][k], matrix: mat4(0, 3.1 + k * 1.55, 0, 0, k * 0.37, 0) })),
-  ]), 1.6, 1.8, 10.5, 0.62, 1.15), 1.6, 0.1, 5);
+  ]), 1.6, 1.8, 10.5, 0.62, 1.15), 1.6, 0.05, 5);
   // each tier bends away from a point a little below it: soft cones that still show their layers
   roundFoliage(pine, (y) => [0, y - 1.4, 0], 0.6);
   const pineFar = shadeByHeight(mergeColored([
@@ -382,13 +382,19 @@ function scatterGeometries() {
     { geo: ico(0.45), color: '#8e887e', matrix: mat4(-0.8, 0.2, -0.4, 2, 1, 0.5, 1, 0.8, 1) },
   ]), -1, -0.1, 1.2, 0.62, 1.12, new THREE.Color('#7fa65a'));
   const bush = faceVary(shadeByHeight(mergeColored([
-    { geo: ico(0.9), color: '#4fb04a', matrix: mat4(0, 0.55, 0, 0.5, 0, 0.2, 1.15, 0.8, 1) },
-    { geo: ico(0.65), color: '#63c75b', matrix: mat4(0.7, 0.45, 0.25, 1, 1, 0) },
-    { geo: ico(0.55), color: '#3f9a41', matrix: mat4(-0.6, 0.4, -0.2, 0, 2, 1) },
-    { geo: ico(0.5), color: '#58bd52', matrix: mat4(0.1, 0.85, -0.5, 1, 0, 2) },
-  ]), -1, 0, 1.4, 0.6, 1.15), -1, 0.12, 7);
-  roundFoliage(bush, () => [0, 0.2, 0]);
-  return { near: [oak, pine, palm, rock, bush], far: [oakFar, pineFar, palm, rock, bush] };
+    { geo: ico(0.9, 1), color: '#52bd4c', matrix: mat4(0, 0.55, 0, 0.5, 0, 0.2, 1.15, 0.8, 1) },
+    { geo: ico(0.65, 1), color: '#66d15d', matrix: mat4(0.7, 0.45, 0.25, 1, 1, 0) },
+    { geo: ico(0.55, 1), color: '#45a845', matrix: mat4(-0.6, 0.4, -0.2, 0, 2, 1) },
+    { geo: ico(0.5, 1), color: '#5cc955', matrix: mat4(0.1, 0.85, -0.5, 1, 0, 2) },
+  ]), -1, 0, 1.4, 0.62, 1.18, new THREE.Color('#b6f07a')), -1, 0.03, 7);
+  roundFoliage(bush, () => [0, 0.2, 0], 0.88);
+  // far bushes are a few pixels: the simple lobes are plenty
+  const bushFar = shadeByHeight(mergeColored([
+    { geo: ico(0.95), color: '#52bd4c', matrix: mat4(0, 0.55, 0, 0.5, 0, 0.2, 1.2, 0.85, 1.05) },
+    { geo: ico(0.6), color: '#66d15d', matrix: mat4(0.6, 0.45, 0.2, 1, 1, 0) },
+  ]), -1, 0, 1.4, 0.62, 1.18);
+  roundFoliage(bushFar, () => [0, 0.2, 0], 0.88);
+  return { near: [oak, pine, palm, rock, bush], far: [oakFar, pineFar, palm, rock, bushFar] };
 }
 
 /**

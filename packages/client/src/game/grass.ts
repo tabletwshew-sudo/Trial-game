@@ -28,30 +28,37 @@ export function addWind(m: THREE.Material, strength: number, from: number) {
 }
 
 /**
- * A clump of tapered, curved blades (two segments each, pointed tips). Roots are dark and take
- * the ground's colour so the clump grows out of the terrain instead of sitting on it; tips are
- * lighter and warmer. Normals lean outward from the clump so it shades as a soft rounded tuft.
- * `blades` = how many (the far ring uses fewer).
+ * A soft clump of short, wide blades with rounded tips that curl outward. Roots take the ground's
+ * colour so the clump grows out of the terrain; tips are lighter and sun-warmed. Normals point
+ * mostly up, so a field of clumps shades like a soft carpet over the ground instead of a bed of
+ * spikes. `blades` = how many (the far ring uses fewer).
  */
 function tuftGeo(blades: number, spread = 1) {
   const pos: number[] = [], col: number[] = [], nor: number[] = [], hgt: number[] = [];
   for (let i = 0; i < blades; i++) {
-    const a = (i / blades) * Math.PI * 2 + (i % 3) * 0.7, r = (0.02 + (i % 4) * 0.03) * spread;
+    const a = (i / blades) * Math.PI * 2 + (i % 3) * 0.7, r = (0.015 + (i % 4) * 0.025) * spread;
     const cx = Math.cos(a) * r, cz = Math.sin(a) * r;
-    const wBase = 0.026 + (i % 3) * 0.006;
+    const wBase = 0.045 + (i % 3) * 0.012;
     const px = -Math.sin(a) * wBase, pz = Math.cos(a) * wBase;   // half width at the base
-    const h = 0.28 + ((i * 7) % 6) * 0.05;
-    const lean = (0.06 + (i % 4) * 0.05) * spread;
-    const mx = cx + Math.cos(a) * lean * 0.3, mz = cz + Math.sin(a) * lean * 0.3, my = h * 0.55;
-    const tx = cx + Math.cos(a) * lean, tz = cz + Math.sin(a) * lean;
-    const base = [0.5, 0.56, 0.42], mid = [0.92, 0.98, 0.8], tip = [1.28, 1.26, 0.9];
-    // outward-leaning normal: rounded shading across the clump
-    const nl = Math.hypot(Math.cos(a) * 0.55, 1);
-    const n = [Math.cos(a) * 0.55 / nl, 1 / nl, Math.sin(a) * 0.55 / nl];
+    const h = 0.22 + ((i * 7) % 5) * 0.045;
+    const lean = (0.05 + (i % 4) * 0.045) * spread;
+    // along the blade: root, middle, shoulder, tip (it curls out more toward the top)
+    const at = (t: number) => [cx + Math.cos(a) * lean * t * t, h * t, cz + Math.sin(a) * lean * t * t];
+    const [m, u, tp] = [at(0.5), at(0.84), at(1)];
+    const C = { base: [0.9, 0.94, 0.86], mid: [1.05, 1.08, 0.95], up: [1.15, 1.16, 0.96], tip: [1.24, 1.22, 0.95] };
+    const nl = Math.hypot(Math.cos(a) * 0.25, 1);
+    const n = [Math.cos(a) * 0.25 / nl, 1 / nl, Math.sin(a) * 0.25 / nl];
     const v = (x: number, y: number, z: number, c: number[]) => { pos.push(x, y, z); col.push(...c); nor.push(...n); hgt.push(y / h); };
-    v(cx - px, 0, cz - pz, base); v(cx + px, 0, cz + pz, base); v(mx + px * 0.75, my, mz + pz * 0.75, mid);
-    v(cx - px, 0, cz - pz, base); v(mx + px * 0.75, my, mz + pz * 0.75, mid); v(mx - px * 0.75, my, mz - pz * 0.75, mid);
-    v(mx - px * 0.75, my, mz - pz * 0.75, mid); v(mx + px * 0.75, my, mz + pz * 0.75, mid); v(tx, h, tz, tip);
+    const B0 = [cx - px, 0, cz - pz], B1 = [cx + px, 0, cz + pz];
+    const M0 = [m[0] - px * 0.85, m[1], m[2] - pz * 0.85], M1 = [m[0] + px * 0.85, m[1], m[2] + pz * 0.85];
+    const U0 = [u[0] - px * 0.5, u[1], u[2] - pz * 0.5], U1 = [u[0] + px * 0.5, u[1], u[2] + pz * 0.5];
+    const quad = (p0: number[], p1: number[], q1: number[], q0: number[], c0: number[], c1: number[]) => {
+      v(p0[0], p0[1], p0[2], c0); v(p1[0], p1[1], p1[2], c0); v(q1[0], q1[1], q1[2], c1);
+      v(p0[0], p0[1], p0[2], c0); v(q1[0], q1[1], q1[2], c1); v(q0[0], q0[1], q0[2], c1);
+    };
+    quad(B0, B1, M1, M0, C.base, C.mid);
+    quad(M0, M1, U1, U0, C.mid, C.up);
+    v(U0[0], U0[1], U0[2], C.up); v(U1[0], U1[1], U1[2], C.up); v(tp[0], tp[1], tp[2], C.tip);
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
@@ -92,7 +99,7 @@ function grassMaterial(radius: { value: number }, inner: { value: number }, key:
       }
       #include <opaque_fragment>`);
   };
-  m.customProgramCacheKey = () => 'grass4' + key;
+  m.customProgramCacheKey = () => 'grass5' + key;
   return m;
 }
 
@@ -111,11 +118,11 @@ export class Grass {
   private readonly farMax: number;
 
   constructor(private w: World, scene: THREE.Object3D, private max: number) {
-    this.mesh = new THREE.InstancedMesh(tuftGeo(12), grassMaterial(nearR, noInner, 'n'), max);
+    this.mesh = new THREE.InstancedMesh(tuftGeo(9), grassMaterial(nearR, noInner, 'n'), max);
     this.mesh.frustumCulled = false; this.mesh.count = 0;
     // the far ring: fewer blades per clump, scaled up, out to about twice the distance
     this.farMax = Math.round(max * 0.45);
-    this.far = new THREE.InstancedMesh(tuftGeo(7, 1.4), grassMaterial(farR, nearR, 'f'), Math.max(1, this.farMax));
+    this.far = new THREE.InstancedMesh(tuftGeo(5, 1.4), grassMaterial(farR, nearR, 'f'), Math.max(1, this.farMax));
     this.far.frustumCulled = false; this.far.count = 0;
     // a little flower: a ring of petals round a yellow middle, on top of a stem-high clump
     const petals: THREE.BufferGeometry[] = [];
@@ -146,8 +153,8 @@ export class Grass {
     const field = poi?.kind === 'farm' && !poi.minor;
     col.multiplyScalar(field ? 1.12 : 1.02);
     col.offsetHSL((hash2(i, j, 19) - 0.5) * 0.035, (hash2(i, j, 20) - 0.5) * 0.14, (hash2(i, j, 21) - 0.5) * 0.07);
-    // tall in fields and lush patches, shorter and sparser elsewhere
-    const k = (field ? 1.9 : 0.95) + hash2(i, j, 14) * 0.5 + patch * 0.7;
+    // knee-high in fields, a soft ankle-high carpet elsewhere (a little longer in lush patches)
+    const k = (field ? 1.35 : 0.9) + hash2(i, j, 14) * 0.35 + patch * 0.45;
     return { h, k, patch, field };
   }
 

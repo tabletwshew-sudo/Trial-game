@@ -118,6 +118,8 @@ export interface HudView {
   fps: number;
   /** Supply drops that haven't been opened. */
   drops?: { x: number; z: number }[];
+  /** On-screen markers over those drops. */
+  dropTags?: { id: number; sx: number; sy: number; show: boolean; dist: number; falling: boolean }[];
   storm?: StormState | null;
   /** Recall beacons and whether each is ready right now. */
   beacons?: { x: number; z: number; ready: boolean }[];
@@ -517,6 +519,9 @@ export class Hud {
     for (const [idx, m] of v.markers) {
       const col = TEAM_COLORS[this.teamIdx.indexOf(idx) % 4];
       tag(`m${idx}`, m.sx, m.sy, m.show, () => h('div.wtag.marker', h('span.pin', { style: { background: col } }), h('i')), m.dist, true);
+    }
+    for (const d of v.dropTags ?? []) {
+      tag(`d${d.id}`, d.sx, d.sy, d.show, () => h('div.wtag.drop', h('span.drop-icon', { html: '<svg viewBox="0 0 24 24" width="18" height="18"><rect x="4" y="9" width="16" height="11" rx="1.5" fill="#3a86ff"/><path d="M4 13h16M12 9v11" stroke="#f1faee" stroke-width="1.8"/><path d="M6 8c0-4 12-4 12 0z" fill="#ffd23f"/></svg>' }), h('b', 'SUPPLY'), h('i')), d.dist, true);
     }
     for (const [key, el] of this.tagEls) if (!want.has(key)) { el.remove(); this.tagEls.delete(key); }
 

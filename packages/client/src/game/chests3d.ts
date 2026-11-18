@@ -10,6 +10,26 @@ import { mat4, mergeColored, type Piece } from './geo';
  * balloon and leave a smoke flare where they land.
  */
 const mat = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: softRamp });
+
+/**
+ * The light beam over a supply drop's landing spot: tall enough to see from across the island,
+ * brightest at the bottom and fading up into the sky, with a slow shimmer running up it.
+ */
+const beamGeo = new THREE.CylinderGeometry(0.9, 0.9, 320, 12, 1, true).translate(0, 160, 0);
+const beamMat = new THREE.ShaderMaterial({
+  uniforms: { uTime: { value: 0 }, uColor: { value: new THREE.Color('#6cd0ff') } },
+  vertexShader: 'varying float vH; varying vec3 vN; varying vec3 vV; void main(){ vH = uv.y; vec4 wp = modelMatrix * vec4(position, 1.0); vN = normalize(mat3(modelMatrix) * normal); vV = normalize(cameraPosition - wp.xyz); gl_Position = projectionMatrix * viewMatrix * wp; }',
+  fragmentShader: `uniform float uTime; uniform vec3 uColor; varying float vH; varying vec3 vN; varying vec3 vV;
+    void main(){
+      float edge = pow(1.0 - abs(dot(normalize(vN), normalize(vV))), 1.5);  // soft edges, bright core
+      float core = 1.0 - edge;
+      float fade = (1.0 - vH) * (1.0 - vH);
+      float shimmer = 0.75 + 0.25 * sin(vH * 120.0 - uTime * 3.0);
+      float a = (0.25 + core * 0.55) * fade * shimmer;
+      gl_FragColor = vec4(uColor * (1.2 + core), a);
+    }`,
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, fog: false,
+});
 const B = (w: number, h: number, d: number) => new THREE.BoxGeometry(w, h, d);
 
 function chestGeo(): { body: THREE.BufferGeometry; lid: THREE.BufferGeometry } {
@@ -51,7 +71,7 @@ function supplyGeo() {
   return { crate: mergeColored(crate), balloon: mergeColored(balloon) };
 }
 
-interface View { c: ChestView; root: THREE.Group; lid?: THREE.Object3D; balloon?: THREE.Object3D; opening: number; landed: boolean; sparkT: number }
+interface View { c: ChestView; root: THREE.Group; lid?: THREE.Object3D; balloon?: THREE.Object3D; beam?: THREE.Mesh; opening: number; landed: boolean; sparkT: number; fresh: boolean }
 
 export class ChestRenderer {
   readonly chests = new Map<number, ChestView>();
@@ -68,10 +88,13 @@ export class ChestRenderer {
   })();
   private timer = 0;
 
+  /** A supply drop just touched down (for the thud). */
+  onLand: ((x: number, y: number, z: number) => void) | null = null;
+
   /** Sparkles and smoke go through the shared effect pools (one draw call, no new materials). */
   constructor(private scene: THREE.Scene, private fx: Effects) {}
 
-  set(list: ChestView[]) { for (const v of this.views.values()) this.scene.remove(v.root); this.views.clear(); this.chests.clear(); for (const c of list) this.chests.set(c.id, c); }
+  set(list: ChestView[]) { for (const v of this.views.values()) this.drop(v); this.views.clear(); this.chests.clear(); for (const c of list) this.chests.set(c.id, c); }
   add(list: ChestView[]) { for (const c of list) this.chests.set(c.id, c); }
   open(ids: number[]) {
     for (const id of ids) {
@@ -91,7 +114,7 @@ export class ChestRenderer {
 
   private make(c: ChestView): View {
     const root = new THREE.Group();
-    const v: View = { c, root, opening: 0, landed: false, sparkT: Math.random() };
+    const v: View = { c, root, opening: 0, landed: false, sparkT: Math.random(), fresh: true };
     const outlined = (g: THREE.BufferGeometry) => { const m = new THREE.Mesh(g, mat); m.castShadow = true; m.add(new THREE.Mesh(g, outlineMaterial)); return m; };
     if (c.k === CHEST_KIND.Chest) {
       root.add(outlined(this.geo.body));
@@ -101,6 +124,9 @@ export class ChestRenderer {
     else {
       root.add(outlined(this.supply.crate));
       const bl = new THREE.Mesh(this.supply.balloon, mat); root.add(bl); v.balloon = bl;
+      // the beam stands on the landing spot from the moment it's announced
+      const beam = new THREE.Mesh(beamGeo, beamMat); beam.position.set(c.x, c.y, c.z); beam.frustumCulled = false; beam.renderOrder = 2;
+      this.scene.add(beam); v.beam = beam;
     }
     if (c.k !== CHEST_KIND.Ammo) {
       const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: new THREE.Color(c.k === CHEST_KIND.Supply ? '#9fd3ff' : '#ffe08a').multiplyScalar(2.6), transparent: true, depthWrite: false, opacity: 0.85 }));
@@ -114,20 +140,23 @@ export class ChestRenderer {
     return v;
   }
 
+  private drop(v: View) { this.scene.remove(v.root); if (v.beam) this.scene.remove(v.beam); }
+
   private burst(at: THREE.Vector3, n: number) {
     for (let i = 0; i < n; i++) this.fx.spark(at.x, at.y + 0.5, at.z, (Math.random() - 0.5) * 4, 2 + Math.random() * 4, (Math.random() - 0.5) * 4, i % 3 ? '#ffd23f' : '#ffffff', 0.06, 0.9, 6);
   }
 
   update(dt: number, t: number, cam: THREE.Vector3, serverNow: number) {
+    beamMat.uniforms.uTime.value = t;
     this.timer -= dt;
     if (this.timer <= 0) {
       this.timer = 0.3;
       for (const [id, c] of this.chests) {
-        const range = c.k === CHEST_KIND.Supply ? 900 : 130;
+        const range = c.k === CHEST_KIND.Supply ? 2000 : 130;
         const near = (c.x - cam.x) ** 2 + (c.z - cam.z) ** 2 < range * range;
         const v = this.views.get(id);
         if (near && !v && !c.open) this.views.set(id, this.make(c));
-        else if (v && (!near || (c.open && v.opening === 0))) { this.scene.remove(v.root); this.views.delete(id); }
+        else if (v && (!near || (c.open && v.opening === 0))) { this.drop(v); this.views.delete(id); }
       }
     }
     for (const [id, v] of this.views) {
@@ -136,10 +165,11 @@ export class ChestRenderer {
         const y = this.heightOf(c, serverNow);
         v.root.position.y = y;
         const falling = y > c.y + 0.01;
+        if (v.fresh) { v.fresh = false; if (!falling) v.landed = true; } // already down when it came into view: no landing burst
         if (v.balloon) v.balloon.visible = falling;
         v.root.rotation.z = falling ? Math.sin(t * 1.4 + id) * 0.06 : 0;
         const p = v.root.position;
-        if (!falling && !v.landed) { v.landed = true; for (let i = 0; i < 14; i++) this.fx.smokePuff(p.x, p.y, p.z, (Math.random() - 0.5) * 6, Math.random() * 1.5, (Math.random() - 0.5) * 6, '#9fd3ff', 0.6, 3, 0.6); }
+        if (!falling && !v.landed) { v.landed = true; this.onLand?.(p.x, p.y, p.z); for (let i = 0; i < 14; i++) this.fx.smokePuff(p.x, p.y, p.z, (Math.random() - 0.5) * 6, Math.random() * 1.5, (Math.random() - 0.5) * 6, '#9fd3ff', 0.6, 3, 0.6); }
         if (v.landed && !c.open && Math.random() < dt * 6) this.fx.smokePuff(p.x + 0.9, p.y + 0.2, p.z + 0.9, 0.3, 3.2, 0.2, '#7fd1ff', 0.6, 3, 0.6);
       }
       const glow = v.root.getObjectByName('glow') as THREE.Sprite | undefined;
@@ -158,7 +188,8 @@ export class ChestRenderer {
         v.opening += dt;
         if (v.lid) v.lid.rotation.x = -Math.min(1.9, v.opening * 9);
         if (v.opening > 1.2) v.root.scale.setScalar(Math.max(0.001, 1 - (v.opening - 1.2) * 2.5));
-        if (v.opening > 1.6) { this.scene.remove(v.root); this.views.delete(id); }
+        if (v.beam) v.beam.visible = v.opening < 0.4;
+        if (v.opening > 1.6) { this.drop(v); this.views.delete(id); }
       }
     }
   }

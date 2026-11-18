@@ -195,12 +195,11 @@ export function lobbyScreen(net: Net, you: UserView, onSignOut: () => void, onMa
   /** What's new on the island (bottom left of the play screen). */
   function newsCard() {
     const items: [string, string][] = [
-      ['⛏', 'Pickaxe: F to swing, smash walls and furniture'],
-      ['◈', 'Gold: spend it at the pirate merchants on the coast'],
-      ['⬢', 'Overshield: 50 extra that refills out of combat'],
-      ['⌂', 'Bigger towns, upstairs everywhere; walls break a panel at a time'],
-      ['◎', 'New reticle for every weapon type: it grows with your spread'],
-      ['◉', 'Sound markers show footsteps, gunfire and chests around you (Settings → Audio)'],
+      ['▣', 'Supply drops: about eight a match. Follow the blue beam'],
+      ['⚡', 'New cars: hold Shift to boost; they kick up dust and lean in corners'],
+      ['❀', 'Softer grass, rounder trees, brighter colours'],
+      ['◉', 'Sound markers for footsteps, gunshots, chests and cars (Settings → Audio)'],
+      ['◎', 'New reticle for every weapon type; walls break a panel at a time'],
     ];
     return h('div.news-card', h('div.news-title', "WHAT'S NEW"), ...items.map(([i, t]) => h('div.news-row', h('span', i), h('small', t))));
   }

@@ -54,6 +54,11 @@ const newStats = (): MatchStats => ({ damage: 0, taken: 0, revives: 0, chests: 0
 
 interface Veh extends CarBody { id: number; hp: number; seats: number[]; dead: boolean; lastHitBy: number }
 
+/** When supply drops leave the sky, in seconds after the dropship leaves (two at a time from the fourth). */
+const SUPPLY_WAVES = [35, 95, 155, 215, 280, 350, 420, 500];
+/** How high they start (they fall at SUPPLY_FALL m/s: ~25 s to land). */
+const SUPPLY_FROM = 230;
+
 export interface MatchOptions { warmupS: number; seed?: number; onEnd: (matchId: string) => void }
 
 const MAX_QUEUE = 40;
@@ -763,26 +768,40 @@ export class MatchInstance {
 
   private addChest(c: ChestEnt) { this.chests.set(c.id, c); this.chestAdds.push(chestView(c)); }
 
-  /** Supply drops: a few times a match, somewhere near the action. */
+  /**
+   * Supply drops: about eight a match (two at a time from the fourth wave on). Each lands on
+   * open ground inside the storm's next safe circle (so it's worth going for), near where people
+   * are, and they're announced to everyone when they leave the sky.
+   */
   private stepSupply(now: number) {
     for (const c of this.chests.values()) {
       if (c.k !== CHEST_KIND.Supply || c.y === c.landY) continue;
       c.y = Math.max(c.landY!, c.y0! - (SUPPLY_FALL * (now - c.t0!)) / 1000);
     }
     if (this.phase !== 'play' || this.endAt) return;
-    const due = [40_000, 140_000, 240_000][this.supplyDrops];
-    if (due === undefined || now - this.playAt < due) return;
+    const due = SUPPLY_WAVES[this.supplyDrops];
+    if (due === undefined || now - this.playAt < due * 1000) return;
+    const count = this.supplyDrops >= 3 ? 2 : 1;
     this.supplyDrops++;
-    const alive = this.players.filter((q) => q.alive && !q.gone);
+    const alive = this.players.filter((q) => q.alive && !q.gone && !q.npc);
     const cx = alive.reduce((n, q) => n + q.s.x, 0) / Math.max(1, alive.length), cz = alive.reduce((n, q) => n + q.s.z, 0) / Math.max(1, alive.length);
-    for (let t = 0; t < 80; t++) {
-      const x = cx + (this.rnd() - 0.5) * 500, z = cz + (this.rnd() - 0.5) * 500;
+    const st = this.storm ? stormAt(this.storm, now) : null;
+    const placed: { x: number; z: number }[] = [];
+    for (let t = 0; t < 200 && placed.length < count; t++) {
+      let x: number, z: number;
+      if (st) {
+        // somewhere in the next safe circle, leaning toward the players
+        const a = this.rnd() * Math.PI * 2, r = Math.sqrt(this.rnd()) * st.next.r * 0.8;
+        x = st.next.x + Math.cos(a) * r; z = st.next.z + Math.sin(a) * r;
+        if (t < 120 && Math.hypot(x - cx, z - cz) > 550) continue;
+      } else { x = cx + (this.rnd() - 0.5) * 500; z = cz + (this.rnd() - 0.5) * 500; }
       const g = terrainAt(this.world, x, z), top = surfaceAt(this.world, x, z, 500);
-      if (g < 2 || Math.abs(top - g) > 0.2) continue; // on open ground, not a roof or the sea
-      const c: ChestEnt = { id: this.nextChest++, k: CHEST_KIND.Supply, x, y: 260, z, face: 0, open: false, t0: now, y0: 260, landY: top };
+      if (g < 2 || Math.abs(top - g) > 0.2 || !clearColumn(this.world, x, z, g + 0.1, g + 2.5, 1.4)) continue; // open ground: not a roof, a tree or the sea
+      if (placed.some((q) => Math.hypot(q.x - x, q.z - z) < 160)) continue;
+      placed.push({ x, z });
+      const c: ChestEnt = { id: this.nextChest++, k: CHEST_KIND.Supply, x, y: SUPPLY_FROM, z, face: 0, open: false, t0: now, y0: SUPPLY_FROM, landY: top };
       this.addChest(c);
       this.broadcast({ t: 'ev', ev: [{ e: 'supply', id: c.id, x: Math.round(x), z: Math.round(z) }] });
-      break;
     }
   }
 
@@ -1315,7 +1334,11 @@ export class MatchInstance {
       encodeEnt({ idx: q.idx, x: s.x, y: s.y, z: s.z, yaw: s.mode === PM.Drive ? s.vh : s.yaw, pitch: s.pitch, mode: s.mode, flags, item: held?.id ?? 0, rarity: held?.r ?? 0, mv: s.mv, mt: s.mt }, block, count * ENT_BYTES);
       count++;
     }
-    const vehs: VehSnap[] = this.vehicles.filter((v) => !v.dead).map((v) => ({ id: v.id, x: v.x, y: v.y, z: v.z, vh: v.vh, vs: v.vs, hp: v.hp, driver: v.seats[0] >= 0 }));
+    const vehs: VehSnap[] = this.vehicles.filter((v) => !v.dead).map((v) => {
+      const d = v.seats[0] >= 0 ? this.players[v.seats[0]] : null;
+      const boost = !!d && (d.s.keys & K.SPRINT) !== 0 && (d.s.keys & K.F) !== 0 && d.s.boost > 0 && d.s.grounded;
+      return { id: v.id, x: v.x, y: v.y, z: v.z, vh: v.vh, vs: v.vs, hp: v.hp, driver: !!d, boost };
+    });
     const sub = new Uint8Array(n * ENT_BYTES);
     for (const p of listeners) {
       const spec = this.pickSpectate(p);

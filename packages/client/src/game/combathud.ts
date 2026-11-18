@@ -1,5 +1,5 @@
 import {
-  AMMO_COLORS, AMMO_NAMES, ITEM, ITEMS, PICK_SLOT, PM, RARITIES, RARITY_COLOR, SIM_HZ, consumableDef, itemName, itemRarity, weaponDef,
+  AMMO_COLORS, AMMO_NAMES, BOOST_MAX, ITEM, ITEMS, K, PICK_SLOT, PM, RARITIES, RARITY_COLOR, SIM_HZ, consumableDef, itemName, itemRarity, weaponDef,
   type GameResult, type PlayerState, type RosterEntry,
 } from '@dropzone/shared';
 import { h } from '../ui/dom';
@@ -43,6 +43,9 @@ export class CombatHud {
   private slots: { tile: HTMLElement; name: HTMLElement; count: HTMLElement; icon: HTMLElement; id: number }[] = [];
   private pickKey = h('span.s-key');
   private ammoEl = h('div.ammo');
+  /** Car boost meter (while driving). */
+  private boostFill = h('i'); private boostKey = h('kbd');
+  private boostEl = h('div.boost', h('b', 'BOOST'), h('div.boost-bar', this.boostFill), this.boostKey);
   private reticle = new Reticle();
   private hit = h('div.hitmark', { html: hitMarkerSvg() });
   private prompt = h('div.prompt');
@@ -98,7 +101,7 @@ export class CombatHud {
     this.el = h('div.combat',
       this.vignette, this.scope, this.dirs, this.nums,
       this.reticle.el, this.hit, this.prompt, this.ring, this.center, this.knocked,
-      h('div.bottom-left', bars), h('div.bottom-right', this.ammoEl, hotbar),
+      h('div.bottom-left', bars), h('div.bottom-right', this.boostEl, this.ammoEl, hotbar),
       this.feed, this.killsEl, this.goldEl, this.specEl, this.bossEl, this.cardsEl, this.structEl, this.deathEl, this.resultEl);
   }
 
@@ -258,6 +261,16 @@ export class CombatHud {
       this.ammoEl.replaceChildren(h('b', { class: held.mag === 0 ? 'empty' : '' }, String(held.mag)), h('span', ' / '), h('span.reserve', { style: { color: AMMO_COLORS[w.ammo] } }, String(s.ammo[w.ammo])), h('small', AMMO_NAMES[w.ammo]));
       this.ammoEl.style.display = '';
     } else this.ammoEl.style.display = 'none';
+
+    // car boost meter
+    const driving = s.mode === PM.Drive;
+    this.boostEl.classList.toggle('show', driving);
+    if (driving) {
+      this.boostFill.style.width = `${(s.boost / BOOST_MAX) * 100}%`;
+      this.boostEl.classList.toggle('empty', s.boost <= 0);
+      this.boostEl.classList.toggle('on', (s.keys & K.SPRINT) !== 0 && (s.keys & K.F) !== 0 && s.boost > 0);
+      if (this.frame % 30 === 1) this.boostKey.textContent = keyName(settings.keys.sprint);
+    }
 
     // reticle: its shape follows what you're holding, its size the weapon's spread right now
     // (the spread cone's radius on screen, in CSS pixels, so it matches the 3D view)

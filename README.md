@@ -20,7 +20,7 @@ Dev mode with hot reload: `npm run dev` (client on :5173, server on :8080).
 |---|---|
 | W A S D | Move (steer while dropping) |
 | Mouse | Look (click the game to capture the mouse) |
-| Shift | Sprint |
+| Shift | Sprint (in a car: boost) |
 | Space | Jump / climb a ledge / vault a fence / drop from the ship / open or fold the glider / handbrake |
 | Left mouse | Fire / use the item in your hands / swing the pickaxe (it breaks walls and furniture) |
 | Right mouse | Aim down sights (scoped guns can toggle instead: Settings → Controls) |
@@ -46,7 +46,7 @@ Every key can be changed in Settings → Controls; fire, aim and ping can go on 
   - colour-blind palettes
   - reticle colour
 - **Audio:** master, effects and music volume. Sound starts after your first click.
-  - **Visualize sound effects** (on by default): markers around the middle of the screen show where footsteps, gunfire, explosions, chests and cars are
+  - **Visualize sound effects** (on by default): markers around the middle of the screen show where footsteps, gunshots, chests and cars are
 
 ## Checks
 ```bash

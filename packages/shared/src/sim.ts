@@ -39,6 +39,8 @@ export interface PlayerState {
   os: number;
   /** Gold carried (spent at merchants). */
   gold: number;
+  /** Car boost left, in sim ticks (BOOST_MAX = full; it refills when you're not boosting). */
+  boost: number;
   /** Bleed-out health while knocked. */
   knock: number;
   slot: number;
@@ -78,7 +80,7 @@ export interface PlayerState {
 
 export const newPlayerState = (): PlayerState => ({
   x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, yaw: 0, pitch: 0, mode: PM.Walk, grounded: true, keys: 0,
-  hp: 100, shield: 0, os: 0, gold: 0, knock: 0, slot: 0, inv: [emptySlot(), emptySlot(), emptySlot(), emptySlot(), emptySlot()], ammo: [0, 0, 0, 0, 0],
+  hp: 100, shield: 0, os: 0, gold: 0, boost: BOOST_MAX, knock: 0, slot: 0, inv: [emptySlot(), emptySlot(), emptySlot(), emptySlot(), emptySlot()], ammo: [0, 0, 0, 0, 0],
   cd: 0, burst: 0, reload: 0, use: 0, bloom: 0, shots: 0, seed: 1, act: ACT.None, veh: -1, seat: 0, vh: 0, vs: 0, emote: 0,
   mv: 0, mt: 0, tx: 0, ty: 0, tz: 0, my: 0, mh: 0, air: 0, jbuf: 0, li: -1, zt: 0, zv: 0, scd: 0, wk: 0,
 });
@@ -127,6 +129,8 @@ const approach = (v: number, t: number, d: number) => (v < t ? Math.min(v + d, t
 /** Overshield: how much you get, how long without damage before it refills, and how fast. */
 export const OVERSHIELD = { max: 50, delayMs: 6000, perSecond: 20 } as const;
 export const KNOCKED_SPEED = 1.7;
+/** Car boost: 3 s of it when full (counted in whole sim ticks so prediction stays exact); refills as fast. */
+export const BOOST_MAX = 180;
 export const USE_WALK_SPEED = 2.4;
 
 /** Current spread in radians for the held weapon. */
@@ -266,13 +270,17 @@ export function stepPlayer(s: PlayerState, cmd: InputCmd, w: World, ev?: SimEven
   s.keys = keys; s.yaw = cmd.yaw; s.pitch = cmd.pitch;
   if (s.mode === PM.Bus || s.mode === PM.Dead) return;
   if (s.mode !== PM.Walk) s.emote = 0;
+  if (s.mode !== PM.Drive && s.boost < BOOST_MAX) s.boost++;
 
   const jumpEdge = (keys & K.JUMP) !== 0 && (prev & K.JUMP) === 0;
   const f = (keys & K.F ? 1 : 0) - (keys & K.B ? 1 : 0), r = (keys & K.R ? 1 : 0) - (keys & K.L ? 1 : 0);
 
   if (s.mode === PM.Drive || s.mode === PM.Ride) s.mv = MV.None;
   if (s.mode === PM.Drive) {
-    stepCar(s, f, r, (keys & K.JUMP) !== 0, w, dt);
+    // boost: hold Sprint while driving forward
+    const boosting = (keys & K.SPRINT) !== 0 && f > 0 && s.boost > 0 && s.grounded;
+    s.boost = boosting ? s.boost - 1 : Math.min(BOOST_MAX, s.boost + 1);
+    stepCar(s, f, r, (keys & K.JUMP) !== 0, w, dt, boosting);
     s.vx = -Math.sin(s.vh) * s.vs; s.vz = -Math.cos(s.vh) * s.vs;
     s.x = clamp(s.x, -WORLD_LIMIT, WORLD_LIMIT); s.z = clamp(s.z, -WORLD_LIMIT, WORLD_LIMIT);
     stepCombat(s, cmd, prev, w, ev);

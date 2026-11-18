@@ -253,7 +253,7 @@ export class AudioEngine {
   // ------------------------------------------------------------ weapons
   /** A gunshot. `self` = your own gun (not positional, a touch louder). */
   gun(cls: string, pos: V3 | null, self = false) {
-    if (pos && !self) this.onCue?.(cls === 'rocket' ? 'boom' : 'gun', pos, undefined, cls === 'sniper' || cls === 'shotgun' ? 1 : 0.8);
+    if (pos && !self) this.onCue?.('gun', pos, undefined, cls === 'sniper' || cls === 'shotgun' || cls === 'rocket' ? 1 : 0.8);
     const P = GUN[cls] ?? GUN.ar;
     const d = pos ? this.dist(pos) : 0;
     const to = this.dest(self ? null : pos, 9, P.dur + P.tail + 0.4, self);
@@ -299,7 +299,6 @@ export class AudioEngine {
   }
   /** Pickaxe: the swing through the air, a clank off stone or metal, a dull thud on a player. */
   melee(kind: 'swing' | 'wall' | 'flesh' | 'break', pos: V3 | null) {
-    if (pos && kind !== 'swing') this.onCue?.('hit', pos, undefined, kind === 'break' ? 1 : 0.7);
     const to = this.dest(pos, 4, 1.0); if (!to) return;
     const t = this.ctx!.currentTime, j = 0.9 + Math.random() * 0.2;
     if (kind === 'swing') this.noise(to, t, 0.22, 0.28, 'bandpass', 700 * j, 0.9, 0.06, 2200 * j);
@@ -327,8 +326,16 @@ export class AudioEngine {
     this.tone(to, t, 'sine', 90, 45, 0.4, 0.6);
     [784, 988, 1319].forEach((f, i) => this.tone(to, t + 0.05 + i * 0.07, 'triangle', f, f, 0.35, 0.18));
   }
+  /** A heavy crate hitting the ground (supply drops). */
+  thud(pos: V3) {
+    this.onCue?.('chest', pos, undefined, 1);
+    const to = this.dest(pos, 10, 1.2); if (!to) return;
+    const t = this.ctx!.currentTime;
+    this.tone(to, t, 'sine', 95, 38, 0.5, 0.9);
+    this.noise(to, t, 0.35, 0.55, 'lowpass', 520, 0.8, 0.004, 160);
+    this.noise(to, t + 0.04, 0.22, 0.25, 'bandpass', 1400, 1.2);
+  }
   explosion(pos: V3, big = 1) {
-    this.onCue?.('boom', pos, undefined, 1);
     const to = this.dest(pos, 18, 2.2, true); if (!to) return;
     const t = this.ctx!.currentTime, d = this.dist(pos);
     const lp = this.ctx!.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = Math.max(400, 9000 * Math.exp(-d / 160)); lp.connect(to);
@@ -354,7 +361,8 @@ export class AudioEngine {
   }
   /** Small movement one-shots. */
   move(kind: 'jump' | 'land' | 'slide' | 'mantle' | 'pad' | 'zipgrab' | 'splash' | 'glider', pos: V3 | null, k = 1) {
-    if (pos) this.onCue?.(kind === 'splash' ? 'splash' : kind === 'glider' ? 'glider' : 'step', pos, undefined, kind === 'land' ? Math.min(1, 0.5 + k) : 0.7);
+    // landing, jumping, sliding and climbing over things are footfalls too
+    if (pos && (kind === 'land' || kind === 'jump' || kind === 'slide' || kind === 'mantle')) this.onCue?.('step', pos, undefined, kind === 'land' ? Math.min(1, 0.5 + k) : 0.7);
     const to = this.dest(pos, 5, 1.3); if (!to) return;
     const t = this.ctx!.currentTime;
     switch (kind) {
@@ -371,7 +379,7 @@ export class AudioEngine {
 
   // ------------------------------------------------------------ items and the world
   item(kind: 'pickup' | 'ammo' | 'heal' | 'shield' | 'swap' | 'chest' | 'supply' | 'revive' | 'card' | 'vault', pos: V3 | null = null) {
-    if (pos && (kind === 'chest' || kind === 'vault' || kind === 'supply')) this.onCue?.(kind === 'vault' ? 'vault' : 'chest', pos, undefined, 1);
+    if (pos && (kind === 'chest' || kind === 'supply')) this.onCue?.('chest', pos, undefined, 1);
     const to = this.dest(pos, 6, 2); if (!to) return;
     const t = this.ctx!.currentTime;
     switch (kind) {

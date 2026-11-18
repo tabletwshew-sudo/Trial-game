@@ -135,7 +135,7 @@ export function settingsPanel(onClose: () => void): HTMLElement {
       slider('Master volume', 'master', 0, 1, 0.01, (v) => `${Math.round(v * 100)}%`),
       slider('Effects', 'effects', 0, 1, 0.01, (v) => `${Math.round(v * 100)}%`),
       slider('Music', 'music', 0, 1, 0.01, (v) => `${Math.round(v * 100)}%`),
-      toggle('Visualize sound effects', 'visualSound', 'Markers around the middle of the screen show where footsteps, gunfire, explosions, chests and cars are'),
+      toggle('Visualize sound effects', 'visualSound', 'Markers around the middle of the screen show where footsteps, gunshots, chests and cars are'),
     );
     if (tab === 'keys') {
       const rows = (Object.keys(ACTION_LABELS) as Action[]).map((a) => {

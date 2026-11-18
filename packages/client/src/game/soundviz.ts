@@ -1,24 +1,19 @@
 /**
- * Visual sound effects: markers on a ring around the middle of the screen pointing at what you
- * can hear: footsteps, gunfire, explosions, chests, cars, impacts, gliders, splashes. Bright
- * when it's close, faint far off, with an arrow when it's well above or below you. It works with
- * the sound off too (it listens to what the game plays, not to the speakers).
+ * Visual sound effects: markers on a ring around the middle of the screen pointing at the four
+ * sounds that matter most: footsteps, gunshots, chests (and supply drops) and cars. Bright when
+ * it's close, faint far off, with an arrow when it's well above or below you. It works with the
+ * sound off too (it listens to what the game plays, not to the speakers).
  */
-export type Cue = 'step' | 'gun' | 'boom' | 'chest' | 'car' | 'hit' | 'glider' | 'splash' | 'vault';
+export type Cue = 'step' | 'gun' | 'chest' | 'car';
 
 interface V3 { x: number; y: number; z: number }
 
 /** How far each kind shows, how long a marker lasts, its colour and icon. */
 const KINDS: Record<Cue, { range: number; life: number; color: string; icon: string }> = {
-  step: { range: 42, life: 0.9, color: '#ffffff', icon: '<ellipse cx="8.5" cy="7" rx="3" ry="4.2"/><ellipse cx="15.5" cy="14" rx="3" ry="4.2"/><circle cx="8.5" cy="13.2" r="1.6"/><circle cx="15.5" cy="20" r="1.6"/>' },
+  step: { range: 32, life: 0.9, color: '#ffffff', icon: '<ellipse cx="8.5" cy="7" rx="3" ry="4.2"/><ellipse cx="15.5" cy="14" rx="3" ry="4.2"/><circle cx="8.5" cy="13.2" r="1.6"/><circle cx="15.5" cy="20" r="1.6"/>' },
   gun: { range: 170, life: 1.5, color: '#ff6b4a', icon: '<circle cx="12" cy="12" r="3.2"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5M5 5l3.2 3.2M15.8 15.8L19 19M19 5l-3.2 3.2M8.2 15.8L5 19" stroke-width="2.2" stroke-linecap="round" fill="none"/>' },
-  boom: { range: 240, life: 2.2, color: '#ffae34', icon: '<path d="M12 1.5l2.4 5.6 5.6-2.4-2.4 5.6 5.4 1.7-5.4 1.7 2.4 5.6-5.6-2.4L12 22.5l-2.4-5.6-5.6 2.4 2.4-5.6-5.4-1.7 5.4-1.7-2.4-5.6 5.6 2.4z"/>' },
   chest: { range: 26, life: 0.45, color: '#ffd23f', icon: '<path d="M3 10.5C3 6.5 6 5 12 5s9 1.5 9 5.5z"/><rect x="3" y="11.5" width="18" height="8" rx="1.2"/><rect x="10.5" y="9.5" width="3" height="4.5" rx="0.8" fill="#3a2a10"/>' },
   car: { range: 130, life: 0.45, color: '#7fd6ff', icon: '<path d="M4 15l1.6-5.2C6 8.6 7 8 8.2 8h7.6c1.2 0 2.2.6 2.6 1.8L20 15z"/><rect x="2.5" y="14" width="19" height="4.5" rx="1.6"/><circle cx="7" cy="19" r="2.2"/><circle cx="17" cy="19" r="2.2"/>' },
-  hit: { range: 40, life: 1, color: '#d9d9d9', icon: '<path d="M4 20L13 11" stroke-width="2.6" stroke-linecap="round" fill="none"/><path d="M8 5.5c4-2.4 9-1.8 12 1.5-3.8-.8-7.2.2-9.6 2.4z"/><path d="M15 3l2 2M19 9.5l2.4.6M14.5 1.5l.4 2.2" stroke-width="1.6" stroke-linecap="round" fill="none"/>' },
-  glider: { range: 90, life: 1.2, color: '#c9a8ff', icon: '<path d="M2.5 11C4.5 5.5 19.5 5.5 21.5 11c-2.2-1.2-4.4-1.2-6.4 0-2-1.2-4.2-1.2-6.2 0-2-1.2-4.2-1.2-6.4 0z"/><path d="M3 11.5l9 8 9-8M9 11.5l3 8 3-8" stroke-width="1.2" fill="none"/>' },
-  splash: { range: 45, life: 1, color: '#5fb8ff', icon: '<path d="M12 3c3.5 5 6 8 6 11a6 6 0 0 1-12 0c0-3 2.5-6 6-11z"/>' },
-  vault: { range: 140, life: 2.4, color: '#ffd23f', icon: '<rect x="4.5" y="10.5" width="15" height="10" rx="1.6"/><path d="M8 10.5V8a4 4 0 0 1 8 0" stroke-width="2.4" fill="none"/>' },
 };
 
 interface Marker { kind: Cue; key: string | null; x: number; y: number; z: number; t: number; loud: number; el: HTMLElement; icon: HTMLElement; arrow: HTMLElement; tip: HTMLElement }
@@ -58,19 +53,35 @@ export class SoundViz {
     this.markers.push(m);
   }
 
-  /** Place markers for where the camera is and which way it faces. */
+  /**
+   * Place markers for where the camera is and which way it faces. To keep the ring readable,
+   * a marker next to a closer one of the same kind (within ~14 degrees) is hidden, and at most
+   * four footstep markers show at once (the nearest).
+   */
   update(dt: number, cam: V3, yaw: number, enabled: boolean) {
     this.el.style.display = enabled ? '' : 'none';
     const R = Math.min(innerHeight * 0.3, 250);
     const fx = -Math.sin(yaw), fz = -Math.cos(yaw), rx = Math.cos(yaw), rz = -Math.sin(yaw);
+    const live: { m: Marker; a: number; dist: number }[] = [];
     for (let i = this.markers.length - 1; i >= 0; i--) {
       const m = this.markers[i], k = KINDS[m.kind];
       m.t -= dt;
       const dx = m.x - cam.x, dz = m.z - cam.z, dist = Math.hypot(dx, dz, m.y - cam.y);
       if (m.t <= 0 || dist > k.range) { this.release(this.markers.splice(i, 1)[0]); continue; }
-      if (!enabled) continue;
       // angle round the ring: straight ahead is the top
-      const a = Math.atan2(dx * rx + dz * rz, dx * fx + dz * fz);
+      live.push({ m, a: Math.atan2(dx * rx + dz * rz, dx * fx + dz * fz), dist });
+    }
+    if (!enabled) return;
+    live.sort((p, q) => p.dist - q.dist);
+    const shown: { kind: Cue; a: number }[] = [];
+    let steps = 0;
+    for (const { m, a, dist } of live) {
+      const k = KINDS[m.kind];
+      const crowded = shown.some((q) => q.kind === m.kind && Math.abs(Math.atan2(Math.sin(a - q.a), Math.cos(a - q.a))) < 0.25);
+      const tooMany = m.kind === 'step' && steps >= 4;
+      if (crowded || tooMany) { m.el.style.opacity = '0'; continue; }
+      shown.push({ kind: m.kind, a });
+      if (m.kind === 'step') steps++;
       const near = Math.max(0, 1 - dist / k.range);
       const fade = Math.min(1, m.t / Math.min(0.35, k.life * 0.6));
       const alpha = Math.min(1, (0.3 + near * 0.8) * (0.55 + m.loud * 0.45)) * fade;

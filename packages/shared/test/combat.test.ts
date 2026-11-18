@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ACT, CAR, ITEM, ITEMS, K, PM, SIM_HZ, SK, SPAWN_ISLAND, addToInventory, aimDir, aimOrigin, shotOrigin, applyDamage, blastDamage, clearColumn, falloff, getWorld, newPlayerState,
+  ACT, BOOST_MAX, CAR, ITEM, ITEMS, K, PM, SIM_HZ, SK, SPAWN_ISLAND, addToInventory, aimDir, aimOrigin, shotOrigin, applyDamage, blastDamage, clearColumn, falloff, getWorld, newPlayerState,
   rayPlayer, raycastWorld, spreadDir, stepCar, stepPlayer, surfaceAt, terrainAt, weaponDef, type InputCmd, type ShotEvent,
 } from '../src/index';
 
@@ -223,6 +223,22 @@ describe('cars', () => {
     const s = fresh(); s.mode = PM.Drive; s.vh = 0;
     run(s, { keys: K.F, yaw: 0, pitch: 0 }, SIM_HZ);
     expect(s.vs).toBeGreaterThan(5); expect(s.z).toBeLessThan(SPAWN_ISLAND.z);
+  });
+  it('Sprint boosts while driving: faster for 3 s, then the meter is empty and refills', () => {
+    const drive = (boost: boolean) => {
+      const s = fresh(); s.mode = PM.Drive; s.vh = 0; s.x = SPAWN_ISLAND.x; s.z = SPAWN_ISLAND.z + 40;
+      s.y = surfaceAt(w, s.x, s.z, 100);
+      run(s, { keys: K.F | (boost ? K.SPRINT : 0), yaw: 0, pitch: 0 }, SIM_HZ * 2);
+      return s;
+    };
+    const plain = drive(false), boosted = drive(true);
+    expect(boosted.vs).toBeGreaterThan(plain.vs * 1.4);
+    expect(plain.boost).toBe(BOOST_MAX);
+    expect(boosted.boost).toBe(BOOST_MAX - SIM_HZ * 2);
+    run(boosted, { keys: K.F | K.SPRINT, yaw: 0, pitch: 0 }, SIM_HZ * 2);
+    expect(boosted.boost).toBe(0);                    // empty after 3 s
+    run(boosted, { keys: K.F, yaw: 0, pitch: 0 }, SIM_HZ);
+    expect(boosted.boost).toBe(SIM_HZ);               // refilling
   });
 });
 

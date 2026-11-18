@@ -120,6 +120,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
     lootR.set(init.loot);
     const cars = new CarRenderer(scene, world, fx);
     const chestR = new ChestRenderer(scene, fx);
+    chestR.onLand = (x, y, z) => audio.thud({ x, y: y + 0.5, z });
     chestR.set(init.chests);
     let aliveCount = init.alive, specIdx = -1, revive = { p: 0, at: 0 };
     const kills = [...init.kills];
@@ -333,7 +334,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
         case 'proj': fx.spawnProjectile(e.id, e.it, e.p, e.v, e.fuse, !!weaponDef(e.it)?.projectile); break;
         case 'boom': fx.removeProjectile(e.id); fx.explosion(tmpA.set(...e.p), e.r); audio.explosion({ x: e.p[0], y: e.p[1], z: e.p[2] }); break;
         case 'car_boom': fx.explosion(tmpA.set(...e.p), 6); audio.explosion({ x: e.p[0], y: e.p[1], z: e.p[2] }, 1.4); break;
-        case 'supply': toast('Supply drop incoming! Check your map.', 'info'); audio.item('supply'); break;
+        case 'supply': toast('Supply drop incoming! Follow the blue beam.', 'info'); audio.item('supply'); break;
         case 'opened': { const c = chestR.chests.get(e.id); if (c) audio.item('chest', { x: c.x, y: c.y + 0.5, z: c.z }); break; }
         case 'recalled': audio.item('revive'); toast(e.i === selfIdx ? `${roster[e.by]?.name} brought you back!` : `${roster[e.by]?.name} recalled ${roster[e.i]?.name}`, 'success'); break;
         case 'vault': { const d = world.vaults.find((v) => v.id === e.id)?.door; audio.item('vault', d ? { x: d.x, y: (pred?.y ?? 0) + 1, z: d.z } : null); } toast(`${roster[e.by]?.name ?? 'Someone'} opened a vault!`, 'info'); break;
@@ -445,6 +446,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
     let camDist = 4.3, shoulder = 0.75, fov = settings.fov, emoteSwing = 0;
     // movement feel: camera drops when you crouch or slide, dips on hard landings, FOV kicks with speed
     let camLow = 0, camDip = 0, fovKick = 0, selfFallVy = 0, selfWasGrounded = true;
+    let wasBoosting = false;
     // per-player effect timers and "were they in the water" flags
     const dustT = roster.map(() => 0), wetPrev = roster.map(() => false), mvPrev = roster.map(() => 0), zipPrev = roster.map(() => false);
     // sound: the continuous soundscape, plus a little state for one-shots we infer from the prediction
@@ -543,7 +545,10 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
         me.visible = true;
         if (pred.mode === PM.Drive) {
           const steer = ((input.keys & K.R) ? 1 : 0) - ((input.keys & K.L) ? 1 : 0);
-          carOverride = { id: pred.veh, x: selfPos.x, y: selfPos.y, z: selfPos.z, vh: pred.vh, vs: pred.vs, steer };
+          const boost = (input.keys & K.SPRINT) !== 0 && (input.keys & K.F) !== 0 && pred.boost > 0 && pred.grounded;
+          carOverride = { id: pred.veh, x: selfPos.x, y: selfPos.y, z: selfPos.z, vh: pred.vh, vs: pred.vs, steer, boost, handbrake: (input.keys & K.JUMP) !== 0 };
+          if (boost && !wasBoosting) audio.move('pad', null); // whoosh as the boost kicks in
+          wasBoosting = boost;
           const at = seatWorld(carOverride, 0);
           me.x = at.x; me.y = at.y - 0.55; me.z = at.z; me.yaw = pred.vh;
         } else if (pred.mode === PM.Ride) {
@@ -597,7 +602,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       camera.lookAt(pivot.x + dir.x * 20, pivot.y + dir.y * 20, pivot.z + dir.z * 20);
       const scoped = ads && !!heldDef?.scope && camDist < 2.6;
       const baseFov = settings.fov;
-      const kickTo = !pred || ads || watching ? 0 : pred.mode === PM.Zip ? 6 : pred.mv === MV.Launch ? 10 : pred.mv === MV.Slide ? 4 + Math.min(5, Math.hypot(pred.vx, pred.vz) - 6) : (me.flags & EF.SPRINT) ? 3 : 0;
+      const kickTo = !pred || ads || watching ? 0 : carOverride?.boost ? 12 : pred.mode === PM.Drive ? Math.min(6, Math.abs(pred.vs) / 5) : pred.mode === PM.Zip ? 6 : pred.mv === MV.Launch ? 10 : pred.mv === MV.Slide ? 4 + Math.min(5, Math.hypot(pred.vx, pred.vz) - 6) : (me.flags & EF.SPRINT) ? 3 : 0;
       fovKick += (Math.max(0, kickTo) - fovKick) * (1 - Math.exp(-dt * 5));
       const wantFov = me.mode === PM.Fall && !inBus ? baseFov + 6 + me.dive * 10 : ads && heldDef ? heldDef.adsFov * (baseFov / 70) : baseFov + fovKick;
       if (Math.abs(wantFov - fov) > 0.05) { fov += (wantFov - fov) * kCam; camera.fov = fov; camera.updateProjectionMatrix(); }
@@ -696,6 +701,11 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
         })),
         locked: input.locked || (!!pred && pred.mode === PM.Dead), fps,
         drops: [...chestR.chests.values()].filter((c) => c.k === 2 && !c.open).map((c) => ({ x: c.x, z: c.z })),
+        // a marker over each unopened supply drop (over the crate while it falls, then over where it landed)
+        dropTags: [...chestR.chests.values()].filter((c) => c.k === 2 && !c.open && (c.x - selfPos.x) ** 2 + (c.z - selfPos.z) ** 2 < 2000 * 2000).map((c) => {
+          const y = chestR.heightOf(c, serverNow), falling = y > c.y + 0.01, p = project(c.x, y + (falling ? 9 : 3.2), c.z);
+          return { id: c.id, sx: p.sx, sy: p.sy, show: p.show, dist: Math.hypot(c.x - selfPos.x, c.z - selfPos.z), falling };
+        }),
         storm: storm.state, kills: kills[selfIdx] ?? 0,
         beacons: world.beacons.map((b, i) => ({ x: b.x, z: b.z, ready: serverNow >= beaconReady[i] })),
       };

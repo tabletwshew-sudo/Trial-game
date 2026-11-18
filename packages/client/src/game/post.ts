@@ -19,7 +19,7 @@ export interface PostOptions { bloom: boolean; fxaa: boolean; direct: boolean }
 const FinishShader = {
   uniforms: {
     tDiffuse: { value: null as THREE.Texture | null }, toneMappingExposure: { value: 1 },
-    saturation: { value: 1.07 }, contrast: { value: 1.07 }, vignette: { value: 0.28 }, time: { value: 0 },
+    saturation: { value: 1.15 }, contrast: { value: 1.03 }, vignette: { value: 0.24 }, time: { value: 0 },
   },
   vertexShader: /* glsl */ `
     precision highp float;
@@ -40,8 +40,9 @@ const FinishShader = {
       float l = dot(col, vec3(0.2126, 0.7152, 0.0722));
       col = mix(vec3(l), col, saturation);
       col = (col - 0.5) * contrast + 0.5;
-      // split toning: warm highlights, slightly cool shadows
-      col += vec3(0.022, 0.008, -0.018) * smoothstep(0.55, 1.0, l) + vec3(-0.012, 0.0, 0.022) * (1.0 - smoothstep(0.0, 0.4, l));
+      // a bright cartoon grade: shadows lifted and cool (a touch of blue), highlights warm
+      col += vec3(-0.004, 0.012, 0.045) * (1.0 - smoothstep(0.0, 0.45, l));
+      col += vec3(0.03, 0.014, -0.022) * smoothstep(0.55, 1.0, l);
       vec2 q = vUv - 0.5;
       col *= 1.0 - vignette * dot(q, q) * 1.5;
       // a whisper of noise so gradients (sky, fog) never band

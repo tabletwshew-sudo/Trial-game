@@ -11,6 +11,8 @@ export interface CarBody { x: number; y: number; z: number; vy: number; vh: numb
 export const CAR = {
   maxRoad: 31, maxGrass: 24, maxReverse: 9, accel: 12, brake: 30, drag: 2.5, handbrake: 22,
   steerRate: 1.7, radius: 1.15, axle: 1.3, seats: 4, maxHp: 800,
+  /** Boost: top speed and acceleration multipliers while it's on. */
+  boostMax: 1.4, boostAccel: 2.4,
 } as const;
 
 /** Seat positions in the car's frame: x right, y up, z forward. */
@@ -50,11 +52,12 @@ const groundAt = (w: World, x: number, z: number, y: number) => {
 };
 
 /** Returns impact speed if the car hit a wall this step (for damage / effects). */
-export function stepCar(c: CarBody, throttle: number, steer: number, handbrake: boolean, w: World, dt: number): number {
+export function stepCar(c: CarBody, throttle: number, steer: number, handbrake: boolean, w: World, dt: number, boost = false): number {
   const onRoad = roadEdgeDist(w, c.x, c.z) < 0.5;
-  const max = onRoad ? CAR.maxRoad : CAR.maxGrass;
+  const max = (onRoad ? CAR.maxRoad : CAR.maxGrass) * (boost ? CAR.boostMax : 1);
+  const accel = CAR.accel * (boost ? CAR.boostAccel : 1);
   if (c.grounded) {
-    if (throttle > 0) c.vs = c.vs < 0 ? Math.min(0, c.vs + CAR.brake * dt) : Math.min(max, c.vs + CAR.accel * throttle * dt * (1 - (c.vs / max) * 0.5));
+    if (throttle > 0) c.vs = c.vs < 0 ? Math.min(0, c.vs + CAR.brake * dt) : Math.min(max, c.vs + accel * throttle * dt * (1 - (c.vs / max) * 0.5));
     else if (throttle < 0) c.vs = c.vs > 0 ? Math.max(0, c.vs - CAR.brake * dt) : Math.max(-CAR.maxReverse, c.vs - CAR.accel * 0.7 * dt);
     else c.vs -= Math.sign(c.vs) * Math.min(Math.abs(c.vs), CAR.drag * dt);
     if (handbrake) c.vs -= Math.sign(c.vs) * Math.min(Math.abs(c.vs), CAR.handbrake * dt);
