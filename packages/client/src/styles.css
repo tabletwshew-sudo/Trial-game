@@ -331,18 +331,22 @@ kbd { font-family: var(--body); font-weight: 900; font-size: 11px; padding: 2px 
 .feed-line .wpn .ico { width: 34px; height: 17px; vertical-align: middle; margin: 0 2px; color: #fff; --rc: #fff; opacity: .9; }
 .s-name { font-family: var(--display); font-size: 12px; letter-spacing: .4px; margin-top: 2px; }
 .s-count { position: absolute; top: 3px; right: 6px; font-weight: 900; font-size: 12px; }
-.xhair { --gap: 6px; position: absolute; left: 50%; top: 50%; width: 0; height: 0; }
-.xhair::before, .xhair::after { content: ''; position: absolute; background: #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.45); border-radius: 1px; }
-.xhair::before { width: 2px; height: 9px; left: -1px; top: calc(-9px - var(--gap)); box-shadow: 0 calc(18px + var(--gap) * 2) 0 #fff, 0 0 0 1px rgba(0,0,0,.45); }
-.xhair::after { height: 2px; width: 9px; top: -1px; left: calc(-9px - var(--gap)); box-shadow: calc(18px + var(--gap) * 2) 0 0 #fff, 0 0 0 1px rgba(0,0,0,.45); }
-.xhair.hide { display: none; }
+/* reticle (see game/reticle.ts): white by default, with a dark edge so it reads on snow and sky */
+.reticle { --rc: #fff; position: absolute; left: 50%; top: 50%; margin: -150px 0 0 -150px; overflow: visible; pointer-events: none;
+  filter: drop-shadow(0 0 1px rgba(0,0,0,.85)) drop-shadow(0 0 .5px rgba(0,0,0,.9)); }
+.reticle rect, .reticle > circle:last-child { fill: var(--rc); }
+.reticle circle:first-child { stroke: var(--rc); opacity: .9; }
+.reticle path { stroke: var(--rc); }
+.reticle.hide { display: none; }
 .combat ~ .crosshair, .hud .crosshair { display: none; }
-.hitmark { position: absolute; left: 50%; top: 50%; width: 26px; height: 26px; margin: -13px; opacity: 0; }
-.hitmark::before, .hitmark::after { content: ''; position: absolute; left: 12px; top: -1px; width: 2px; height: 28px; background: #fff; transform: rotate(45deg); box-shadow: 0 0 2px #000; }
-.hitmark::after { transform: rotate(-45deg); }
-.hitmark.show { opacity: 1; }
-.hitmark.head::before, .hitmark.head::after { background: var(--sun); }
-.hitmark.ko::before, .hitmark.ko::after { background: var(--red); width: 3px; }
+/* hit marker: four strokes around the reticle that pop out and fade (gold on the head, red on a knock) */
+.hitmark { position: absolute; left: 50%; top: 50%; width: 40px; height: 40px; margin: -20px; opacity: 0; transform: scale(.8); transition: opacity .16s ease-out, transform .16s ease-out; filter: drop-shadow(0 0 1px rgba(0,0,0,.9)); }
+.hitmark svg { display: block; overflow: visible; }
+.hitmark line { stroke: #fff; stroke-width: 2.4; stroke-linecap: round; }
+.hitmark.show { opacity: 1; transform: scale(1.15); transition: none; }
+.hitmark.head line { stroke: var(--sun); }
+.hitmark.ko line { stroke: var(--red); stroke-width: 3.2; }
+.hitmark.ko.show { transform: scale(1.45); }
 .dmg-nums { position: absolute; inset: 0; overflow: hidden; }
 .dnum { position: absolute; font-family: var(--display); font-size: 20px; color: #fff; text-shadow: 0 2px 0 rgba(0,0,0,.6); transform: translate(-50%, -50%); animation: dnum .9s ease-out forwards; }
 .dnum.sh { color: #7fe3ff; }
@@ -392,7 +396,7 @@ kbd { font-family: var(--body); font-weight: 900; font-size: 11px; padding: 2px 
 .scope::after { top: 50%; left: calc(50% - 32vh); height: 2px; width: 64vh; margin-top: -1px; }
 .spectating { position: absolute; left: 50%; bottom: 32px; transform: translateX(-50%) scale(var(--hud, .8)); transform-origin: bottom center; padding: 8px 18px; border-radius: 999px; background: rgba(20,18,58,.8); border: 1px solid var(--line); font-family: var(--display); font-size: 18px; letter-spacing: 1px; display: none; }
 .spectating.show { display: block; }
-.combat.dead .bottom-left, .combat.dead .bottom-right, .combat.dead .xhair { display: none; }
+.combat.dead .bottom-left, .combat.dead .bottom-right, .combat.dead .reticle { display: none; }
 .result { position: absolute; inset: 0; display: none; place-items: center; background: rgba(10,8,30,.6); pointer-events: auto; z-index: 15; }
 .result.show { display: grid; animation: fade .3s; }
 .result-card { width: min(420px, 92vw); padding: 28px; border-radius: 22px; text-align: center; background: var(--glass); border: 1px solid var(--line); backdrop-filter: blur(12px); animation: pop .4s cubic-bezier(.2,1.4,.4,1); }
@@ -590,3 +594,14 @@ kbd { font-family: var(--body); font-weight: 900; font-size: 11px; padding: 2px 
 .news-row span { width: 24px; height: 24px; flex: none; display: grid; place-items: center; border-radius: 8px; background: rgba(255,255,255,.1); font-size: 13px; }
 .news-row small { font-size: 12px; font-weight: 800; color: rgba(255,255,255,.88); }
 @media (max-width: 860px) { .news-card { display: none; } }
+
+/* ---- visual sound effects (game/soundviz.ts): markers on a ring round the middle of the screen */
+.soundviz { position: absolute; left: 50%; top: 50%; width: 0; height: 0; pointer-events: none; z-index: 1; }
+.sv { position: absolute; left: -17px; top: -17px; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center;
+  background: rgba(12, 16, 28, .62); box-shadow: 0 0 0 1.5px var(--c), 0 2px 8px rgba(0,0,0,.35); will-change: transform, opacity; }
+.sv-icon { display: grid; place-items: center; color: var(--c); }
+.sv-icon svg { fill: var(--c); stroke: var(--c); stroke-width: 0; }
+/* the pointer: a small wedge on the outside of the chip, turned toward the sound */
+.sv-tip { position: absolute; inset: 0; }
+.sv-tip::before { content: ''; position: absolute; left: 50%; top: -7px; margin-left: -5px; border: 5px solid transparent; border-bottom: 6px solid var(--c); border-top: 0; }
+.sv-up { position: absolute; right: -9px; bottom: -6px; font-size: 11px; line-height: 1; color: var(--c); text-shadow: 0 1px 2px #000; }

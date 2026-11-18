@@ -44,7 +44,9 @@ Every key can be changed in Settings → Controls; fire, aim and ping can go on 
   - HUD size (60–120%)
   - field of view
   - colour-blind palettes
+  - reticle colour
 - **Audio:** master, effects and music volume. Sound starts after your first click.
+  - **Visualize sound effects** (on by default): markers around the middle of the screen show where footsteps, gunfire, explosions, chests and cars are
 
 ## Checks
 ```bash

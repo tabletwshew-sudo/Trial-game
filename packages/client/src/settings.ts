@@ -32,6 +32,10 @@ export interface Settings {
   /** Toggle aim only for scoped weapons (DMR, sniper). */
   toggleScope: boolean;
   colorMode: ColorMode;
+  /** Reticle colour (CSS colour). */
+  reticleColor: string;
+  /** Show where sounds come from (footsteps, gunfire, chests...) as markers on screen. */
+  visualSound: boolean;
   master: number; effects: number; music: number; // 0..1
   hudScale: number;      // 0.6 .. 1.2: size of the in-game HUD
   keys: Record<Action, string>;
@@ -39,7 +43,7 @@ export interface Settings {
 
 const DEFAULTS: Settings = {
   sensitivity: 1, adsMul: 0.7, scopeMul: 0.55, invertY: false, fov: 75, graphics: 'auto', graphicsV: 2, showFps: false,
-  autoSprint: false, toggleAds: false, toggleScope: false, colorMode: 'normal', master: 0.8, effects: 0.9, music: 0.6, hudScale: 0.8, keys: { ...DEFAULT_KEYS },
+  autoSprint: false, toggleAds: false, toggleScope: false, colorMode: 'normal', reticleColor: '#ffffff', visualSound: true, master: 0.8, effects: 0.9, music: 0.6, hudScale: 0.8, keys: { ...DEFAULT_KEYS },
 };
 
 const KEY = 'dz.settings';
@@ -125,11 +129,13 @@ export function settingsPanel(onClose: () => void): HTMLElement {
       toggle('Show FPS', 'showFps'),
       choice('Colour-blind mode', 'colorMode', [['normal', 'OFF'], ['deuteranopia', 'DEUTER.'], ['protanopia', 'PROTAN.'], ['tritanopia', 'TRITAN.']], 'Changes rarity and team colours'),
       h('div.swatches', ...[0, 1, 2, 3, 4].map((r) => h('span', { style: { background: rarityColor(r) } }, ['C', 'U', 'R', 'E', 'L'][r]))),
+      choice('Reticle colour', 'reticleColor', [['#ffffff', 'WHITE'], ['#ffe14d', 'YELLOW'], ['#5dff7a', 'GREEN'], ['#4df3ff', 'CYAN'], ['#ff6bd6', 'PINK']]),
     );
     if (tab === 'audio') body.replaceChildren(
       slider('Master volume', 'master', 0, 1, 0.01, (v) => `${Math.round(v * 100)}%`),
       slider('Effects', 'effects', 0, 1, 0.01, (v) => `${Math.round(v * 100)}%`),
       slider('Music', 'music', 0, 1, 0.01, (v) => `${Math.round(v * 100)}%`),
+      toggle('Visualize sound effects', 'visualSound', 'Markers around the middle of the screen show where footsteps, gunfire, explosions, chests and cars are'),
     );
     if (tab === 'keys') {
       const rows = (Object.keys(ACTION_LABELS) as Action[]).map((a) => {

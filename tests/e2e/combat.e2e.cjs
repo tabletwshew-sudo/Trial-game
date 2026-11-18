@@ -21,6 +21,9 @@ const K = { F: 1, SPRINT: 32, FIRE: 128, ADS: 256, USE: 1024 };
   // count hit markers / damage numbers as they appear
   await p.evaluate(() => { window.__hits = 0; window.__nums = 0; new MutationObserver((ms) => { for (const m of ms) for (const n of m.addedNodes) if (n.classList?.contains('dnum')) window.__nums++; }).observe(document.querySelector('.dmg-nums'), { childList: true }); new MutationObserver(() => { if (document.querySelector('.hitmark.show')) window.__hits++; }).observe(document.querySelector('.hitmark'), { attributes: true }); });
   await p.waitForTimeout(800); await shot('30-holding-weapon');
+  // the reticle takes the held weapon's shape; the sound-marker layer is there
+  log.reticle = await p.$eval('.reticle', (e) => e.dataset.shape || '');
+  log.soundLayer = !!(await p.$('.soundviz'));
 
   // ---- shoot the nearest bot (walk up close first so every gun is in range)
   const aimAtNearest = () => p.evaluate(() => {
@@ -123,6 +126,6 @@ const K = { F: 1, SPRINT: 32, FIRE: 128, ADS: 256, USE: 1024 };
   log.errs = errs;
   console.log(JSON.stringify(log, null, 1));
   await b.close();
-  const ok = log.hits > 0 && log.chestOpened && log.chestLoot >= 2 && log.invAfter >= log.invBefore && log.slotAfterKey2 === 1 && Number(log.droveMetres) > 5 && !errs.length;
+  const ok = log.hits > 0 && ['rifle', 'shotgun', 'sniper', 'launcher'].includes(log.reticle) && log.soundLayer && log.chestOpened && log.chestLoot >= 2 && log.invAfter >= log.invBefore && log.slotAfterKey2 === 1 && Number(log.droveMetres) > 5 && !errs.length;
   if (!ok) { console.error('FAIL: expectations not met'); process.exit(2); }
 })().catch((e) => { console.error('FAIL', e.message); process.exit(1); });

@@ -198,8 +198,9 @@ export function lobbyScreen(net: Net, you: UserView, onSignOut: () => void, onMa
       ['⛏', 'Pickaxe: F to swing, smash walls and furniture'],
       ['◈', 'Gold: spend it at the pirate merchants on the coast'],
       ['⬢', 'Overshield: 50 extra that refills out of combat'],
-      ['⌂', 'Bigger towns, an upstairs in every building, hamlets on the roads'],
-      ['⇄', 'Tab opens your inventory; rebind fire and aim in Settings'],
+      ['⌂', 'Bigger towns, upstairs everywhere; walls break a panel at a time'],
+      ['◎', 'New reticle for every weapon type: it grows with your spread'],
+      ['◉', 'Sound markers show footsteps, gunfire and chests around you (Settings → Audio)'],
     ];
     return h('div.news-card', h('div.news-title', "WHAT'S NEW"), ...items.map(([i, t]) => h('div.news-row', h('span', i), h('small', t))));
   }

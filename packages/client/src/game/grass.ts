@@ -73,6 +73,8 @@ function grassMaterial(radius: { value: number }, inner: { value: number }, key:
         float d = distance(root.xz, cameraPosition.xz);
         // grow in past the inner edge (where the near ring stops), shrink away at the outer edge
         transformed *= smoothstep(uR, uR * 0.78, d) * smoothstep(uR0 * 0.85, uR0, d + step(uR0, 0.01) * 1e4);
+        // and out of the way of the camera: clumps right in front of the lens sink into the ground
+        transformed *= smoothstep(1.0, 3.0, distance(root, cameraPosition));
         float h = max(position.y, 0.0);
         float s = sin(uWind * 1.9 + root.x * 0.31 + root.z * 0.23) + 0.5 * sin(uWind * 3.7 + root.x * 0.83 - root.z * 0.61);
         float gust = 0.6 + 0.4 * sin(uWind * 0.45 + root.x * 0.02);
@@ -90,7 +92,7 @@ function grassMaterial(radius: { value: number }, inner: { value: number }, key:
       }
       #include <opaque_fragment>`);
   };
-  m.customProgramCacheKey = () => 'grass3' + key;
+  m.customProgramCacheKey = () => 'grass4' + key;
   return m;
 }
 

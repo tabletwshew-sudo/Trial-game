@@ -26,6 +26,7 @@ import { Post } from './post';
 import { Life } from './life';
 import { audio } from '../audio';
 import { Soundscape } from './soundscape';
+import { SoundViz } from './soundviz';
 import { buildIsland } from './terrain';
 import { pickQuality } from './quality';
 
@@ -185,7 +186,10 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       shop.setOpen(open, merchant, pred?.gold ?? 0);
       if (open) input.unlock(); else if (!hud.menuOpen && !hud.mapOpen && !inv.open) input.lock();
     }
-    root.append(hud.el, combat.el, inv.el, shop.el);
+    // visual sound effects: markers showing where footsteps, gunfire, chests... are coming from
+    const sviz = new SoundViz();
+    audio.onCue = (kind, pos, key, loud) => sviz.add(kind, pos, key ?? null, loud ?? 1);
+    root.append(hud.el, sviz.el, combat.el, inv.el, shop.el);
     function toggleInv(open = !inv.open) {
       if (open && (!pred || pred.mode === PM.Dead || pred.mode === PM.Bus)) return;
       if (open && hud.mapOpen) hud.setMap(false);
@@ -384,6 +388,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
         const from = ch ? ch.muzzleWorld(tmpA, e.weapon).clone() : new THREE.Vector3(e.origin.x, e.origin.y, e.origin.z);
         fx.muzzle(from, def.cls === 'sniper' || def.cls === 'shotgun');
         audio.gun(def.cls, null, true);
+        combat.fired(def.cls === 'sniper' || def.cls === 'shotgun' || def.cls === 'rocket' ? 1.6 : def.cls === 'smg' ? 0.5 : 0.8);
         if (!def.projectile) for (const d of e.dirs) {
           const hit = raycastWorld(world, e.origin, d, def.range);
           tmpB.set(e.origin.x + d.x * hit.t, e.origin.y + d.y * hit.t, e.origin.z + d.z * hit.t);
@@ -662,6 +667,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
         ship: shipActive ? { x: shipX, y: shipY, z: shipZ } : null,
         storm: storm.state, warmupLeft: (warmupEndsAt - serverNow) / 1000,
       });
+      sviz.update(dt, camPos, debugCam ? debugCam.yaw : camYaw, settings.visualSound);
       lootR.update(dt, time, camPos);
       chestR.update(dt, time, camPos, serverNow);
       cars.update(dt, rt, carOverride, camPos);
@@ -773,7 +779,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       drop: () => (net as unknown as { ws: WebSocket | null }).ws?.close(),
       self: selfIdx, roster, actors: actors.states,
       get pred() { return pred; }, loot: lootR, cars, fx, world, chests: chestR, combat, storm,
-      scene, renderer, shop,
+      scene, renderer, shop, sviz,
       /** Run game events through the real handler (screenshots / tests). */
       events: (ev: GameEvent[]) => ev.forEach(onEvent),
       get perf() { return { ...perf, ratio: pixelRatio, w: renderer.domElement.width, h: renderer.domElement.height, programs: renderer.info.programs?.length ?? 0, geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures }; },
@@ -788,7 +794,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
         input.dispose(); actors.dispose(); lootR.clear(); offSettings();
         scene.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh || (o as THREE.InstancedMesh).isInstancedMesh) m.geometry?.dispose(); });
         post.dispose(); renderer.dispose(); renderer.domElement.remove();
-        audio.stopLoops(); audio.muffle(false); audio.setMusic(null);
+        audio.stopLoops(); audio.muffle(false); audio.setMusic(null); audio.onCue = null; sviz.clear();
         delete (window as any).__dz;
       },
     };

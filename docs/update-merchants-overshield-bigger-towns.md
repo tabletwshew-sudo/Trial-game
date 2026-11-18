@@ -21,12 +21,42 @@ All of this is original to Dropzone. Nothing is copied from another game, includ
 ## Pickaxe and breakable walls
 - **Slower swing:** about 1.1 swings a second (it was 1.8). It does 20 damage to players.
 - **Breaking things:** each swing does 75 damage to a wall or a piece of furniture.
-  - Inside walls take 150 (2 swings), outside walls 300 (4 swings), furniture 100.
+  - Outside walls are built from panels about one storey high and 4 m wide, and each panel breaks on its own. Three swings knock a hole in the side of a house, not the whole side.
+  - An outside panel takes 225 (3 swings), an inside wall 150 (2 swings), furniture 100.
   - Explosions damage them too. A small bar shows how much is left of the thing you're hitting.
 - **What breaking does:** a broken piece crumbles with debris and a crash, for everyone in the match.
   - People and bullets go through the gap afterwards.
   - Players who join late see the same holes.
 - **What can't break:** vault doors, the ground, rocks and trees.
+
+## Reticle
+- **Shape by weapon:** the reticle in the middle of the screen changes with what you're holding:
+  - **Pistol, SMG, rifles and DMR:** four ticks around a dot.
+  - **Shotguns:** a circle the size of the pellet spread, with four notches.
+  - **Sniper (hip fire):** four long ticks and a small ring. Scoping in shows the scope instead.
+  - **Launcher:** two brackets either side of the dot.
+  - **Pickaxe:** a small ring.
+  - **Heals, grenades or empty hands:** just a dot.
+- **True spread:** its size is your weapon's real spread right now. It widens when you move, jump or slide, and while you keep firing. It tightens when you aim or crouch, and kicks out a little with each shot.
+- **Hit marker:** four short strokes pop out around the reticle. They're gold for a headshot and red for a knock.
+- **Colour:** white by default, with yellow, green, cyan and pink in Settings → Video.
+
+## Visual sound effects
+- **Markers:** markers on a ring around the middle of the screen point at what you can hear.
+  - **Footsteps:** white.
+  - **Gunfire:** red.
+  - **Explosions:** orange.
+  - **Chests, supply drops and vaults:** gold.
+  - **Cars:** blue.
+  - **Pickaxe hits and breaking walls:** grey.
+  - **Gliders:** purple.
+  - **Splashes:** blue.
+- **Reading them:**
+  - Straight ahead is the top of the ring; behind you is the bottom.
+  - Close sounds are bigger and brighter.
+  - An arrow shows when the sound is well above or below you.
+- **Sound off:** they still work with the sound turned down or off.
+- **Switching off:** they're on by default. Turn them off in Settings → Audio → Visualize sound effects.
 
 ## Overshield
 - **What it is:** 50 extra protection on top of your shields. It's shown as its own bar above the shield bar.
@@ -77,6 +107,7 @@ All of this is original to Dropzone. Nothing is copied from another game, includ
   - Tips are lighter and glow when you look toward the sun.
   - Tufts are taller in fields and shorter elsewhere.
   - A second, sparser ring carries the grass out to about twice the distance.
+  - Clumps right in front of the camera sink away, so tall grass never blocks your view.
 - **Render distance:**
   - Trees and forests draw much further out on every quality setting: 560 / 950 / 1400 m (they were 380 / 600 / 900).
   - The haze is lighter.
@@ -92,9 +123,9 @@ All of this is original to Dropzone. Nothing is copied from another game, includ
 ## Tests
 - **New server tests:**
   - The slower pickaxe.
-  - Breaking a wall: you can walk and shoot through the gap afterwards.
+  - Breaking a wall panel: you can shoot through the gap afterwards, and the rest of the wall still stands.
   - Overshield: soaks damage first and refills.
   - Gold: you collect it by walking over it, and buying works only at a stall and only when you can afford it.
   - An elimination pays the 15 gold bounty, and the loser's gold drops where they fell.
 - **Updated tests:** the spawn, squad, car and bot tests were changed for the bigger map.
-- **End-to-end:** the combat test now shoots a bot during warm-up and expects a hit marker but no damage.
+- **End-to-end:** the combat test now shoots a bot during warm-up and expects a hit marker but no damage. It also checks that the reticle takes the gun's shape and that the sound-marker layer is there.

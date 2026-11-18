@@ -1,3 +1,4 @@
+import type { Cue } from './game/soundviz';
 import { settings, onSettings } from './settings';
 
 /**
@@ -133,6 +134,12 @@ export class AudioEngine {
   private music: Music | null = null;
   private wantMusic: string | null = null;
 
+  /**
+   * Told about every sound from somewhere in the world (not your own), before any volume or
+   * mute check, so the on-screen sound markers work even with the sound off.
+   */
+  onCue: ((kind: Cue, pos: V3, key?: string, loud?: number) => void) | null = null;
+
   constructor() {
     onSettings(() => this.applyVolumes());
   }
@@ -246,6 +253,7 @@ export class AudioEngine {
   // ------------------------------------------------------------ weapons
   /** A gunshot. `self` = your own gun (not positional, a touch louder). */
   gun(cls: string, pos: V3 | null, self = false) {
+    if (pos && !self) this.onCue?.(cls === 'rocket' ? 'boom' : 'gun', pos, undefined, cls === 'sniper' || cls === 'shotgun' ? 1 : 0.8);
     const P = GUN[cls] ?? GUN.ar;
     const d = pos ? this.dist(pos) : 0;
     const to = this.dest(self ? null : pos, 9, P.dur + P.tail + 0.4, self);
@@ -291,6 +299,7 @@ export class AudioEngine {
   }
   /** Pickaxe: the swing through the air, a clank off stone or metal, a dull thud on a player. */
   melee(kind: 'swing' | 'wall' | 'flesh' | 'break', pos: V3 | null) {
+    if (pos && kind !== 'swing') this.onCue?.('hit', pos, undefined, kind === 'break' ? 1 : 0.7);
     const to = this.dest(pos, 4, 1.0); if (!to) return;
     const t = this.ctx!.currentTime, j = 0.9 + Math.random() * 0.2;
     if (kind === 'swing') this.noise(to, t, 0.22, 0.28, 'bandpass', 700 * j, 0.9, 0.06, 2200 * j);
@@ -319,6 +328,7 @@ export class AudioEngine {
     [784, 988, 1319].forEach((f, i) => this.tone(to, t + 0.05 + i * 0.07, 'triangle', f, f, 0.35, 0.18));
   }
   explosion(pos: V3, big = 1) {
+    this.onCue?.('boom', pos, undefined, 1);
     const to = this.dest(pos, 18, 2.2, true); if (!to) return;
     const t = this.ctx!.currentTime, d = this.dist(pos);
     const lp = this.ctx!.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = Math.max(400, 9000 * Math.exp(-d / 160)); lp.connect(to);
@@ -329,6 +339,7 @@ export class AudioEngine {
 
   // ------------------------------------------------------------ movement
   step(pos: V3 | null, surface: Surface, loud = 1) {
+    if (pos) this.onCue?.('step', pos, undefined, Math.min(1, loud));
     const to = this.dest(pos, 3, 0.25); if (!to) return;
     const t = this.ctx!.currentTime, v = 0.3 * loud * (0.8 + Math.random() * 0.4), j = 0.85 + Math.random() * 0.3;
     switch (surface) {
@@ -343,6 +354,7 @@ export class AudioEngine {
   }
   /** Small movement one-shots. */
   move(kind: 'jump' | 'land' | 'slide' | 'mantle' | 'pad' | 'zipgrab' | 'splash' | 'glider', pos: V3 | null, k = 1) {
+    if (pos) this.onCue?.(kind === 'splash' ? 'splash' : kind === 'glider' ? 'glider' : 'step', pos, undefined, kind === 'land' ? Math.min(1, 0.5 + k) : 0.7);
     const to = this.dest(pos, 5, 1.3); if (!to) return;
     const t = this.ctx!.currentTime;
     switch (kind) {
@@ -359,6 +371,7 @@ export class AudioEngine {
 
   // ------------------------------------------------------------ items and the world
   item(kind: 'pickup' | 'ammo' | 'heal' | 'shield' | 'swap' | 'chest' | 'supply' | 'revive' | 'card' | 'vault', pos: V3 | null = null) {
+    if (pos && (kind === 'chest' || kind === 'vault' || kind === 'supply')) this.onCue?.(kind === 'vault' ? 'vault' : 'chest', pos, undefined, 1);
     const to = this.dest(pos, 6, 2); if (!to) return;
     const t = this.ctx!.currentTime;
     switch (kind) {
@@ -402,6 +415,8 @@ export class AudioEngine {
 
   // ------------------------------------------------------------ loops (kept alive by calling every frame)
   loop(key: string, kind: LoopKind, vol: number, param?: number, pos?: V3) {
+    // cars and chests nearby keep a marker up while you can hear them (not the dropship overhead)
+    if (pos && key !== 'ship' && (kind === 'engine' || kind === 'hum')) this.onCue?.(kind === 'engine' ? 'car' : 'chest', pos, key, Math.min(1, vol * 2.2));
     if (!this.on) return;
     let l = this.loops.get(key);
     if (!l) { if (vol < 0.005) return; l = new Loop(this, kind, !!pos); this.loops.set(key, l); }

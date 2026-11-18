@@ -5,6 +5,7 @@ import {
 import { h } from '../ui/dom';
 import { itemIconSvg } from '../ui/icons';
 import { keyName, settings } from '../settings';
+import { Reticle, hitMarkerSvg, shapeFor } from './reticle';
 
 /** Short labels for the hotbar tiles. */
 const SHORT: Record<number, string> = {};
@@ -42,8 +43,8 @@ export class CombatHud {
   private slots: { tile: HTMLElement; name: HTMLElement; count: HTMLElement; icon: HTMLElement; id: number }[] = [];
   private pickKey = h('span.s-key');
   private ammoEl = h('div.ammo');
-  private cross = h('div.xhair');
-  private hit = h('div.hitmark');
+  private reticle = new Reticle();
+  private hit = h('div.hitmark', { html: hitMarkerSvg() });
   private prompt = h('div.prompt');
   private ring = h('div.progress');
   private ringLabel = h('span');
@@ -96,12 +97,15 @@ export class CombatHud {
     this.ring.append(this.ringLabel);
     this.el = h('div.combat',
       this.vignette, this.scope, this.dirs, this.nums,
-      this.cross, this.hit, this.prompt, this.ring, this.center, this.knocked,
+      this.reticle.el, this.hit, this.prompt, this.ring, this.center, this.knocked,
       h('div.bottom-left', bars), h('div.bottom-right', this.ammoEl, hotbar),
       this.feed, this.killsEl, this.goldEl, this.specEl, this.bossEl, this.cardsEl, this.structEl, this.deathEl, this.resultEl);
   }
 
   // ------------------------------------------------------------ events
+  /** You fired: the reticle kicks out a little. */
+  fired(amount = 1) { this.reticle.fired(amount); }
+
   hitMarker(head: boolean, knockout = false) {
     this.hit.className = 'hitmark show' + (head ? ' head' : '') + (knockout ? ' ko' : '');
     this.hitTimer = 0.18;
@@ -255,10 +259,12 @@ export class CombatHud {
       this.ammoEl.style.display = '';
     } else this.ammoEl.style.display = 'none';
 
-    // crosshair: four ticks pushed out by the current spread
-    const px = Math.max(3, (Math.tan(v.spread) / Math.tan((v.fov * Math.PI) / 360)) * (innerHeight / 2));
-    this.cross.style.setProperty('--gap', `${Math.min(80, px)}px`);
-    this.cross.classList.toggle('hide', dead || knocked || !w || v.scoped || s.mode === PM.Drive || s.mode === PM.Bus || s.mode === PM.Fall || s.mode === PM.Glide);
+    // reticle: its shape follows what you're holding, its size the weapon's spread right now
+    // (the spread cone's radius on screen, in CSS pixels, so it matches the 3D view)
+    const px = (Math.tan(v.spread) / Math.tan((v.fov * Math.PI) / 360)) * (innerHeight / 2);
+    const melee = s.slot === PICK_SLOT;
+    this.reticle.update(dt, shapeFor(w?.cls ?? null, melee), w ? px : 0, settings.reticleColor,
+      dead || knocked || v.scoped || s.mode === PM.Drive || s.mode === PM.Bus || s.mode === PM.Fall || s.mode === PM.Glide);
     this.scope.classList.toggle('show', v.scoped);
 
     // hit marker fade
