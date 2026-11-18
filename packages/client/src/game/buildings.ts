@@ -170,17 +170,18 @@ function addWindows(g: GeoBuilder, gi: GeoBuilder, glass: GeoBuilder, o: Solid, 
   const len = a1 - a0;
   const big = L.type === 'hall';
   const spacing = big ? 5 : L.b.kind === 'city' ? 2.6 : 3.1;
-  const n = Math.floor((len - 1.2) / spacing);
+  const ww = big ? 2.2 : Math.min(1.5, spacing * 0.5);
+  // at least one window on any wall panel wide enough for it
+  const n = Math.max(len >= ww + 0.9 ? 1 : 0, Math.floor((len - 1.2) / spacing));
   if (n < 1) return;
   const at = (a: number, y: number, off: number, side: number): [number, number, number] =>
     alongX ? [a, y, (side > 0 ? outer : inner) + fz * off * side] : [(side > 0 ? outer : inner) + fx * off * side, y, a];
   for (const st of storeys) {
     for (let i = 0; i < n; i++) {
       const mid = a0 + (len - (n - 1) * spacing) / 2 + i * spacing;
-      const ww = big ? 2.2 : Math.min(1.5, spacing * 0.5);
       const wy0 = st.y + (big ? st.h - 1.8 : 1.05), wy1 = st.y + (big ? st.h - 0.6 : Math.min(st.h - 0.5, 2.45));
       if (wy1 - wy0 < 0.6) continue;
-      const r = hash2(L.b.style + i * 7, Math.round(st.y * 10), 3);
+      const r = hash2(L.b.style + Math.round(mid * 3), Math.round(st.y * 10), 3); // (by position: each panel's windows differ)
       if (!big && L.b.kind !== 'city' && r < 0.1) continue;
       const lit = r > 0.86 ? '#ffe9a3' : r > 0.45 ? '#9ad7ee' : '#78c0dc';
       for (const side of [1, -1]) {
@@ -319,7 +320,8 @@ export function buildBuildingMeshes(w: World, group: THREE.Group): BreakRanges {
       for (const o of solids) {
         const a = mark();
         addSolidOutline(g, gi, o, p, L);
-        if (o.k === SK.Wall && !o.inner && o.y0 <= b.fy + 0.01) addWindows(g, gi, glass, o, L, p, storeys);
+        // outside wall panels: windows for the storey (or storeys) the panel covers
+        if (o.k === SK.Wall && !o.inner) { const own = storeys.filter((st) => st.y >= o.y0 - 0.01 && st.y < o.y1 - 0.5); if (own.length) addWindows(g, gi, glass, o, L, p, own); }
         if (o.k === SK.Block) for (const face of [0, 1, 2, 3]) {
           const fake: Solid = { ...o, k: SK.Wall, face };
           const n = Math.floor((o.y1 - o.y0) / 3.4);

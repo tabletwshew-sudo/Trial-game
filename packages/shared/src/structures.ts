@@ -30,9 +30,12 @@ export interface Solid {
  * How much punishment a piece can take before it breaks (0 = unbreakable). Building walls
  * and furniture break; floors, stairs, roofs, the ground, rocks, trunks and vault bunkers don't.
  */
+/** How wide the panels of an outside wall are (roughly): each one breaks on its own. */
+export const WALL_PANEL = 4;
+
 export function structureHp(o: Solid): number {
   if (o.vault !== undefined || !o.b || o.b.shape !== 0) return 0;
-  if (o.k === SK.Wall) return o.inner ? 150 : 300;
+  if (o.k === SK.Wall) return o.inner ? 150 : 225; // pickaxe: 2 swings for an inside wall, 3 for an outside panel
   if (o.k === SK.Furn) return 100;
   return 0;
 }
@@ -135,18 +138,32 @@ export function genLayout(w: World, b: Box, out: Solid[]): Layout {
   const back = type === 'hall' || type === 'tower' || D >= 8.5;
   const backW = type === 'hall' ? 1.8 : 1.6, backH = 2.3;
 
+  // Outside walls come in panels about a storey high and ~4 m wide, so breaking one knocks a
+  // hole in the side of a building instead of taking the whole side away.
+  const wall = (r: { x0: number; z0: number; x1: number; z1: number }, y0: number, yTop: number, face: number) => {
+    const alongX = r.x1 - r.x0 >= r.z1 - r.z0;
+    const len = alongX ? r.x1 - r.x0 : r.z1 - r.z0;
+    const n = Math.max(1, Math.round(len / WALL_PANEL));
+    const cuts = [y0, ...L.floors.slice(1).filter((y) => y > y0 + 0.3 && y < yTop - 0.3), yTop];
+    for (let i = 0; i < n; i++) {
+      const a = alongX ? r.x0 : r.z0, d = len / n;
+      const u0 = a + d * i, u1 = i === n - 1 ? (alongX ? r.x1 : r.z1) : a + d * (i + 1);
+      const piece = alongX ? { x0: u0, x1: u1, z0: r.z0, z1: r.z1 } : { x0: r.x0, x1: r.x1, z0: u0, z1: u1 };
+      for (let k = 0; k + 1 < cuts.length; k++) add(piece, cuts[k], cuts[k + 1], SK.Wall, { face });
+    }
+  };
   // a wall along the front (v = 0..T) or back (v = D-T..D) with an opening at the middle
   const wallWithDoor = (v0: number, v1: number, face: number, dw: number, dh: number | 0) => {
     const c = W / 2;
-    if (!dh) { add(rect(F, 0, W, v0, v1), fy, top, SK.Wall, { face }); return; }
-    add(rect(F, 0, c - dw / 2, v0, v1), fy, top, SK.Wall, { face });
-    add(rect(F, c + dw / 2, W, v0, v1), fy, top, SK.Wall, { face });
-    add(rect(F, c - dw / 2, c + dw / 2, v0, v1), fy + dh, top, SK.Wall, { face });
+    if (!dh) { wall(rect(F, 0, W, v0, v1), fy, top, face); return; }
+    wall(rect(F, 0, c - dw / 2, v0, v1), fy, top, face);
+    wall(rect(F, c + dw / 2, W, v0, v1), fy, top, face);
+    wall(rect(F, c - dw / 2, c + dw / 2, v0, v1), fy + dh, top, face);
   };
   wallWithDoor(0, T, faceFront(F), doorW, doorH);
   wallWithDoor(D - T, D, faceBack(F), backW, back ? backH : 0);
-  add(rect(F, 0, T, T, D - T), fy, top, SK.Wall, { face: faceLeft(F) });
-  add(rect(F, W - T, W, T, D - T), fy, top, SK.Wall, { face: faceRight(F) });
+  wall(rect(F, 0, T, T, D - T), fy, top, faceLeft(F));
+  wall(rect(F, W - T, W, T, D - T), fy, top, faceRight(F));
 
   const mkDoor = (u: number, vOut: number, vIn: number, wv: number, hv: number, face: number, vWall: number) => {
     const [x, z] = localToWorld(F, u, vOut), [ix, iz] = localToWorld(F, u, vIn), [cx, cz] = localToWorld(F, u, vWall);

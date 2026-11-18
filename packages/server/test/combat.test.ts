@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ACT, ITEM, K, MV, PICK_SLOT, PM, SK, aimOrigin, merchantStock, decodeSnapshot, encodeInputs, makeStormPlan, raycastWorld, surfaceAt, weaponDef, type InputCmd, type ServerMsg, type Snapshot } from '@dropzone/shared';
+import { ACT, ITEM, K, MV, PICK_SLOT, PM, SK, aimOrigin, clearColumn, merchantStock, decodeSnapshot, encodeInputs, makeStormPlan, raycastWorld, surfaceAt, weaponDef, type InputCmd, type ServerMsg, type Snapshot } from '@dropzone/shared';
 import { MatchInstance, type Sock } from '../src/game/match';
 import type { Match } from '../src/hub';
 
@@ -77,11 +77,12 @@ describe('pickaxe', () => {
     for (let i = 0; i < 40; i++) { c.send(g.inst, a.id, { keys: K.FIRE, yaw: Math.PI, pitch: 0 }); g.step(); }
     expect(b.s.hp).toBe(before);
   });
-  it('four pickaxe hits break an outside wall for everyone; then shots go through the gap', () => {
+  it('three pickaxe hits break a panel of an outside wall for everyone; then shots go through the gap', () => {
     const g = inPlay([1, 1, 1, 1, 1, 1, 1, 1], [0, 1], 'solo');
     const w = g.inst.world;
-    const wall = w.solids.find((o) => o.k === SK.Wall && !o.inner && o.face === 1 && o.b && o.z1 - o.z0 >= 4 && o.y0 <= o.b.fy + 0.05 && o.y1 >= o.b.fy + 2.6
-      && Math.abs(surfaceAt(w, o.x0 - 0.42, (o.z0 + o.z1) / 2, o.b.fy + 1) - o.b.fy) < 0.3)!;
+    // a ground-floor panel of a two-storey building
+    const wall = w.solids.find((o) => o.k === SK.Wall && !o.inner && o.face === 1 && o.b && o.z1 - o.z0 >= 3 && o.y0 <= o.b.fy + 0.05 && o.y1 >= o.b.fy + 2.6 && o.y1 < o.b.y1 - 1
+      && Math.abs(surfaceAt(w, o.x0 - 0.42, (o.z0 + o.z1) / 2, o.b.fy + 1) - o.b.fy) < 0.3 && clearColumn(w, o.x0 - 0.42, (o.z0 + o.z1) / 2, o.b.fy + 0.1, o.b.fy + 1.8, 0.38))!;
     const a = g.inst.players[0], c = g.clients.get(a.id)!, watcher = g.clients.get(g.inst.players[1].id)!;
     const z = (wall.z0 + wall.z1) / 2;
     g.place(a.idx, wall.x0 - 0.42, z, -Math.PI / 2); a.s.y = surfaceAt(w, a.s.x, a.s.z, wall.b!.fy + 1); // facing +x, into the wall
@@ -90,15 +91,18 @@ describe('pickaxe', () => {
     expect(through()).toBe('building');
     for (let i = 0; i < 280 && !w.broken!.has(wall.id!); i++) { c.send(g.inst, a.id, { keys: K.FIRE, yaw: -Math.PI / 2, pitch: 0 }); g.step(); }
     expect(w.broken!.has(wall.id!)).toBe(true);
-    expect(c.events().filter((e) => e.e === 'struct').length).toBeGreaterThanOrEqual(4);
+    expect(c.events().filter((e) => e.e === 'struct').length).toBeGreaterThanOrEqual(3);
+    // only that panel: the wall carries on above it and beside it
+    const rest = w.solids.filter((o) => o.b === wall.b && o.k === SK.Wall && o.face === wall.face && o.id !== wall.id && !w.broken!.has(o.id!));
+    expect(rest.some((o) => o.y0 >= wall.y1 - 0.01 || o.z0 >= wall.z1 - 0.01 || o.z1 <= wall.z0 + 0.01)).toBe(true);
     expect(watcher.events().some((e) => e.e === 'broke' && e.id === wall.id)).toBe(true);
     expect(through()).not.toBe('building');
   });
   it('a pickaxe cannot hit through a wall', () => {
     const g = inPlay([1, 1, 1, 1, 1, 1, 1, 1], [0, 1], 'solo');
     const w = g.inst.world;
-    const wall = w.solids.find((o) => o.k === SK.Wall && !o.inner && o.face === 1 && o.b && o.z1 - o.z0 >= 4 && o.y0 <= o.b.fy + 0.05 && o.y1 >= o.b.fy + 2.6
-      && Math.abs(surfaceAt(w, o.x0 - 0.42, (o.z0 + o.z1) / 2, o.b.fy + 1) - o.b.fy) < 0.3 && Math.abs(surfaceAt(w, o.x1 + 0.5, (o.z0 + o.z1) / 2, o.b.fy + 3) - o.b.fy) < 0.8)!;
+    const wall = w.solids.find((o) => o.k === SK.Wall && !o.inner && o.face === 1 && o.b && o.z1 - o.z0 >= 3 && o.y0 <= o.b.fy + 0.05 && o.y1 >= o.b.fy + 2.6
+      && Math.abs(surfaceAt(w, o.x0 - 0.42, (o.z0 + o.z1) / 2, o.b.fy + 1) - o.b.fy) < 0.3 && clearColumn(w, o.x0 - 0.42, (o.z0 + o.z1) / 2, o.b.fy + 0.1, o.b.fy + 1.8, 0.38) && Math.abs(surfaceAt(w, o.x1 + 0.5, (o.z0 + o.z1) / 2, o.b.fy + 3) - o.b.fy) < 0.8)!;
     const [a, b] = [g.inst.players[0], g.inst.players[1]];
     const z = (wall.z0 + wall.z1) / 2;
     g.place(a.idx, wall.x0 - 0.42, z, -Math.PI / 2); a.s.y = surfaceAt(w, a.s.x, a.s.z, wall.b!.fy + 1); // facing +x, into the wall
@@ -184,8 +188,8 @@ describe('shooting', () => {
   it('a shoulder against a wall cannot shoot someone on the other side', () => {
     const g = inPlay([1, 1, 1, 1, 1, 1, 1, 1], [0, 1], 'solo');
     const w = g.inst.world;
-    const wall = w.solids.find((o) => o.k === SK.Wall && !o.inner && o.face === 1 && o.b && o.z1 - o.z0 >= 7 && o.y0 <= o.b.fy + 0.05 && o.y1 >= o.b.fy + 2.6
-      && Math.abs(surfaceAt(w, o.x0 - 0.42, o.z1 - 1.2, o.b.fy + 1) - o.b.fy) < 0.3 && Math.abs(surfaceAt(w, o.x1 + 1.2, o.z1 - 6.2, o.b.fy + 3) - o.b.fy) < 1.2)!;
+    const wall = w.solids.find((o) => o.k === SK.Wall && !o.inner && o.face === 1 && o.b && o.z1 - o.z0 >= 3.5 && o.y0 <= o.b.fy + 0.05 && o.y1 >= o.b.fy + 2.6
+      && Math.abs(surfaceAt(w, o.x0 - 0.42, o.z1 - 1.2, o.b.fy + 1) - o.b.fy) < 0.3 && clearColumn(w, o.x0 - 0.42, o.z1 - 1.2, o.b.fy + 0.1, o.b.fy + 1.8, 0.38) && Math.abs(surfaceAt(w, o.x1 + 1.2, o.z1 - 6.2, o.b.fy + 3) - o.b.fy) < 1.2)!;
     const [a, b] = [g.inst.players[0], g.inst.players[1]];
     g.place(a.idx, wall.x0 - 0.42, wall.z1 - 1.2, 0); // touching the wall
     g.place(b.idx, wall.x1 + 1.2, wall.z1 - 6.2, 0);

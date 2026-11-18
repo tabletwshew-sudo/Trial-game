@@ -47,8 +47,9 @@ export class ShopPanel {
       return h('div.shop-offer', { style: { '--rc': col }, class: afford ? '' : 'poor' },
         h('span.so-icon', { html: itemIconSvg(o.item) }),
         h('div.so-name', h('small', { style: { color: col } }, w ? RARITIES[r].toUpperCase() : (ITEMS[o.item]?.kind ?? '').toUpperCase()),
-          h('b', itemName(o.item, o.r) + (o.n > 1 ? ` ×${o.n}` : '')),
-          w ? h('small', `${Math.round(w.damage * [1, 1.05, 1.1, 1.15, 1.2][o.r])} damage · comes with ammo`) : null),
+          // (weapons: the rarity is on the line above, so just the gun's name)
+          h('b', (w ? w.name : itemName(o.item, o.r)) + (o.n > 1 ? ` ×${o.n}` : '')),
+          w ? h('small', `${Math.round(w.damage * [1, 1.05, 1.1, 1.15, 1.2][o.r])}${w.pellets > 1 ? ` ×${w.pellets}` : ''} damage · comes with ammo`) : null),
         h('button.btn.btn-primary.small.so-buy', { disabled: !afford, onclick: () => this.onBuy(this.merchant, i) },
           h('span', { html: itemIconSvg(ITEM.gold) }), String(o.price)));
     }));

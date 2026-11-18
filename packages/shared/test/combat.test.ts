@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ACT, CAR, ITEM, ITEMS, K, PM, SIM_HZ, SK, SPAWN_ISLAND, addToInventory, aimDir, aimOrigin, shotOrigin, applyDamage, blastDamage, falloff, getWorld, newPlayerState,
+  ACT, CAR, ITEM, ITEMS, K, PM, SIM_HZ, SK, SPAWN_ISLAND, addToInventory, aimDir, aimOrigin, shotOrigin, applyDamage, blastDamage, clearColumn, falloff, getWorld, newPlayerState,
   rayPlayer, raycastWorld, spreadDir, stepCar, stepPlayer, surfaceAt, terrainAt, weaponDef, type InputCmd, type ShotEvent,
 } from '../src/index';
 
@@ -128,15 +128,15 @@ describe('health, shields, items', () => {
 });
 
 /**
- * An outside wall (outside facing +x) at least 7 m long, standing on the ground floor, with a
+ * An outside wall panel (outside facing +x) at least 3.5 m long, standing on the ground floor, with a
  * spot just inside it: standing there facing north puts your right shoulder against the wall.
  */
 export function shoulderToWall() {
   for (const o of w.solids) {
-    if (o.k !== SK.Wall || o.inner || o.face !== 1 || !o.b || o.z1 - o.z0 < 7 || o.y0 > o.b.fy + 0.05 || o.y1 < o.b.fy + 2.6) continue;
+    if (o.k !== SK.Wall || o.inner || o.face !== 1 || !o.b || o.z1 - o.z0 < 3.5 || o.y0 > o.b.fy + 0.05 || o.y1 < o.b.fy + 2.6) continue;
     const x = o.x0 - 0.42, z = o.z1 - 1.2; // touching the wall (player radius)
     const y = surfaceAt(w, x, z, o.b.fy + 1);
-    if (Math.abs(y - o.b.fy) > 0.3) continue;
+    if (Math.abs(y - o.b.fy) > 0.3 || !clearColumn(w, x, z, y + 0.1, y + 1.8, 0.38)) continue; // room to stand (not on the stairs)
     // somewhere open outside, ahead and to the right, on the ground
     const tx = o.x1 + 1.2, tz = z - 5;
     const ty = surfaceAt(w, tx, tz, o.b.fy + 3);

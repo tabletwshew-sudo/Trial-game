@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ITEM, PICK_SLOT, SK, getWorld, mulberry32, newPlayerState, raycastWorld, stepPlayer, surfaceAt,
+  ITEM, PICK_SLOT, SK, clearColumn, getWorld, mulberry32, newPlayerState, raycastWorld, stepPlayer, surfaceAt,
   type InputCmd, type PlayerState, type World,
 } from '@dropzone/shared';
 import { botInput, findCover, newBrain, type BotBrain, type BotTarget, type BotWorld } from '../src/game/bots';
@@ -34,10 +34,10 @@ function run(s: PlayerState, b: BotBrain, bw: BotWorld, clock: { now: number }, 
   }
   return cmds;
 }
-/** An outside wall facing +x with room on both sides (see the shot tests). */
+/** An outside wall panel facing +x with room on both sides (see the shot tests). */
 function wallSpot(world: World) {
-  return world.solids.find((o) => o.k === SK.Wall && !o.inner && o.face === 1 && o.b && o.z1 - o.z0 >= 7 && o.y0 <= o.b.fy + 0.05 && o.y1 >= o.b.fy + 2.6
-    && Math.abs(surfaceAt(world, o.x0 - 0.42, o.z1 - 1.2, o.b.fy + 1) - o.b.fy) < 0.3 && Math.abs(surfaceAt(world, o.x1 + 1.2, o.z1 - 6.2, o.b.fy + 3) - o.b.fy) < 1.2)!;
+  return world.solids.find((o) => o.k === SK.Wall && !o.inner && o.face === 1 && o.b && o.z1 - o.z0 >= 3.5 && o.y0 <= o.b.fy + 0.05 && o.y1 >= o.b.fy + 2.6
+    && Math.abs(surfaceAt(world, o.x0 - 0.42, o.z1 - 1.2, o.b.fy + 1) - o.b.fy) < 0.3 && clearColumn(world, o.x0 - 0.42, o.z1 - 1.2, o.b.fy + 0.1, o.b.fy + 1.8, 0.38) && Math.abs(surfaceAt(world, o.x1 + 1.2, o.z1 - 6.2, o.b.fy + 3) - o.b.fy) < 1.2)!;
 }
 
 describe('bots', () => {
