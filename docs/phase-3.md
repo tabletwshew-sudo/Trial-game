@@ -39,7 +39,7 @@
 - `npm run e2e:match`: one browser plays a whole drop: queue → warm-up → dropship → map marker →
   jump → dive → glide → land → run → leave.
 - `npm run e2e:lobby`: two browsers party up, load into the same match, and see each other move.
-- Start the server for the e2e runs with: `PORT=8099 QUEUE_TIMEOUT_S=2 WARMUP_S=14 npm start`
+- Start the server for the e2e runs with: `PORT=8099 QUEUE_TIMEOUT_S=2 WARMUP_S=22 npm start` (22 s leaves room for loading the island with software rendering)
 
 ## Bugs found and fixed while testing
 - Roads were invisible from above (their surfaces faced downward).

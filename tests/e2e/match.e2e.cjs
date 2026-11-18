@@ -1,5 +1,6 @@
 // End-to-end: guest -> queue -> warm-up island -> dropship -> jump -> glide -> land.
-// Needs the server running with QUEUE_TIMEOUT_S=2 WARMUP_S=14 (see docs/phase-3.md).
+// Needs the server running with QUEUE_TIMEOUT_S=2 WARMUP_S=22 (see docs/phase-3.md): the warm-up has to
+// cover matchmaking and loading the island, which takes ~11 s with software rendering in CI.
 const { chromium } = require('playwright');
 const S = process.argv[2] || 'tests/e2e/out', URL = (process.env.E2E_URL || 'http://localhost:8099/') + (process.env.E2E_Q ? `?q=${process.env.E2E_Q}` : '');
 require('fs').mkdirSync(S, { recursive: true });
@@ -23,10 +24,11 @@ require('fs').mkdirSync(S, { recursive: true });
   await p.evaluate(() => { window.__modes = new Set(); setInterval(() => { const s = window.__dz && window.__dz.state; if (s) window.__modes.add(s.mode); }, 40); });
   const seen = (m) => p.evaluate((m) => window.__modes.has(m), m);
   await p.waitForTimeout(1500); await shot('11-warmup');
+  const before = await st(); // (the first warm-up reading can come before the camera has caught up with you)
   await p.keyboard.down('KeyW'); await p.keyboard.down('ShiftLeft'); await p.waitForTimeout(1500);
   await shot('12-warmup-run');
   const moved = await st(); await p.keyboard.up('KeyW'); await p.keyboard.up('ShiftLeft');
-  log.ranMetres = Math.hypot(moved.x - log.warmup.x, moved.z - log.warmup.z).toFixed(1);
+  log.ranMetres = Math.hypot(moved.x - before.x, moved.z - before.z).toFixed(1);
 
   await until((s) => s.phase === 'bus', 25000, 'bus'); await p.waitForTimeout(2500); await shot('13-dropship');
   await p.keyboard.press('KeyM'); await p.waitForTimeout(600);

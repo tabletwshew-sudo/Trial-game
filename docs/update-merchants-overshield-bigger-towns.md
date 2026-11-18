@@ -129,3 +129,4 @@ All of this is original to Dropzone. Nothing is copied from another game, includ
   - An elimination pays the 15 gold bounty, and the loser's gold drops where they fell.
 - **Updated tests:** the spawn, squad, car and bot tests were changed for the bigger map.
 - **End-to-end:** the combat test now shoots a bot during warm-up and expects a hit marker but no damage. It also checks that the reticle takes the gun's shape and that the sound-marker layer is there.
+- **Match test:** its server now runs a 22 s warm-up, up from 14. With software rendering in the test machine, matchmaking plus loading the island takes about 11 s, which left the old warm-up too tight. It also measures the warm-up run from a fresh reading.
