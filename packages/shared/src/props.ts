@@ -1,3 +1,4 @@
+import { MAP_SCALE } from './world.js';
 import { hash2, mulberry32 } from './noise.js';
 import { SK, boxSolid, type Prop, type Solid, type Spot } from './structures.js';
 import { BRIDGE_Y, ROOF_FLAT, ROOF_GABLE_X, SPAWN_ISLAND, roadEdgeDist, terrainAt, type Ladder, type Poi, type Vault, type World, type Zip } from './world.js';
@@ -373,9 +374,10 @@ export function genProps(w: World, solids: Solid[]): { props: Prop[]; caves: Cav
   // ---------------------------------------------------------------- caves
   const caves: Cave[] = [];
   // hillsides to try, in order (a cave needs level ground at both entrances); up to four caves
-  const candidates: [number, number, number][] = [[-660, -380, 0.6], [700, -300, 1.2], [-470, 560, 4.0], [250, 560, 0.3], [-250, -600, 2.6], [-760, -560, 0.9]];
-  for (const [cx, cz, ang] of candidates) {
+  const candidates: [number, number, number][] = [[-660, -380, 0.6], [700, -300, 1.2], [-470, 560, 4.0], [250, 560, 0.3], [-250, -600, 2.6], [-760, -560, 0.9], [100, -560, 1.4], [-560, 100, 0.2], [560, 150, 2.9], [-120, 760, 1.9], [820, -480, 0.7], [-380, -760, 2.2]];
+  for (const [dcx, dcz, ang] of candidates) {
     if (caves.length >= 4) break;
+    const cx = dcx * MAP_SCALE, cz = dcz * MAP_SCALE;
     let best: Cave | null = null;
     for (let t = 0; t < 240 && !best; t++) {
       const x = cx + (hash2(t, 1, w.seed + 801) - 0.5) * 160, z = cz + (hash2(t, 2, w.seed + 801) - 0.5) * 160;
@@ -393,7 +395,7 @@ export function genProps(w: World, solids: Solid[]): { props: Prop[]; caves: Cav
       if (lo < 4 || hi - lo > 3.5 || sideHi < hi + 1 || roadEdgeDist(w, x, z) < 25 || nearBuilding(x, z, 25) || w.pois.some((p) => Math.hypot(x - p.x, z - p.z) < p.r + 20)) continue;
       // you can walk in and out of both ends: no mesa wall or bank just outside an entrance, and no
       // drop too big for the steps that are built up into a mouth
-      if ([-1, 1].some((sg) => { const g = ground(x + dx * (len / 2 + 4) * sg, z + dz * (len / 2 + 4) * sg); return g > hi + 0.5 || g < hi - 3; })) continue;
+      if ([-1, 1].some((sg) => { const g = ground(x + dx * (len / 2 + 4) * sg, z + dz * (len / 2 + 4) * sg); return g > hi + 0.5 || g < hi - 0.6; })) continue;
       const floor = hi + 0.1, ceil = floor + 4.2;
       best = { x, z, dx, dz, len, width, floor, ceil, chest: { x: 0, y: 0, z: 0, face: 0 }, crystals: [] };
     }
@@ -501,11 +503,11 @@ function genHarbor(w: World, p: Poi, put: (t: string, x: number, z: number, rot:
     if (off > 0) extraChests.push({ x: cx + dx * (len / 2 - 2), y, z: cz + dz * (len / 2 - 2), face: 0 });
   }
   // a lighthouse on the coast a little way along
-  for (let d = 60; d < 200; d += 6) {
+  for (let d = 60; d < 280; d += 6) {
     for (const side of [1, -1]) {
       const x = shore.x + nx * d * side - dx * 4, z = shore.z + nz * d * side - dz * 4;
       const g = terrainAt(w, x, z);
-      if (g < 1.5 || g > 6 || roadEdgeDist(w, x, z) < 6) continue;
+      if (g < 1.5 || g > 14 || roadEdgeDist(w, x, z) < 6) continue;
       put('lighthouse', x, z, 0, 1, { hx: 2.4, hz: 2.4, h: 22 });
       extraChests.push({ x: x + 3.4, y: g, z, face: 1 });
       return;

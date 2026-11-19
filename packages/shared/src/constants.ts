@@ -6,7 +6,7 @@
 
 export const TICK_RATE = 30;
 export const INPUT_RATE = 60;
-export const MAX_PLAYERS = 80;
+export const MAX_PLAYERS = 40;
 
 export type Mode = 'solo' | 'duo' | 'trio' | 'squad';
 export const TEAM_SIZE: Record<Mode, number> = { solo: 1, duo: 2, trio: 3, squad: 4 };
@@ -107,7 +107,7 @@ export const STORM_PHASES: StormPhase[] = [
   { waitS: 5, shrinkS: 30, radiusFrac: 0, dps: 12 },
 ];
 
-export const MAP = { size: 2400, seed: 1337 } as const;
+export const MAP = { size: 2000, seed: 1337 } as const;
 
 /**
  * Redeploy: eliminated players drop back in from the sky after a short countdown. In solo you get

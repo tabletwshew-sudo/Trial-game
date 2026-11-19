@@ -122,12 +122,12 @@ describe('friends -> party -> queue -> match', () => {
     const cFound = await cara.wait<Extract<ServerMsg, { t: 'match_found' }>>((m) => m.t === 'match_found', 5000);
     expect(found.match.matchId).toBe(cFound.match.matchId);
     expect(found.match.yourTeam).toBe(cFound.match.yourTeam);
-    expect(found.match.teams).toHaveLength(20);
+    expect(found.match.teams).toHaveLength(10);
     const myTeam = found.match.teams.find((t) => t.id === found.match.yourTeam)!;
     expect(myTeam.members.filter((m) => !m.bot).map((m) => m.name).sort()).toEqual(['Bob', 'Cara']);
     expect(myTeam.members).toHaveLength(4);
     expect(found.match.humans).toBe(2);
-    expect(found.match.bots).toBe(78);
+    expect(found.match.bots).toBe(38);
 
     // presence shows in match; leaving returns to lobby
     bob.send({ t: 'leave_match' });

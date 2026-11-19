@@ -15,6 +15,8 @@ export const PLAYER_RADIUS = 0.42;
 export const PLAYER_HEIGHT = 1.85;
 export const WORLD_LIMIT = 1900;
 export const SPAWN_ISLAND = { x: -1450, z: -1450, r: 130 };
+/** The island is designed at full size and built at this scale (0.8: about 1.6 km across). */
+export const MAP_SCALE = 0.8;
 /** Roads become bridge decks at this height wherever the ground dips below it (rivers). */
 export const BRIDGE_Y = 1.25;
 
@@ -107,6 +109,7 @@ const ROAD_LINKS: [string, string, ...[number, number][]][] = [
 export interface Biome { autumn: number; blossom: number; badlands: number; flowers: number }
 const REGIONS = { autumn: { x: 700, z: -260, r: 340 }, blossom: { x: -560, z: -320, r: 300 }, badlands: { x: -660, z: 520, r: 260 }, flowers: { x: 440, z: 330, r: 135 } } as const;
 export function biomeAt(x: number, z: number): Biome {
+  x /= MAP_SCALE; z /= MAP_SCALE; // (regions are laid out at full size)
   const k = (c: { x: number; z: number; r: number }) => { const d = Math.hypot(x - c.x, z - c.z); return d >= c.r ? 0 : smooth(c.r, c.r * 0.6, d); };
   return { autumn: k(REGIONS.autumn), blossom: k(REGIONS.blossom), badlands: k(REGIONS.badlands), flowers: k(REGIONS.flowers) };
 }
@@ -222,6 +225,8 @@ const BOX_CELL = 32, ROAD_CELL = 16;
 
 // ------------------------------------------------------------------ terrain
 function rawHeight(x: number, z: number, seed: number, riverPts: Float32Array) {
+  // the landscape is laid out at full size and shrunk to MAP_SCALE (river points too)
+  x /= MAP_SCALE; z /= MAP_SCALE;
   const warp = fbm(x / 420 + 11, z / 420 - 7, seed, 3) - 0.5;
   const bays = fbm(x / 800 - 3, z / 800 + 5, seed + 13, 2) - 0.5;
   const r = Math.sqrt(x * x + z * z) / 1000 + warp * 0.34 + bays * 0.22;
@@ -320,7 +325,7 @@ function genRoads(seed: number, pois: Poi[]): Road[] {
   let k = 0;
   for (const [a, b, ...mids] of ROAD_LINKS) {
     const A = byName.get(a)!, B = byName.get(b)!;
-    const anchors: [number, number][] = [[A.x, A.z], ...mids, [B.x, B.z]];
+    const anchors: [number, number][] = [[A.x, A.z], ...mids.map(([mx, mz]) => [mx * MAP_SCALE, mz * MAP_SCALE] as [number, number]), [B.x, B.z]];
     const ctrl: [number, number][] = [];
     for (let i = 0; i < anchors.length - 1; i++) {
       const [ax, az] = anchors[i], [bx, bz] = anchors[i + 1];
@@ -705,13 +710,14 @@ export function getWorld(seed: number = MAP.seed): World {
   let w = cache.get(seed);
   if (w) return w;
   // places are a fifth bigger than they were drawn (Stillwater Camp keeps its size: it sits close to Brickwell)
-  const pois: Poi[] = POI_DEFS.map((p, id) => ({ ...p, id, h: 0, r: Math.round(p.r * (p.name === 'Stillwater Camp' ? 1 : p.name === 'Brickwell' ? 1.15 : 1.22)) }));
-  const river = smoothPath(RIVER, 30);
+  // the island is shrunk to MAP_SCALE: places keep their size and sit closer together
+  const pois: Poi[] = POI_DEFS.map((p, id) => ({ ...p, x: p.x * MAP_SCALE, z: p.z * MAP_SCALE, id, h: 0, r: Math.round(p.r * (p.name === 'Stillwater Camp' ? 1 : p.name === 'Brickwell' ? 1.15 : 1.22)) }));
+  const riverDesign = smoothPath(RIVER, 30), river = riverDesign.map((v) => v * MAP_SCALE);
   const roads = genRoads(seed, pois);
   pois.push(...genHamlets(seed, pois, roads, river));
   w = {
     seed, pois, roads, river,
-    main: genMain(seed, pois, river),
+    main: genMain(seed, pois, riverDesign),
     spawn: genSpawn(seed),
     boxes: [], boxGrid: new Map(), roadGrid: buildRoadGrid(roads),
     layouts: [], solids: [], solidGrid: new Map(), props: [], caves: [], outdoorChests: [], scatter: [], beacons: [], vaults: [], ladders: [], zips: [], pads: [], merchants: [],

@@ -195,7 +195,7 @@ describe('cars', () => {
   const road = w.roads.find((r) => !r.street)!;
   it('accelerates along a road, steers, and brakes', () => {
     // start somewhere along the road with no buildings in the way (places grow and move as the map changes)
-    const clearAt = (k: number) => !w.boxes.some((b) => Math.hypot((b.x0 + b.x1) / 2 - road.pts[k], (b.z0 + b.z1) / 2 - road.pts[k + 1]) < 80)
+    const clearAt = (k: number) => !w.boxes.some((b) => Math.hypot((b.x0 + b.x1) / 2 - road.pts[k], (b.z0 + b.z1) / 2 - road.pts[k + 1]) < 30)
       && [0, 4, 8, 12].every((o) => k + o + 1 < road.pts.length && terrainAt(w, road.pts[k + o], road.pts[k + o + 1]) > 3);
     let k = 40;
     while (k + 14 < road.pts.length && !clearAt(k)) k += 2;

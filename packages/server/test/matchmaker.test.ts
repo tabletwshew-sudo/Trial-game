@@ -45,13 +45,13 @@ describe('tryFormMatch', () => {
     expect(form([party('squad', 2)], 'squad', 30_000)).not.toBeNull();
   });
 
-  it('two real squads -> 18 bot squads, 80 total', () => {
+  it('two real squads -> 8 bot squads, 40 total', () => {
     const m = form([party('squad', 4), party('squad', 4)], 'squad')!;
-    expect(m.teams).toHaveLength(20);
+    expect(m.teams).toHaveLength(10);
     expect(sizes(m).every((s) => s === 4)).toBe(true);
     expect(m.humans).toBe(8);
-    expect(m.bots).toBe(72);
-    expect(m.teams.filter((t) => humansIn(t) === 0)).toHaveLength(18);
+    expect(m.bots).toBe(32);
+    expect(m.teams.filter((t) => humansIn(t) === 0)).toHaveLength(8);
   });
 
   it('solo filling squads gets 3 bot teammates', () => {
@@ -72,28 +72,28 @@ describe('tryFormMatch', () => {
   it('no-fill duo in squads plays short-handed', () => {
     const m = form([party('squad', 2, false)], 'squad')!;
     expect(m.teams.find((t) => humansIn(t) === 2)!.members).toHaveLength(2);
-    expect(m.teams).toHaveLength(20);
+    expect(m.teams).toHaveLength(10);
   });
 
-  it('trios hold 78 players in 26 teams', () => {
+  it('trios hold 39 players in 13 teams', () => {
     const m = form([party('trio', 3)], 'trio')!;
-    expect(m.teams).toHaveLength(26);
-    expect(m.humans + m.bots).toBe(78);
+    expect(m.teams).toHaveLength(13);
+    expect(m.humans + m.bots).toBe(39);
   });
 
-  it('solos: 80 teams of one', () => {
+  it('solos: 40 teams of one', () => {
     const m = form([party('solo', 1), party('solo', 1)], 'solo')!;
-    expect(m.teams).toHaveLength(80);
-    expect(m.humans + m.bots).toBe(80);
+    expect(m.teams).toHaveLength(40);
+    expect(m.humans + m.bots).toBe(40);
   });
 
   it('forms immediately when humans fill the lobby, overflow stays queued', () => {
     const q = Array.from({ length: 81 }, (_, i) => party('solo', 1, true, i));
     const m = tryFormMatch(q, 'solo', 100, 30, names)!; // well before timeout
     expect(m).not.toBeNull();
-    expect(m.humans).toBe(80);
+    expect(m.humans).toBe(40);
     expect(m.bots).toBe(0);
-    expect(m.partyIds).not.toContain(q[80].partyId); // last in line waits
+    expect(m.partyIds).not.toContain(q[40].partyId); // last in line waits
   });
 
   it('ignores other modes and oversized parties', () => {

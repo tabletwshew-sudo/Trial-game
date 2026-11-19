@@ -17,12 +17,12 @@ describe('constants sanity', () => {
     expect(MOVEMENT.walkSpeed).toBeLessThan(MOVEMENT.sprintSpeed);
     expect(MOVEMENT.hurdleMaxHeight).toBeLessThan(MOVEMENT.mantleMaxHeight);
   });
-  it('match capacity is full teams and never exceeds 80', () => {
+  it('match capacity is full teams and never exceeds 40', () => {
     for (const mode of Object.keys(TEAM_SIZE) as Mode[]) {
       expect(matchCapacity(mode) % TEAM_SIZE[mode]).toBe(0);
       expect(matchCapacity(mode)).toBeLessThanOrEqual(MAX_PLAYERS);
     }
-    expect(matchCapacity('trio')).toBe(78);
-    expect(matchCapacity('squad')).toBe(80);
+    expect(matchCapacity('trio')).toBe(39);
+    expect(matchCapacity('squad')).toBe(40);
   });
 });

@@ -27,7 +27,7 @@ describe('match instance', () => {
     const c2 = new FakeClient();
     inst.join('h0', c, now); inst.join('h1', c2, now);
     const init = c.msgs.find((m) => m.t === 'game_init');
-    expect(init && init.t === 'game_init' && init.init.players.filter((x) => !x.npc).length).toBe(80);
+    expect(init && init.t === 'game_init' && init.init.players.filter((x) => !x.npc).length).toBe(40);
     expect(init && init.t === 'game_init' && init.init.players.filter((x) => x.npc === 'boss').length).toBe(2);
     expect(inst.players.filter((p) => !p.npc).every((p) => Math.hypot(p.s.x - SPAWN_ISLAND.x, p.s.z - SPAWN_ISLAND.z) < SPAWN_ISLAND.r)).toBe(true); // everyone starts on the warm-up island
 
@@ -39,7 +39,7 @@ describe('match instance', () => {
     for (let i = 0; i < 60; i++) tick(K.F | K.SPRINT);
     expect(me.s.z).toBeLessThan(z0 - 10);
     expect(c.snap!.ack).toBe(c.seq);
-    expect(c.snap!.ents.length).toBe(80); // NPCs stay hidden until the dropship leaves
+    expect(c.snap!.ents.length).toBe(40); // NPCs stay hidden until the dropship leaves
     expect(inst.players.filter((p) => p.bot).some((p) => Math.hypot(p.s.vx, p.s.vz) > 1)).toBe(true);
 
     // dropship
@@ -68,9 +68,9 @@ describe('match instance', () => {
     for (let i = 0; i < 30 * 45; i++) tick(0);
 
     const landed = inst.players.filter((p) => !p.npc && p.s.mode !== PM.Bus && p.s.mode !== PM.Fall && p.s.mode !== PM.Glide);
-    expect(landed.length).toBe(80); // everyone is down (some may already be fighting, knocked or out)
+    expect(landed.length).toBe(40); // everyone is down (some may already be fighting, knocked or out)
     const onLand = inst.players.filter((p) => !p.npc).filter((p) => terrainAt(inst.world, p.s.x, p.s.z) > 0 || p.s.y > 0);
-    expect(onLand.length).toBeGreaterThanOrEqual(72); // almost everyone hits dry land
+    expect(onLand.length).toBeGreaterThanOrEqual(36); // almost everyone hits dry land
     // squad dropped together: teammates still standing are in the same part of the map after 45 s
     // (if you land in the sea, they make for the nearest town on land; eliminated teammates don't count)
     expect(mates.filter((p) => p.s.mode !== PM.Dead).every((p) => Math.hypot(p.s.x - me.s.x, p.s.z - me.s.z) < 260)).toBe(true);
