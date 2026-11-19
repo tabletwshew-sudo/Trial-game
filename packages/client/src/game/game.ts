@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import {
-  ACT, DROP, EF, EF_EMOTE_SHIFT, ITEM, ITEMS, K, MV, PICK_SLOT, consumableDef, heldItemId, itemName, meleeDef, PM, SIM_DT, WATER_FLOAT_Y, isLow, zipNear, busPos, clamp, currentSpread, decodeSnapshot, encodeInputs, getWorld, raycastWorld, seatWorld, stepPlayer, surfaceAt, terrainAt, weaponDef,
+  ACT, DROP, EF, EF_EMOTE_SHIFT, ITEM, ITEMS, K, MV, PICK_SLOT, REDEPLOY, consumableDef, heldItemId, itemName, meleeDef, PM, SIM_DT, WATER_FLOAT_Y, isLow, zipNear, busPos, clamp, currentSpread, decodeSnapshot, encodeInputs, getWorld, raycastWorld, seatWorld, stepPlayer, surfaceAt, terrainAt, weaponDef,
   type EntSnap, type GameEvent, type GameInit, type GamePhase, type InputCmd, type MatchFoundView, type PlayerState, type RouteView, type ServerMsg, type SimEvents, type UserView, type World,
 } from '@dropzone/shared';
 import { STORM_PHASES } from '@dropzone/shared';
@@ -171,6 +171,8 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       onSpecNext: (dir) => net.send({ t: 'spec_next', dir }),
       onSpectate: () => input.unlock(),
     });
+    // redeploy rules: a few redeploys in solo, back while a teammate stands in teams
+    combat.redeployChip(found.mode === 'solo' ? `${REDEPLOY.solo} REDEPLOYS` : 'REDEPLOY ON');
     // inventory screen (Tab / I): rearrange, inspect and drop things
     const inv = new InventoryPanel({
       swap: (a, b) => net.send({ t: 'inv_swap', a, b }),
@@ -317,6 +319,12 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
           break;
         }
         case 'struct': combat.structureHp(e.hp); break;
+        case 'redeploying': combat.redeploying(e.at, e.left); break;
+        case 'redeployed':
+          if (e.i === selfIdx) { combat.redeployed(); toast('Back in! Open your glider with Space and pick a spot', 'success'); audio.move('glider', null); }
+          else if (team.includes(e.i)) toast(`${roster[e.i]?.name ?? 'A teammate'} is dropping back in`, 'info');
+          break;
+        case 'redeploys_closed': toast('Redeploys are closed: from now on, eliminated means out', 'info'); combat.redeployChip('REDEPLOYS CLOSED', true); break;
         case 'bought': audio.item('pickup'); toast(`Bought ${itemName(e.item, e.r)}`, 'success'); break;
         case 'dmg': {
           combat.hitMarker(e.hd, !!e.ko);
@@ -753,7 +761,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
         combat.update({
           s: pred, spread: heldDef ? currentSpread(pred, heldDef) : 0, fov, prompt, promptRarity, promptItem,
           revive: rp, reviveLabel: pred.act === ACT.Reviving ? 'REVIVING' : 'BEING REVIVED', scoped,
-          spectating: watching ? roster[specIdx].name : null, kills: kills[selfIdx] ?? 0, cards: cards.map((c) => roster[c]?.name ?? '?'),
+          spectating: watching ? roster[specIdx].name : null, kills: kills[selfIdx] ?? 0, cards: cards.map((c) => roster[c]?.name ?? '?'), serverNow,
         }, dt);
       }
 

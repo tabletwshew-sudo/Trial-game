@@ -30,6 +30,8 @@ export interface CombatView {
   reviveLabel: string;
   scoped: boolean;
   spectating: string | null;
+  /** Server clock (for the redeploy countdown). */
+  serverNow: number;
   kills: number;
   /** Names of teammates whose recall cards you carry. */
   cards: string[];
@@ -77,12 +79,18 @@ export class CombatHud {
   private deathEl = h('div.death-panel');
   private deathShown = false;
   private killedBy = '';
+  /** Redeploy: when you're coming back (server time, 0 = not waiting), how many are left (-1 = teams). */
+  private redeployAt = 0; private rdLeft = -1;
+  private rdCount = h('b'); private rdNote = h('span');
+  private rdEl = h('div.redeploy', h('small', 'REDEPLOYING IN'), this.rdCount, this.rdNote);
+  private rdChip = h('div.rd-chip');
   /** You closed the result card to watch: a button brings it back. */
   private lastResult: GameResult | null = null;
 
   constructor(private roster: RosterEntry[], private selfIdx: number, private cb: { onLeave: (again?: boolean) => void; onSpectate: () => void; onSpecNext: (dir: number) => void }) {
     this.osBar = h('div.bar.over', this.osFill, h('div.bar-label', h('span', '⬢'), this.osText));
     const bars = h('div.vitals',
+      this.rdChip,
       this.osBar,
       h('div.bar.shield', this.shFill, h('div.bar-label', h('span', '🛡'), this.shText)),
       h('div.bar.health', this.hpFill, h('div.bar-label', h('span', '✚'), this.hpText)));
@@ -102,10 +110,19 @@ export class CombatHud {
       this.vignette, this.scope, this.dirs, this.nums,
       this.reticle.el, this.hit, this.prompt, this.ring, this.center, this.knocked,
       h('div.bottom-left', bars), h('div.bottom-right', this.boostEl, this.ammoEl, hotbar),
-      this.feed, this.killsEl, this.goldEl, this.specEl, this.bossEl, this.cardsEl, this.structEl, this.deathEl, this.resultEl);
+      this.feed, this.killsEl, this.goldEl, this.specEl, this.bossEl, this.cardsEl, this.structEl, this.deathEl, this.rdEl, this.resultEl);
   }
 
   // ------------------------------------------------------------ events
+  /** Redeploy status chip above the health bars ('2 REDEPLOYS', 'REDEPLOY ON', 'REDEPLOYS CLOSED'). */
+  redeployChip(text: string, closed = false) { this.rdChip.textContent = text; this.rdChip.classList.toggle('closed', closed); }
+  /** You were eliminated and come back at server time `at`. */
+  redeploying(at: number, left: number) {
+    this.redeployAt = at; this.rdLeft = left;
+    if (left >= 0) this.redeployChip(`${left} REDEPLOY${left === 1 ? '' : 'S'} LEFT`);
+  }
+  redeployed() { this.redeployAt = 0; this.deathShown = false; }
+
   /** You fired: the reticle kicks out a little. */
   fired(amount = 1) { this.reticle.fired(amount); }
 
@@ -311,6 +328,15 @@ export class CombatHud {
         h('div.spec-actions',
           this.lastResult ? h('button.btn.btn-ghost.small', { onclick: () => { if (this.lastResult) this.showResult(this.lastResult); } }, 'RESULTS') : null,
           h('button.btn.btn-ghost.small', { onclick: () => this.cb.onLeave(false) }, 'LOBBY')));
+    }
+    // waiting to redeploy: a countdown instead of the death card
+    const waiting = dead && this.redeployAt > v.serverNow;
+    this.rdEl.classList.toggle('show', waiting && !this.resultOpen);
+    if (waiting) {
+      const secs = String(Math.max(1, Math.ceil((this.redeployAt - v.serverNow) / 1000)));
+      if (this.rdCount.textContent !== secs) this.rdCount.textContent = secs;
+      this.rdNote.textContent = this.rdLeft >= 0 ? `${this.rdLeft} redeploy${this.rdLeft === 1 ? '' : 's'} left after this one` : 'Your team is still in: you drop back in near them';
+      this.deathShown = true; this.deathEl.classList.remove('show');
     }
     // went down for good with teammates still fighting: a death card with what to do next
     if (dead && !this.resultShown && !this.deathShown) {

@@ -195,11 +195,11 @@ export function lobbyScreen(net: Net, you: UserView, onSignOut: () => void, onMa
   /** What's new on the island (bottom left of the play screen). */
   function newsCard() {
     const items: [string, string][] = [
+      ['↻', 'Redeploy rules: 2 redeploys in solo; in teams you drop back in while a teammate stands'],
       ['☺', 'New characters: taller, adult proportions and new outfits (coats, hoods, masks, bodysuits, a cape)'],
       ['⌂', 'A fuller island: six new places, denser woods, no more empty fields between towns'],
       ['❀', 'New regions: autumn wood, blossom forest, red-rock badlands, a second snowy peak, flower fields'],
       ['▣', 'Supply drops: about eight a match. Follow the beam'],
-      ['⚡', 'Cars: hold Shift to boost'],
     ];
     return h('div.news-card', h('div.news-title', "WHAT'S NEW"), ...items.map(([i, t]) => h('div.news-row', h('span', i), h('small', t))));
   }

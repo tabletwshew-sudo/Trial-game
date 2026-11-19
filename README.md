@@ -8,6 +8,13 @@ See [`docs/PLAN.md`](docs/PLAN.md) for the 8-phase roadmap and
 
 **Put it online for your friends:** follow [`docs/DEPLOY.md`](docs/DEPLOY.md) (Render, about 10 minutes, free).
 
+## Rules: Redeploy
+Every match uses redeploy rules:
+- **Solo:** you have 2 redeploys.
+- **Duos, trios and squads:** you come back as long as a teammate is still standing.
+- **Coming back:** after a 7-second countdown you drop back in from the sky over the safe zone (near your team), with a starter kit.
+- **Late game:** redeploys close when the storm reaches its last three circles. After that, eliminated means out, and recall cards and beacons work as before.
+
 ## Run locally
 ```bash
 npm install

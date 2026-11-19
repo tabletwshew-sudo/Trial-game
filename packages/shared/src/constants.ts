@@ -109,5 +109,12 @@ export const STORM_PHASES: StormPhase[] = [
 
 export const MAP = { size: 2400, seed: 1337 } as const;
 
+/**
+ * Redeploy: eliminated players drop back in from the sky after a short countdown. In solo you get
+ * `solo` redeploys; in duos, trios and squads you come back as long as a teammate is still standing.
+ * Redeploys close once the storm reaches its last `closeCircles` circles: after that, out is out.
+ */
+export const REDEPLOY = { delayS: 7, solo: 2, closeCircles: 3, height: 170 } as const;
+
 /** Recall: carry a teammate's card to a beacon within this many seconds. */
 export const RECALL = { cardLifeS: 90, holdS: 4, cooldownS: 90, dropHeight: 140 } as const;

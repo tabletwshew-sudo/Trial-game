@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ACT, ITEM, K, MV, PICK_SLOT, PM, SK, aimOrigin, clearColumn, stormAt, terrainAt, merchantStock, decodeSnapshot, encodeInputs, makeStormPlan, raycastWorld, surfaceAt, weaponDef, type InputCmd, type ServerMsg, type Snapshot } from '@dropzone/shared';
+import { ACT, ITEM, K, MV, PICK_SLOT, PM, REDEPLOY, SK, aimOrigin, clearColumn, stormAt, terrainAt, merchantStock, decodeSnapshot, encodeInputs, makeStormPlan, raycastWorld, surfaceAt, weaponDef, type InputCmd, type ServerMsg, type Snapshot } from '@dropzone/shared';
 import { MatchInstance, type Sock } from '../src/game/match';
 import type { Match } from '../src/hub';
 
@@ -33,6 +33,7 @@ function inPlay(teamSizes: number[], humanTeams: number[], mode: Match['mode'] =
   let now = 50_000_000;
   const inst = new MatchInstance(makeMatch(teamSizes, humanTeams, mode), { warmupS: 1, onEnd: () => {} }, now);
   inst.overshield = false; // these tests check exact shield/health numbers (the overshield has its own test)
+  inst.redeploy = false;   // ...and plain elimination (redeploys have their own tests)
   const clients = new Map<string, Client>();
   for (const p of inst.players) if (!p.bot) { const c = new Client(); clients.set(p.id, c); inst.join(p.id, c, now); }
   const step = (ms = 1000 / 30) => { now += ms; inst.step(now); };
@@ -398,14 +399,16 @@ describe('a full match with 80 bots', () => {
     expect(feed.length).toBeGreaterThan(10); // they actually fight
     expect(moves.slide).toBeGreaterThan(20); // bots slide...
     expect(moves.mantle).toBeGreaterThan(5); // ...and climb over things they walk into
-    expect(elims).toBeGreaterThan(5);
+    // (with redeploys, a player can be eliminated more than once: count eliminations in the feed)
+    const elimLines = feed.filter((e) => e.e === 'feed' && !e.knock).length;
+    expect(elimLines).toBeGreaterThan(5);
     // kills add up: every elimination by a player is credited once
     const credited = inst.players.reduce((n, p) => n + p.kills, 0);
-    expect(credited).toBeLessThanOrEqual(elims);
+    expect(credited).toBeLessThanOrEqual(elimLines);
     // placements are consistent for eliminated teams
     for (const t of teams) {
       const ps = inst.players.filter((p) => p.team === t.id);
-      if (ps.every((p) => !p.alive)) expect(new Set(ps.map((p) => p.place)).size).toBe(1);
+      if (ps.every((p) => !p.alive && (p as any).redeployAt === 0)) expect(new Set(ps.map((p) => p.place)).size).toBe(1);
     }
   }, 120_000);
 });
@@ -636,5 +639,74 @@ describe('spectating', () => {
     g.inst.onSpecNext(a.id, 1); g.step();
     expect(a.spec).not.toBe(first);
     expect(g.inst.players[a.spec].alive).toBe(true);
+  });
+});
+
+describe('redeploy', () => {
+  const kill = (g: ReturnType<typeof inPlay>, q: any, by: number) => { q.s.hp = 0; q.lastHit = { by, at: g.now, w: ITEM.ar, cause: 'gun' }; (g.inst as any).checkDown(q); };
+  // (a knocked player is finished when their bleed-out meter runs out)
+  const finish = (g: ReturnType<typeof inPlay>, q: any, by: number) => { kill(g, q, by); q.s.knock = 0; q.lastHit = { by, at: g.now, w: ITEM.ar, cause: 'gun' }; (g.inst as any).checkDown(q); };
+  it('solo: two redeploys from the sky with a starter kit, then the third elimination is out', () => {
+    const g = inPlay([1, 1, 1], [0], 'solo');
+    g.inst.redeploy = true;
+    const [a, b] = [g.inst.players[0], g.inst.players[1]] as any[];
+    const c = g.clients.get(a.id)!;
+    for (let round = 0; round < 2; round++) {
+      g.place(a.idx, AT.x, AT.z);
+      kill(g, a, b.idx);
+      expect(a.alive).toBe(false);
+      expect(a.redeployAt).toBeGreaterThan(g.now);
+      expect(c.msgs.some((m) => m.t === 'result')).toBe(false);   // not out
+      expect(g.inst.teamsAlive()).toBe(3);                        // still counts as in
+      g.step(); // (events go out with the next tick)
+      const ev = c.events().filter((e) => e.e === 'redeploying');
+      expect(ev[ev.length - 1]).toMatchObject({ left: 1 - round });
+      for (let i = 0; i < 30 * (REDEPLOY.delayS + 0.5); i++) g.step();
+      expect(a.alive).toBe(true);
+      expect(a.s.mode === PM.Fall || a.s.mode === PM.Glide).toBe(true);  // dropping back in
+      expect(a.s.inv[0].id).toBeGreaterThan(0);                          // with a gun
+      expect(a.s.inv.some((sl: any) => sl.id === ITEM.bandage)).toBe(true);
+    }
+    g.place(a.idx, AT.x, AT.z);
+    kill(g, a, b.idx);
+    expect(a.redeployAt).toBe(0);
+    const r = c.msgs.find((m) => m.t === 'result');
+    expect(r && r.t === 'result' && r.result.place).toBe(3);
+  });
+
+  it('duos: back while a teammate stands; the countdown is called off if the team goes down', () => {
+    const g = inPlay([2, 2, 2], [0], 'duo');
+    g.inst.redeploy = true;
+    const [a, mate, foe] = [g.inst.players[0], g.inst.players[1], g.inst.players[2]] as any[];
+    g.place(a.idx, AT.x, AT.z); g.place(mate.idx, AT.x + 30, AT.z);
+    finish(g, a, foe.idx); // knocked, then finished
+    expect(a.alive).toBe(false);
+    expect(a.redeployAt).toBeGreaterThan(0);  // the mate is standing: a comes back
+    for (let i = 0; i < 30 * (REDEPLOY.delayS + 0.5); i++) g.step();
+    expect(a.alive).toBe(true);
+    expect(Math.hypot(a.s.x - mate.s.x, a.s.z - mate.s.z)).toBeLessThan(160); // near the mate
+    // now a goes down again, and while it waits the mate is eliminated too: the team is out
+    g.place(a.idx, AT.x, AT.z);
+    finish(g, a, foe.idx);
+    expect(a.redeployAt).toBeGreaterThan(0);
+    kill(g, mate, foe.idx); // (with nobody else standing, the mate is out, not just knocked)
+    expect(a.redeployAt).toBe(0);
+    expect(mate.alive).toBe(false);
+    const r = g.clients.get(a.id)!.msgs.find((m) => m.t === 'result');
+    expect(r && r.t === 'result' && r.result.place).toBe(3);
+  });
+
+  it('redeploys close in the storm\'s last circles: after that, eliminated is out', () => {
+    const g = inPlay([1, 1, 1], [0], 'solo');
+    g.inst.redeploy = true;
+    g.inst.storm = makeStormPlan(g.inst.world, 3, g.now - 1e8); // long since finished
+    const [a, b] = [g.inst.players[0], g.inst.players[1]] as any[];
+    g.place(a.idx, AT.x, AT.z);
+    kill(g, a, b.idx);
+    expect(a.redeployAt).toBe(0);
+    const c = g.clients.get(a.id)!;
+    g.step();
+    expect(c.msgs.some((m) => m.t === 'result')).toBe(true);
+    expect(c.events().some((e) => e.e === 'redeploys_closed')).toBe(true);
   });
 });

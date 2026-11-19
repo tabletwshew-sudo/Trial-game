@@ -77,6 +77,11 @@ export type GameEvent =
   | { e: 'opened'; id: number; by: number }
   | { e: 'supply'; id: number; x: number; z: number }
   | { e: 'recalled'; i: number; by: number }
+  /** You're coming back: at server time `at`; `left` = solo redeploys left after this one (-1: teams, no limit). */
+  | { e: 'redeploying'; at: number; left: number }
+  /** Player `i` dropped back in. */
+  | { e: 'redeployed'; i: number }
+  | { e: 'redeploys_closed' }
   | { e: 'vault'; id: number; by: number }
   | { e: 'storm_hurt'; d: number };
 

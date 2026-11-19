@@ -1,5 +1,5 @@
 import {
-  ACT, AMMO_ITEM, CAR, CHEST_KIND, SUPPLY_FALL, RECALL, ITEM, EF_EMOTE_SHIFT, makeStormPlan, stormAt, inStorm, consumableDef, ENT_BYTES, EF, ITEMS, K, MAP, PM, SIM_DT, SIM_HZ, SPAWN_ISLAND, TEAM_SIZE,
+  ACT, AMMO_ITEM, CAR, CHEST_KIND, SUPPLY_FALL, RECALL, REDEPLOY, ITEM, EF_EMOTE_SHIFT, makeStormPlan, stormAt, inStorm, consumableDef, ENT_BYTES, EF, ITEMS, K, MAP, PM, SIM_DT, SIM_HZ, SPAWN_ISLAND, TEAM_SIZE,
   addToInventory, applyDamage, blastDamage, busPos, decodeInputs, emptySlot, encodeEnt, encodeSnapshot, falloff, getWorld,
   MV, POSE, isLow, makeRoute, resetMove, mulberry32, newPlayerState, rayPlayer, raycastWorld, seatWorld, stepCar, stepPlayer, stepProjectile, surfaceAt, terrainAt,
   weaponDamage, weaponDef, throwableDef, collideBoxes, clearColumn, meleeDef, OVERSHIELD, GOLD_MAX, AMMO_MAX, AMMO_PICKUP, merchantStock, heldItemId, BODY_R, PICK_SLOT, SOLID_CELL, solidKey, structureHp,
@@ -36,6 +36,10 @@ interface P {
   revive: { target: number; t: number } | null;
   bleedAcc: number;
   respawnAt: number;
+  /** Redeploys left (solo: a few; teams: unlimited while a teammate stands), and when the next one
+   * happens (0 = not waiting to come back). */
+  redeploys: number;
+  redeployAt: number;
   spec: number;
   ev: GameEvent[];
   /** Boss/guard NPCs: their post, and how much of incoming damage they actually take. */
@@ -108,6 +112,9 @@ export class MatchInstance {
   private structHp = new Map<number, number>();
   /** Overshield on (tests that check exact damage numbers turn it off). */
   overshield = true;
+  /** Redeploy rules (on for real matches; some tests turn it off to check plain elimination). */
+  redeploy = true;
+  private redeploysClosed = false;
   /** When a car last ran someone over (car id * 1000 + player), so one hit isn't counted every tick. */
   private rammed = new Map<number, number>();
   private cardExpiry = new Map<number, number>();
@@ -131,7 +138,7 @@ export class MatchInstance {
         idx: idx++, id: m.id, name: m.name, bot: m.bot, team: team.id, skin: m.skin,
         s: newPlayerState(), queue: [], lastSeq: 0, budget: 4, starve: 0, gone: false, sock: null,
         brain: m.bot ? newBrain(mulberry32(Math.floor(this.rnd() * 2 ** 31))) : null, marker: null,
-        alive: true, kills: 0, place: 0, lastHit: null, hurtAt: 0, knockedBy: -1, revive: null, bleedAcc: 0, respawnAt: 0, spec: -1, ev: [],
+        alive: true, kills: 0, place: 0, lastHit: null, hurtAt: 0, knockedBy: -1, revive: null, bleedAcc: 0, respawnAt: 0, redeploys: TEAM_SIZE[match.mode] === 1 ? REDEPLOY.solo : Infinity, redeployAt: 0, spec: -1, ev: [],
         armor: 1, cards: [], stats: newStats(), aliveSince: now, lastPos: null,
       };
       p.s.seed = Math.floor(this.rnd() * 2 ** 31);
@@ -148,7 +155,7 @@ export class MatchInstance {
           idx: idx++, id: `npc${v.id}_${k}`, name, bot: true, team: 1000 + v.id, skin: boss ? 8 : 9,
           s: newPlayerState(), queue: [], lastSeq: 0, budget: 4, starve: 0, gone: false, sock: null,
           brain: newBrain(mulberry32(Math.floor(this.rnd() * 2 ** 31))), marker: null,
-          alive: false, kills: 0, place: 0, lastHit: null, hurtAt: 0, knockedBy: -1, revive: null, bleedAcc: 0, respawnAt: 0, spec: -1, ev: [],
+          alive: false, kills: 0, place: 0, lastHit: null, hurtAt: 0, knockedBy: -1, revive: null, bleedAcc: 0, respawnAt: 0, redeploys: TEAM_SIZE[match.mode] === 1 ? REDEPLOY.solo : Infinity, redeployAt: 0, spec: -1, ev: [],
           npc: boss ? 'boss' : 'guard', post: { x: v.post.x + (k - 1) * 4, z: v.post.z + (k ? 2 : 0) }, armor: boss ? 0.3 : 0.75,
           cards: [], stats: newStats(), aliveSince: now, lastPos: null,
         };
@@ -230,8 +237,10 @@ export class MatchInstance {
   }
 
   get humans() { return this.players.filter((p) => !p.bot && !p.gone); }
-  get alive() { return this.players.filter((p) => p.alive && !p.gone && !p.npc).length; }
-  teamsAlive() { return new Set(this.players.filter((p) => p.alive && !p.gone && !p.npc).map((p) => p.team)).size; }
+  /** Still in the match: alive, or eliminated and waiting to redeploy. */
+  private inGame(p: P) { return (p.alive || p.redeployAt > 0) && !p.gone && !p.npc; }
+  get alive() { return this.players.filter((p) => this.inGame(p)).length; }
+  teamsAlive() { return new Set(this.players.filter((p) => this.inGame(p)).map((p) => p.team)).size; }
   has(userId: string) { const p = this.byId.get(userId); return !!p && !p.gone; }
   private mates(p: P) { return this.players.filter((q) => q.team === p.team && q !== p); }
 
@@ -581,17 +590,27 @@ export class MatchInstance {
       return;
     }
     q.stats.survivedS = Math.round((this.now - Math.max(this.playAt || this.now, q.aliveSince)) / 1000);
+    // coming back? solo: while you have redeploys left; teams: while a teammate is still standing
+    const solo = TEAM_SIZE[this.match.mode] === 1;
+    const back = this.phase === 'play' && cause !== 'left' && !q.gone && this.redeployOpen()
+      && (solo ? q.redeploys > 0 : this.mates(q).some((m) => m.alive && m.s.mode !== PM.Knocked && m.s.mode !== PM.Dead));
     if (this.phase !== 'warmup') {
       this.loot.dropInventory(q.s);
       // carried recall cards fall where you fell; and your own card drops for your squad
       const team = this.players.filter((m) => m.team === q.team && m !== q);
       for (const c of q.cards) this.dropCard(c, q.s.x, q.s.y, q.s.z);
       q.cards = [];
-      if (this.dbno && team.some((m) => m.alive && m.s.mode !== PM.Knocked && m.s.mode !== PM.Dead)) this.dropCard(q.idx, q.s.x, q.s.y, q.s.z);
+      // (no recall card while redeploys are open: you come back on your own)
+      if (this.dbno && !back && team.some((m) => m.alive && m.s.mode !== PM.Knocked && m.s.mode !== PM.Dead)) this.dropCard(q.idx, q.s.x, q.s.y, q.s.z);
     }
     this.resetInventory(q.s);
     q.s.mode = PM.Dead; q.s.act = ACT.None; q.s.hp = 0; q.s.shield = 0; q.s.knock = 0; q.s.vx = q.s.vz = 0;
     q.alive = false; q.revive = null;
+    if (back) {
+      q.redeployAt = this.now + REDEPLOY.delayS * 1000;
+      if (solo) q.redeploys--;
+      q.ev.push({ e: 'redeploying', at: q.redeployAt, left: solo ? q.redeploys : -1 });
+    }
     if (killer >= 0 && this.players[killer].team !== q.team) {
       this.players[killer].kills++;
       // a bounty in gold for every elimination
@@ -599,20 +618,87 @@ export class MatchInstance {
       if (this.phase === 'play') k.s.gold = Math.min(GOLD_MAX, k.s.gold + 15);
     }
     this.feed(q, killer, false, cause);
+    this.settleTeam(q, killer >= 0 ? this.players[killer].name : null);
+  }
 
-    // everyone else on the team knocked? then the team is out
+  /**
+   * Is this team out? Nobody standing (everyone else knocked or eliminated) means out, unless it's a
+   * solo player waiting to redeploy. Out teams get their placement and results.
+   */
+  private settleTeam(q: P, killerName: string | null) {
     const team = this.players.filter((m) => m.team === q.team);
-    if (team.every((m) => !m.alive || m.s.mode === PM.Knocked)) for (const m of team) if (m.alive) this.eliminate(m, 'bleed');
-    if (team.every((m) => !m.alive)) {
+    const standing = team.some((m) => m.alive && m.s.mode !== PM.Knocked);
+    const waiting = TEAM_SIZE[this.match.mode] === 1 && team.some((m) => m.redeployAt > 0);
+    if (!standing && !waiting) {
+      for (const m of team) m.redeployAt = 0; // nobody left to come back to
+      for (const m of team) if (m.alive) this.eliminate(m, 'bleed');
+    }
+    if (team.every((m) => !m.alive && m.redeployAt === 0) && !team.some((m) => m.place)) {
       const place = this.teamsAlive() + 1;
       for (const m of team) {
         m.place = place;
         if (m.alive === false && m.stats.survivedS === 0) m.stats.survivedS = Math.round((this.now - Math.max(this.playAt || this.now, m.aliveSince)) / 1000);
-        if (m.sock) m.sock.json({ t: 'result', result: this.resultFor(m, killer >= 0 ? this.players[killer].name : null, false) });
+        if (m.sock) m.sock.json({ t: 'result', result: this.resultFor(m, killerName, false) });
       }
     }
     this.broadcast({ t: 'alive', alive: this.alive, teams: this.teamsAlive() });
     this.checkVictory();
+  }
+
+  /** Redeploys close once the storm reaches its last few circles (announced once). */
+  private redeployOpen() {
+    if (!this.redeploy || this.redeploysClosed) return false;
+    if (this.storm) {
+      const st = stormAt(this.storm, this.now);
+      if (st.done || st.phase >= this.storm.phases.length - REDEPLOY.closeCircles) {
+        this.redeploysClosed = true;
+        this.broadcast({ t: 'ev', ev: [{ e: 'redeploys_closed' }] });
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** Bring back everyone whose countdown is up (and drop anyone who left while waiting). */
+  private stepRedeploy() {
+    this.redeployOpen(); // (announces the close on time even if nobody is eliminated then)
+    for (const p of this.players) {
+      if (p.redeployAt <= 0 || this.now < p.redeployAt) continue;
+      if (p.gone || this.endAt || this.phase !== 'play') { p.redeployAt = 0; this.settleTeam(p, null); continue; }
+      this.redeployPlayer(p);
+    }
+  }
+
+  /**
+   * Drop back in from the sky over the safe zone, near a teammate if there is one, with a starter
+   * kit: a common or uncommon gun and ammo, three bandages, the pickaxe, and a full overshield.
+   */
+  private redeployPlayer(p: P) {
+    const s = p.s, mates = this.mates(p).filter((m) => m.alive && m.s.mode !== PM.Dead);
+    const st = this.storm ? stormAt(this.storm, this.now) : null;
+    const zone = st ? { x: st.x, z: st.z, r: st.r } : { x: 0, z: 0, r: 700 };
+    let x = zone.x, z = zone.z;
+    for (let t = 0; t < 80; t++) {
+      const near = mates.length && t < 60 ? mates[Math.floor(this.rnd() * mates.length)].s : null;
+      const a = this.rnd() * Math.PI * 2, d = near ? 50 + this.rnd() * 90 : Math.sqrt(this.rnd()) * zone.r * 0.8;
+      const cx = (near ? near.x : zone.x) + Math.cos(a) * d, cz = (near ? near.z : zone.z) + Math.sin(a) * d;
+      if (st && Math.hypot(cx - zone.x, cz - zone.z) > zone.r * 0.9) continue;
+      if (terrainAt(this.world, cx, cz) < 2.5) continue;
+      x = cx; z = cz; break;
+    }
+    p.redeployAt = 0; p.alive = true; p.aliveSince = this.now; p.knockedBy = -1; p.lastHit = null; p.revive = null; p.bleedAcc = 0; p.spec = -1; p.hurtAt = 0;
+    this.resetInventory(s);
+    const [id, r] = rollWeapon(this.rnd, [55, 45, 0, 0, 0]);
+    const def = weaponDef(id)!;
+    addToInventory(s, id, r, 1, def.mag);
+    s.ammo[def.ammo] = Math.min(AMMO_MAX[def.ammo], AMMO_PICKUP[def.ammo] * 2);
+    addToInventory(s, ITEM.bandage, 0, 3, 0);
+    s.slot = 0;
+    s.hp = 100; s.shield = 0; s.os = OVERSHIELD.max; s.knock = 0; s.act = ACT.None; s.use = 0; s.reload = 0;
+    s.x = x; s.z = z; s.y = Math.max(terrainAt(this.world, x, z), 0) + REDEPLOY.height;
+    s.vx = s.vz = s.vy = 0; s.mode = PM.Fall; s.grounded = false; resetMove(s);
+    if (p.brain) { const b = newBrain(mulberry32(Math.floor(this.rnd() * 2 ** 31))); b.skill = p.brain.skill; b.target = { x, z }; p.brain = b; }
+    this.broadcast({ t: 'ev', ev: [{ e: 'redeployed', i: p.idx }] }, p.team);
   }
 
   private resultFor(p: P, killer: string | null, win: boolean) {
@@ -624,7 +710,7 @@ export class MatchInstance {
 
   private checkVictory() {
     if (this.phase === 'warmup' || this.endAt) return;
-    const alive = this.players.filter((p) => p.alive && !p.gone && !p.npc);
+    const alive = this.players.filter((p) => this.inGame(p));
     const teams = new Set(alive.map((p) => p.team));
     if (teams.size > 1) return;
     this.endAt = this.now + 15_000;
@@ -1267,6 +1353,7 @@ export class MatchInstance {
     this.stepVehicles(botSteps);
     this.stepProjectiles(dt);
     this.stepRevives(dt);
+    if (this.phase === 'play') this.stepRedeploy();
     this.stepSupply(now);
     this.stepStorm(dt);
     this.stepOvershield(dt);

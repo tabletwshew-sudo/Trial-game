@@ -22,6 +22,7 @@ describe('match instance', () => {
   it('runs warm-up -> dropship -> everyone lands on the island', () => {
     let now = 1_000_000, ended = '';
     const inst = new MatchInstance(formed(2), { warmupS: 5, onEnd: (id) => (ended = id) }, now);
+    inst.redeploy = false; // (this checks the drop: everyone on the ground, nobody coming back down from a redeploy)
     const c = new FakeClient();
     const c2 = new FakeClient();
     inst.join('h0', c, now); inst.join('h1', c2, now);
