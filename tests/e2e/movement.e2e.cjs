@@ -116,8 +116,9 @@ const X = -1450, Z = -1450;
   s = await goTo(X + 22, Z - 16.5, 0.5, false);
   await look(0, 0.2);
   await keys(true, 'KeyW');
-  if (await poll((q) => q.mv === 4, 8000)) { await poll((q) => q.y > 8, 8000); await shot('73-climb'); }
-  await poll((q) => q.grounded && q.y > 10, 12000);
+  // (generous waits: under software rendering the climb can take several times longer than in a real browser)
+  if (await poll((q) => q.mv === 4, 15000)) { await poll((q) => q.y > 8, 25000); await shot('73-climb'); }
+  await poll((q) => q.grounded && q.y > 10, 35000);
   await p.waitForTimeout(200);
   await keys(false, 'KeyW');
   s = await pred(); log.climb = (await watch()).seen[4] === 1; log.roofY = +s.y.toFixed(2);
