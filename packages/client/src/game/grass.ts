@@ -38,14 +38,15 @@ function tuftGeo(blades: number, spread = 1) {
   for (let i = 0; i < blades; i++) {
     const a = (i / blades) * Math.PI * 2 + (i % 3) * 0.7, r = (0.015 + (i % 4) * 0.025) * spread;
     const cx = Math.cos(a) * r, cz = Math.sin(a) * r;
-    const wBase = 0.045 + (i % 3) * 0.012;
+    const wBase = 0.03 + (i % 3) * 0.01;
     const px = -Math.sin(a) * wBase, pz = Math.cos(a) * wBase;   // half width at the base
-    const h = 0.22 + ((i * 7) % 5) * 0.045;
+    const h = 0.3 + ((i * 7) % 5) * 0.06;
     const lean = (0.05 + (i % 4) * 0.045) * spread;
     // along the blade: root, middle, shoulder, tip (it curls out more toward the top)
     const at = (t: number) => [cx + Math.cos(a) * lean * t * t, h * t, cz + Math.sin(a) * lean * t * t];
     const [m, u, tp] = [at(0.5), at(0.84), at(1)];
-    const C = { base: [0.9, 0.94, 0.86], mid: [1.05, 1.08, 0.95], up: [1.15, 1.16, 0.96], tip: [1.24, 1.22, 0.95] };
+    // dark, cool roots and sunlit tips: a deep, lush look
+    const C = { base: [0.62, 0.72, 0.66], mid: [0.98, 1.04, 0.92], up: [1.12, 1.14, 0.94], tip: [1.22, 1.2, 0.9] };
     const nl = Math.hypot(Math.cos(a) * 0.25, 1);
     const n = [Math.cos(a) * 0.25 / nl, 1 / nl, Math.sin(a) * 0.25 / nl];
     const v = (x: number, y: number, z: number, c: number[]) => { pos.push(x, y, z); col.push(...c); nor.push(...n); hgt.push(y / h); };
@@ -99,7 +100,7 @@ function grassMaterial(radius: { value: number }, inner: { value: number }, key:
       }
       #include <opaque_fragment>`);
   };
-  m.customProgramCacheKey = () => 'grass5' + key;
+  m.customProgramCacheKey = () => 'grass6' + key;
   return m;
 }
 
@@ -122,7 +123,7 @@ export class Grass {
   private readonly farMax: number;
 
   constructor(private w: World, scene: THREE.Object3D, private max: number) {
-    this.mesh = new THREE.InstancedMesh(tuftGeo(9), grassMaterial(nearR, noInner, 'n'), max);
+    this.mesh = new THREE.InstancedMesh(tuftGeo(11), grassMaterial(nearR, noInner, 'n'), max);
     this.mesh.frustumCulled = false; this.mesh.count = 0;
     // the far ring: fewer blades per clump, scaled up, out to about twice the distance
     this.farMax = Math.round(max * 0.45);
@@ -161,7 +162,7 @@ export class Grass {
     col.multiplyScalar(field ? 1.12 : 1.02);
     col.offsetHSL((hash2(i, j, 19) - 0.5) * 0.035, (hash2(i, j, 20) - 0.5) * 0.14, (hash2(i, j, 21) - 0.5) * 0.07);
     // knee-high in fields, a soft ankle-high carpet elsewhere (a little longer in lush patches)
-    const k = (field ? 1.35 : 0.9) + hash2(i, j, 14) * 0.35 + patch * 0.45;
+    const k = (field ? 1.45 : 1.0) + hash2(i, j, 14) * 0.4 + patch * 0.55;
     return { h, k, patch, field, bio };
   }
 

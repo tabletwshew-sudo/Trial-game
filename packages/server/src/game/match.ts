@@ -1,5 +1,5 @@
 import {
-  ACT, AMMO_ITEM, CAR, CHEST_KIND, SUPPLY_FALL, RECALL, REDEPLOY, ITEM, EF_EMOTE_SHIFT, makeStormPlan, stormAt, inStorm, consumableDef, ENT_BYTES, EF, ITEMS, K, MAP, PM, SIM_DT, SIM_HZ, SPAWN_ISLAND, TEAM_SIZE,
+  ACT, AMMO_ITEM, CAR, CHEST_KIND, SUPPLY_FALL, RECALL, REDEPLOY, SK, ITEM, EF_EMOTE_SHIFT, makeStormPlan, stormAt, inStorm, consumableDef, ENT_BYTES, EF, ITEMS, K, MAP, PM, SIM_DT, SIM_HZ, SPAWN_ISLAND, TEAM_SIZE,
   addToInventory, applyDamage, blastDamage, busPos, decodeInputs, emptySlot, encodeEnt, encodeSnapshot, falloff, getWorld,
   MV, POSE, isLow, makeRoute, resetMove, mulberry32, newPlayerState, rayPlayer, raycastWorld, seatWorld, stepCar, stepPlayer, stepProjectile, surfaceAt, terrainAt,
   weaponDamage, weaponDef, throwableDef, collideBoxes, clearColumn, meleeDef, OVERSHIELD, GOLD_MAX, AMMO_MAX, AMMO_PICKUP, merchantStock, heldItemId, BODY_R, PICK_SLOT, SOLID_CELL, solidKey, structureHp,
@@ -40,6 +40,8 @@ interface P {
    * happens (0 = not waiting to come back). */
   redeploys: number;
   redeployAt: number;
+  /** Pickaxe weak spot on the structure you're working on (double damage if your next swing lands on it). */
+  crit: { key: number; x: number; y: number; z: number } | null;
   spec: number;
   ev: GameEvent[];
   /** Boss/guard NPCs: their post, and how much of incoming damage they actually take. */
@@ -57,6 +59,9 @@ const NPC_NAMES = [['Warden Vex', 'Rivet', 'Sprocket'], ['Captain Hale', 'Barnac
 const newStats = (): MatchStats => ({ damage: 0, taken: 0, revives: 0, chests: 0, distance: 0, survivedS: 0, healed: 0 });
 
 interface Veh extends CarBody { id: number; hp: number; seats: number[]; dead: boolean; lastHitBy: number }
+
+/** Round to the centimetre (positions in events). */
+const r1x = (v: number) => Math.round(v * 100) / 100;
 
 /** When supply drops leave the sky, in seconds after the dropship leaves (two at a time from the fourth). */
 const SUPPLY_WAVES = [35, 95, 155, 215, 280, 350, 420, 500];
@@ -138,7 +143,7 @@ export class MatchInstance {
         idx: idx++, id: m.id, name: m.name, bot: m.bot, team: team.id, skin: m.skin,
         s: newPlayerState(), queue: [], lastSeq: 0, budget: 4, starve: 0, gone: false, sock: null,
         brain: m.bot ? newBrain(mulberry32(Math.floor(this.rnd() * 2 ** 31))) : null, marker: null,
-        alive: true, kills: 0, place: 0, lastHit: null, hurtAt: 0, knockedBy: -1, revive: null, bleedAcc: 0, respawnAt: 0, redeploys: TEAM_SIZE[match.mode] === 1 ? REDEPLOY.solo : Infinity, redeployAt: 0, spec: -1, ev: [],
+        alive: true, kills: 0, place: 0, lastHit: null, hurtAt: 0, knockedBy: -1, revive: null, bleedAcc: 0, respawnAt: 0, redeploys: TEAM_SIZE[match.mode] === 1 ? REDEPLOY.solo : Infinity, redeployAt: 0, crit: null, spec: -1, ev: [],
         armor: 1, cards: [], stats: newStats(), aliveSince: now, lastPos: null,
       };
       p.s.seed = Math.floor(this.rnd() * 2 ** 31);
@@ -155,7 +160,7 @@ export class MatchInstance {
           idx: idx++, id: `npc${v.id}_${k}`, name, bot: true, team: 1000 + v.id, skin: boss ? 8 : 9,
           s: newPlayerState(), queue: [], lastSeq: 0, budget: 4, starve: 0, gone: false, sock: null,
           brain: newBrain(mulberry32(Math.floor(this.rnd() * 2 ** 31))), marker: null,
-          alive: false, kills: 0, place: 0, lastHit: null, hurtAt: 0, knockedBy: -1, revive: null, bleedAcc: 0, respawnAt: 0, redeploys: TEAM_SIZE[match.mode] === 1 ? REDEPLOY.solo : Infinity, redeployAt: 0, spec: -1, ev: [],
+          alive: false, kills: 0, place: 0, lastHit: null, hurtAt: 0, knockedBy: -1, revive: null, bleedAcc: 0, respawnAt: 0, redeploys: TEAM_SIZE[match.mode] === 1 ? REDEPLOY.solo : Infinity, redeployAt: 0, crit: null, spec: -1, ev: [],
           npc: boss ? 'boss' : 'guard', post: { x: v.post.x + (k - 1) * 4, z: v.post.z + (k ? 2 : 0) }, armor: boss ? 0.3 : 0.75,
           cards: [], stats: newStats(), aliveSince: now, lastPos: null,
         };
@@ -434,6 +439,8 @@ export class MatchInstance {
     }
     for (const d of e.dirs) {
       const wh = raycastWorld(this.world, o, d, def.range);
+      // a shot into a window smashes the glass (it stops that bullet; the next one goes through)
+      if (wh.solid && wh.solid.k === SK.Glass) this.damageStructure(wh.solid, 1, p);
       let bestT = wh.t, kind = wh.kind === 'none' ? 5 : wh.kind === 'water' ? 3 : 0;
       let victim: (typeof cands)[number] | null = null, head = false, car: Veh | null = null;
       for (const c of cands) {
@@ -503,7 +510,25 @@ export class MatchInstance {
       else {
         const wh = raycastWorld(this.world, o, d, def.range, false);
         if (wh.kind !== 'none') { kind = 0; hit = { x: o.x + d.x * wh.t, y: o.y + d.y * wh.t, z: o.z + d.z * wh.t }; }
-        if (wh.solid) this.damageStructure(wh.solid, def.structure, p);
+        if (wh.solid && structureHp(wh.solid)) {
+          // weak spots: land a swing on the glowing spot for double damage; it moves after every hit
+          const o = wh.solid, key = o.group !== undefined && o.k !== SK.Glass ? -o.group : o.id!;
+          const crit = !!p.crit && p.crit.key === key && Math.hypot(hit.x - p.crit.x, hit.y - p.crit.y, hit.z - p.crit.z) < 0.42;
+          const dmg = def.structure * (crit ? 2 : 1);
+          this.damageStructure(o, dmg, p);
+          if (this.world.broken!.has(o.id!)) p.crit = null;
+          else {
+            // a new spot on the same face, near where you hit (the face is the side the swing came from)
+            const thinX = o.x1 - o.x0 < o.z1 - o.z0;
+            const r1 = this.rnd() - 0.5, r2 = this.rnd() - 0.5;
+            const u = thinX ? hit.z : hit.x, u0 = (thinX ? o.z0 : o.x0) + 0.25, u1 = (thinX ? o.z1 : o.x1) - 0.25;
+            const nu = Math.min(u1, Math.max(u0, u + Math.sign(r1 || 1) * (0.45 + Math.abs(r1) * 0.9)));
+            const ny = Math.min(o.y1 - 0.3, Math.max(o.y0 + 0.4, hit.y + r2 * 1.1));
+            const face = thinX ? (d.x > 0 ? o.x0 - 0.03 : o.x1 + 0.03) : (d.z > 0 ? o.z0 - 0.03 : o.z1 + 0.03);
+            p.crit = thinX ? { key, x: face, y: ny, z: nu } : { key, x: nu, y: ny, z: face };
+            p.ev.push({ e: 'weak', p: [r1x(p.crit.x), r1x(p.crit.y), r1x(p.crit.z)], crit, dmg });
+          }
+        }
       }
     }
     this.emitNear(o.x, o.z, 120, { e: 'melee', i: p.idx, h: [r1(hit.x), r1(hit.y), r1(hit.z), kind] }, p.bot ? undefined : p);
@@ -1114,12 +1139,27 @@ export class MatchInstance {
   private damageStructure(o: Solid, amount: number, by: P | null) {
     const max = structureHp(o);
     if (!max || o.id === undefined || this.world.broken!.has(o.id)) return;
-    const hp = (this.structHp.get(o.id) ?? max) - amount;
-    if (hp > 0) { this.structHp.set(o.id, hp); by?.ev.push({ e: 'struct', id: o.id, hp: Math.round((hp / max) * 100) / 100 }); return; }
-    this.structHp.delete(o.id);
-    this.world.broken!.add(o.id);
+    // the pieces round a window are one panel: they share hit points and break together
+    // (the glass breaks on its own)
+    const grouped = o.group !== undefined && o.k !== SK.Glass;
+    const key = grouped ? -o.group! : o.id;
+    const hp = (this.structHp.get(key) ?? (grouped ? structureHp({ ...o, group: undefined }) : max)) - amount;
+    const full = grouped ? 225 : max;
+    if (hp > 0) { this.structHp.set(key, hp); by?.ev.push({ e: 'struct', id: o.id, hp: Math.round((hp / full) * 100) / 100 }); return; }
+    this.structHp.delete(key);
+    const ids = grouped ? this.groupMembers(o.group!) : [o.id];
+    for (const id of ids) this.world.broken!.add(id);
     by?.ev.push({ e: 'struct', id: o.id, hp: 0 });
-    this.broadcast({ t: 'ev', ev: [{ e: 'broke', id: o.id }] });
+    this.broadcast({ t: 'ev', ev: ids.map((id) => ({ e: 'broke' as const, id })) });
+  }
+  /** Solid ids in a window group (built once, on first use). */
+  private groups: Map<number, number[]> | null = null;
+  private groupMembers(g: number) {
+    if (!this.groups) {
+      this.groups = new Map();
+      for (const s of this.world.solids) if (s.group !== undefined && s.id !== undefined) { let l = this.groups.get(s.group); if (!l) this.groups.set(s.group, (l = [])); l.push(s.id); }
+    }
+    return (this.groups.get(g) ?? []).filter((id) => !this.world.broken!.has(id));
   }
 
   // ------------------------------------------------------------ phases

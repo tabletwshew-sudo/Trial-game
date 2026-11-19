@@ -82,6 +82,8 @@ export type GameEvent =
   /** Player `i` dropped back in. */
   | { e: 'redeployed'; i: number }
   | { e: 'redeploys_closed' }
+  /** Pickaxe weak spot: where your next swing does double damage (`crit`: this swing hit the last one). */
+  | { e: 'weak'; p: [number, number, number]; crit: boolean; dmg: number }
   | { e: 'vault'; id: number; by: number }
   | { e: 'storm_hurt'; d: number };
 

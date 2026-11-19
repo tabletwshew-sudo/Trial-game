@@ -2,7 +2,7 @@ import { DROP, MOVEMENT } from './constants.js';
 import { aimDir, shotOrigin, spreadDir, type Vec3 } from './combat.js';
 import { AMMO_MAX, ITEM, ITEMS, PICK_SLOT, RARITY_RELOAD_MUL, consumableDef, meleeDef, throwableDef, weaponDef, type WeaponDef } from './items.js';
 import { clamp, lerp } from './noise.js';
-import { HURDLE_TICKS, MANTLE_TICKS, MV, ROLL_TICKS, clearColumn, findLedge, ladderAt, padAt, zipNear } from './move.js';
+import { HURDLE_TICKS, MANTLE_TICKS, MV, ROLL_TICKS, clearColumn, findLedge, findWindow, ladderAt, padAt, zipNear } from './move.js';
 import { stepCar } from './veh.js';
 import { PLAYER_RADIUS, WATER_FLOAT_Y, WORLD_LIMIT, collideBoxes, surfaceAt, terrainAt, type World } from './world.js';
 
@@ -413,6 +413,17 @@ function stepGround(s: PlayerState, cmd: InputCmd, prev: number, f: number, r: n
   if (canAct && f > 0 && (wantJump || (!s.grounded && s.vy < 3) || swimming) && s.wk === 0) {
     const ml = Math.hypot(wx, wz) > 0.1;
     const dx = ml ? wx : fwdX, dz = ml ? wz : fwdZ;
+    // dive through a broken window (a scripted vault over the sill, like hurdling a fence)
+    const win = wantJump && !swimming && (s.grounded || coyote) ? findWindow(w, s, dx, dz) : null;
+    if (win) {
+      s.mv = MV.Hurdle; s.mt = HURDLE_TICKS;
+      s.tx = win.x; s.ty = win.y; s.tz = win.z; s.my = s.y;
+      s.mh = Math.max(0.25, win.sill + 0.2 - (s.y + win.y) / 2);
+      s.grounded = false; s.vy = 0; s.jbuf = 0; s.air = 255; s.emote = 0;
+      s.vx = win.dx * 4; s.vz = win.dz * 4;
+      stepCombat(s, cmd, prev, w, ev, false);
+      return;
+    }
     const ledge = findLedge(w, s, dx, dz, swimming, wantJump && !swimming);
     if (ledge) {
       s.mv = ledge.hurdle ? MV.Hurdle : MV.Mantle;

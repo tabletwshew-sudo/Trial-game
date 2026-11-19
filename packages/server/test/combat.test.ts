@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ACT, ITEM, K, MV, PICK_SLOT, PM, REDEPLOY, SK, aimOrigin, clearColumn, stormAt, terrainAt, merchantStock, decodeSnapshot, encodeInputs, makeStormPlan, raycastWorld, surfaceAt, weaponDef, type InputCmd, type ServerMsg, type Snapshot } from '@dropzone/shared';
+import { ACT, ITEM, K, MV, PICK_SLOT, PM, REDEPLOY, SK, aimDir, aimOrigin, shotOrigin, clearColumn, stormAt, terrainAt, merchantStock, decodeSnapshot, encodeInputs, makeStormPlan, raycastWorld, surfaceAt, weaponDef, type InputCmd, type ServerMsg, type Snapshot } from '@dropzone/shared';
 import { MatchInstance, type Sock } from '../src/game/match';
 import type { Match } from '../src/hub';
 
@@ -708,5 +708,51 @@ describe('redeploy', () => {
     g.step();
     expect(c.msgs.some((m) => m.t === 'result')).toBe(true);
     expect(c.events().some((e) => e.e === 'redeploys_closed')).toBe(true);
+  });
+});
+
+describe('weak spots and windows', () => {
+  it('a pickaxe swing on the weak spot does double damage: a panel breaks in two swings', () => {
+    const g = inPlay([1, 1, 1, 1, 1, 1, 1, 1], [0, 1], 'solo');
+    const w = g.inst.world;
+    const wall = w.solids.find((o) => o.k === SK.Wall && !o.inner && o.group === undefined && o.face === 1 && o.b && o.z1 - o.z0 >= 3 && o.y0 <= o.b.fy + 0.05 && o.y1 >= o.b.fy + 2.6
+      && Math.abs(surfaceAt(w, o.x0 - 0.42, (o.z0 + o.z1) / 2, o.b.fy + 1) - o.b.fy) < 0.3 && clearColumn(w, o.x0 - 0.42, (o.z0 + o.z1) / 2, o.b.fy + 0.1, o.b.fy + 1.8, 0.38))!;
+    const a = g.inst.players[0] as any, c = g.clients.get(a.id)!;
+    g.place(a.idx, wall.x0 - 0.42, (wall.z0 + wall.z1) / 2, -Math.PI / 2); a.s.y = surfaceAt(w, a.s.x, a.s.z, wall.b!.fy + 1);
+    c.send(g.inst, a.id, { keys: 0, yaw: -Math.PI / 2, pitch: 0, slot: 6 }); g.step();
+    const swing = () => { for (let i = 0; i < 40 && !w.broken!.has(wall.id!); i++) { c.send(g.inst, a.id, { keys: i < 2 ? K.FIRE : 0, yaw: -Math.PI / 2, pitch: 0 }); g.step(); } };
+    swing();
+    const weak = c.events().find((e) => e.e === 'weak');
+    expect(weak).toBeTruthy();            // a weak spot shows up after the first hit
+    // put the weak spot where the next swing lands (the same ray the server traces) and swing again
+    const o = shotOrigin(w, a.s.x, a.s.y, a.s.z, -Math.PI / 2), d = aimDir(-Math.PI / 2, 0);
+    const t = raycastWorld(w, o, d, 2.5, false).t;
+    a.crit = { key: wall.id, x: o.x + d.x * t, y: o.y + d.y * t, z: o.z + d.z * t };
+    swing();
+    expect(w.broken!.has(wall.id!)).toBe(true); // 75 + 150 = 225: down in two
+    expect(c.events().some((e) => e.e === 'weak' && e.crit)).toBe(false); // (broken: no new spot)
+  });
+
+  it('a shot smashes a window, and the pieces round it still stand', () => {
+    const g = inPlay([1, 1, 1, 1, 1, 1, 1, 1], [0, 1], 'solo');
+    const w = g.inst.world;
+    const N = [[0, 1], [1, 0], [0, -1], [-1, 0]];
+    const glass = w.solids.find((o) => {
+      if (o.k !== SK.Glass || !o.b || o.face === undefined || Math.abs(o.y0 - (o.b.fy + 1.05)) > 0.05) return false;
+      const [nx, nz] = N[o.face], x = (o.x0 + o.x1) / 2 + nx * 6, z = (o.z0 + o.z1) / 2 + nz * 6;
+      return Math.abs(surfaceAt(w, x, z, o.b.fy + 2) - o.b.fy) < 0.4 && clearColumn(w, x, z, o.b.fy + 0.1, o.b.fy + 1.8, 0.45);
+    })!;
+    const [nx, nz] = N[glass.face!];
+    const a = g.inst.players[0], c = g.clients.get(a.id)!;
+    g.place(a.idx, (glass.x0 + glass.x1) / 2 + nx * 6, (glass.z0 + glass.z1) / 2 + nz * 6);
+    a.s.inv[0] = { id: ITEM.ar, r: 0, n: 1, mag: 30 }; a.s.slot = 0; a.s.ammo[1] = 30;
+    const o = aimOrigin(a.s.x, a.s.y, a.s.z, 0);
+    const tx = (glass.x0 + glass.x1) / 2, ty = (glass.y0 + glass.y1) / 2, tz = (glass.z0 + glass.z1) / 2;
+    const yaw = Math.atan2(-(tx - o.x), -(tz - o.z)), pitch = Math.atan2(ty - o.y, Math.hypot(tx - o.x, tz - o.z));
+    for (let i = 0; i < 20 && !w.broken!.has(glass.id!); i++) { c.send(g.inst, a.id, { keys: i % 2 ? 0 : K.FIRE | K.ADS, yaw, pitch }); g.step(); }
+    expect(w.broken!.has(glass.id!)).toBe(true);
+    const frame = w.solids.filter((s) => s.group === glass.group && s.k === SK.Wall);
+    expect(frame.length).toBe(4);
+    expect(frame.every((s) => !w.broken!.has(s.id!))).toBe(true);
   });
 });

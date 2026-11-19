@@ -50,7 +50,7 @@ export function buildSky(scene: THREE.Scene, shadows: boolean, shadowSize = 2048
   scene.add(dome);
 
   // clouds: clusters of puffs, lit from the sun with grey-blue undersides and bright silver edges
-  const CLOUDS = 56, PUFFS = 7;
+  const CLOUDS = 40, PUFFS = 9;
   const cloudMat = new THREE.ShaderMaterial({
     fog: false,
     vertexShader: /* glsl */ `
@@ -84,13 +84,14 @@ export function buildSky(scene: THREE.Scene, shadows: boolean, shadowSize = 2048
   const centers: THREE.Vector3[] = [], offsets: THREE.Vector4[] = [];
   const rnd = (() => { let s = 12345; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 2 ** 32); })();
   for (let c = 0; c < CLOUDS; c++) {
-    centers.push(new THREE.Vector3((rnd() - 0.5) * 7000, 440 + rnd() * 300, (rnd() - 0.5) * 7000));
-    const size = 30 + rnd() * 60;
+    centers.push(new THREE.Vector3((rnd() - 0.5) * 7000, 380 + rnd() * 260, (rnd() - 0.5) * 7000));
+    // big, towering cumulus: a wide flat base and billowing heads stacked on top
+    const size = 70 + rnd() * 100;
     for (let p = 0; p < PUFFS; p++) {
-      // a big middle, smaller shoulders, flat-ish base
       const t = (p / (PUFFS - 1)) * 2 - 1;
-      const r = size * (1.05 - Math.abs(t) * 0.55) * (0.75 + rnd() * 0.4);
-      offsets.push(new THREE.Vector4(t * size * 1.3 + (rnd() - 0.5) * 12, r * 0.35 + rnd() * size * 0.15, (rnd() - 0.5) * size * 0.9, r));
+      const head = p % 3 === 1;
+      const r = size * (head ? 0.85 : 1.05 - Math.abs(t) * 0.5) * (0.75 + rnd() * 0.4);
+      offsets.push(new THREE.Vector4(t * size * (head ? 0.6 : 1.3) + (rnd() - 0.5) * 18, r * (head ? 1.05 : 0.35) + rnd() * size * 0.25, (rnd() - 0.5) * size * 0.9, r));
     }
   }
   scene.add(puff);

@@ -1,4 +1,5 @@
 import { MOVEMENT } from './constants.js';
+import { SK } from './structures.js';
 import { PLAYER_HEIGHT, PLAYER_RADIUS, SOLID_CELL, STEP_UP, isOpenDoor, solidKey, solidTop, surfaceAt, terrainAt, type World } from './world.js';
 
 /** Movement sub-states (on top of the player mode). */
@@ -100,4 +101,37 @@ export function zipNear(w: World, x: number, y: number, z: number): [number, num
     if (d < bd && y > cy - 4.5 && y < cy - 0.5) { bd = d; best = [i, Math.max(0.01, Math.min(0.99, t))]; }
   });
   return best;
+}
+
+/**
+ * A broken window just ahead that you can dive through: its sill between knee and chest height,
+ * you lined up with the opening and heading into it. Returns where you land on the other side
+ * (the floor inside, or the ground outside; from an upstairs window you drop the rest of the way).
+ */
+export function findWindow(w: World, s: { x: number; y: number; z: number }, dx: number, dz: number) {
+  if (!w.broken || !w.broken.size) return null;
+  const px = s.x + dx * 0.9, pz = s.z + dz * 0.9;
+  const list = w.solidGrid.get(solidKey(Math.floor(px / SOLID_CELL), Math.floor(pz / SOLID_CELL)));
+  if (!list) return null;
+  for (const o of list) {
+    if (o.k !== SK.Glass || o.id === undefined || !w.broken.has(o.id)) continue;
+    const sill = o.y0 - s.y;
+    if (sill < 0.3 || sill > 1.5) continue;
+    const alongX = o.x1 - o.x0 > o.z1 - o.z0;
+    const cx = (o.x0 + o.x1) / 2, cz = (o.z0 + o.z1) / 2;
+    // u: along the wall, v: across it
+    const su = alongX ? s.x : s.z, u0 = alongX ? o.x0 : o.z0, u1 = alongX ? o.x1 : o.z1;
+    const sv = alongX ? s.z : s.x, cv = alongX ? cz : cx, dv = alongX ? dz : dx;
+    if (su < u0 + 0.12 || su > u1 - 0.12) continue;           // lined up with the opening
+    const side = Math.sign(sv - cv) || 1;
+    if (Math.abs(sv - cv) > 1.4 || dv * -side < 0.45) continue; // close to it, and heading through
+    const tu = Math.min(u1 - 0.3, Math.max(u0 + 0.3, su)), tv = cv - side * 0.95;
+    const tx = alongX ? tu : tv, tz = alongX ? tv : tu;
+    const ground = surfaceAt(w, tx, tz, o.y0 + 0.2);
+    if (ground > o.y0 + 0.1) continue;
+    const ty = Math.max(ground, o.y0 - 1.1);
+    if (!clearColumn(w, tx, tz, ty + 0.1, ty + 1.7, 0.3)) continue;
+    return { x: tx, y: ty, z: tz, sill: o.y0, dx: alongX ? 0 : -side, dz: alongX ? -side : 0 };
+  }
+  return null;
 }

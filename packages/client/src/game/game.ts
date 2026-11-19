@@ -120,6 +120,12 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
     lootR.set(init.loot);
     const cars = new CarRenderer(scene, world, fx);
     const chestR = new ChestRenderer(scene, fx);
+    // pickaxe weak spot: a glowing ring on the wall where your next swing does double damage
+    const weak = new THREE.Group();
+    weak.add(new THREE.Mesh(new THREE.RingGeometry(0.11, 0.17, 28), new THREE.MeshBasicMaterial({ color: '#8ff4ff', transparent: true, opacity: 0.95, depthTest: false, fog: false })));
+    weak.add(new THREE.Mesh(new THREE.CircleGeometry(0.06, 20), new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.9, depthTest: false, fog: false })));
+    weak.renderOrder = 5; weak.visible = false; scene.add(weak);
+    let weakUntil = 0;
     chestR.onLand = (x, y, z) => audio.thud({ x, y: y + 0.5, z });
     chestR.set(init.chests);
     let aliveCount = init.alive, specIdx = -1, revive = { p: 0, at: 0 };
@@ -320,6 +326,15 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
         }
         case 'struct': combat.structureHp(e.hp); break;
         case 'redeploying': combat.redeploying(e.at, e.left); break;
+        case 'weak': {
+          weak.position.set(...e.p); weak.visible = true; weakUntil = performance.now() + 7000;
+          if (e.crit) {
+            // a critical: gold number and a bright ding
+            const pr = project(...e.p); if (pr.show) combat.damageNumber(pr.sx, pr.sy, e.dmg, false, true);
+            audio.hit('head');
+          }
+          break;
+        }
         case 'redeployed':
           if (e.i === selfIdx) { combat.redeployed(); toast('Back in! Open your glider with Space and pick a spot', 'success'); audio.move('glider', null); }
           else if (team.includes(e.i)) toast(`${roster[e.i]?.name ?? 'A teammate'} is dropping back in`, 'info');
@@ -683,6 +698,12 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       sviz.update(dt, camPos, debugCam ? debugCam.yaw : camYaw, settings.visualSound);
       lootR.update(dt, time, camPos);
       chestR.update(dt, time, camPos, serverNow);
+      if (weak.visible) {
+        // faces you, pulses, and goes away if you stop working on it (or put the pickaxe away)
+        weak.quaternion.copy(camera.quaternion);
+        weak.scale.setScalar(1 + Math.sin(time * 9) * 0.12);
+        if (performance.now() > weakUntil || !pred || pred.slot !== PICK_SLOT) weak.visible = false;
+      }
       cars.update(dt, rt, carOverride, camPos);
       for (const b of beams.values()) if (b.visible) (b.material as THREE.MeshBasicMaterial).opacity = 0.42 + Math.sin(time * 3) * 0.12;
       const tJs = performance.now();

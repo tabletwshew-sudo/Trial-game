@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  clearColumn,
   ITEM, K, MOVEMENT, MV, PM, POSE, SIM_HZ, SK, SOLID_CELL, SPAWN_ISLAND, ZIP_HANG, addToInventory, aimOrigin, boxSolid, getWorld, isLow,
   newPlayerState, rayPlayer, solidKey, stepPlayer, surfaceAt, terrainAt, type InputCmd, type PlayerState, type ShotEvent, type Solid, type World,
 } from '../src/index';
@@ -341,5 +342,32 @@ describe('roll landing and wall kick', () => {
     const s = player(w);
     run(s, w, (i) => ({ keys: K.F | (i === 1 || i === 20 ? K.JUMP : 0), yaw: 0, pitch: 0 }), 30);
     expect(s.wk).toBe(0);
+  });
+});
+
+describe('windows', () => {
+  it('a broken window can be dived through from outside; an intact one cannot', () => {
+    const base = getWorld();
+    const N = [[0, 1], [1, 0], [0, -1], [-1, 0]];
+    // a ground-floor window with level ground outside and room on both sides
+    const pick = base.solids.find((o) => {
+      if (o.k !== SK.Glass || !o.b || o.face === undefined || Math.abs(o.y0 - (o.b.fy + 1.05)) > 0.05) return false;
+      const [nx, nz] = N[o.face], cx = (o.x0 + o.x1) / 2, cz = (o.z0 + o.z1) / 2;
+      const ox = cx + nx * 1.1, oz = cz + nz * 1.1, ix = cx - nx * 1.1, iz = cz - nz * 1.1;
+      return Math.abs(surfaceAt(base, ox, oz, o.b.fy + 1) - o.b.fy) < 0.25 && Math.abs(surfaceAt(base, ix, iz, o.b.fy + 0.5) - o.b.fy) < 0.05
+        && clearColumn(base, ox, oz, o.b.fy + 0.1, o.b.fy + 1.8, 0.45) && clearColumn(base, ix, iz, o.b.fy + 0.1, o.b.fy + 1.8, 0.45);
+    })!;
+    expect(pick).toBeTruthy();
+    const [nx, nz] = N[pick.face!], cx = (pick.x0 + pick.x1) / 2, cz = (pick.z0 + pick.z1) / 2;
+    const tryDive = (broken: boolean) => {
+      const w = Object.create(base) as World; w.broken = new Set(broken ? [pick.id!] : []);
+      const s = newPlayerState();
+      s.x = cx + nx * 1.0; s.z = cz + nz * 1.0; s.y = surfaceAt(w, s.x, s.z, pick.b!.fy + 1); s.grounded = true;
+      const yaw = Math.atan2(nx, nz); // facing in through the window
+      run(s, w, (i) => ({ keys: K.F | (i === 3 ? K.JUMP : 0), yaw, pitch: 0 }), 50);
+      return (s.x - cx) * nx + (s.z - cz) * nz; // > 0 outside, < 0 inside
+    };
+    expect(tryDive(false)).toBeGreaterThan(0); // glass in the way
+    expect(tryDive(true)).toBeLessThan(-0.3);  // through and inside
   });
 });

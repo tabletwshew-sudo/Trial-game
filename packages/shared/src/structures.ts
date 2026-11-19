@@ -8,7 +8,7 @@ import { ROOF_FLAT, terrainAt, type Box, type World } from './world.js';
  */
 
 export const SK = {
-  Found: 0, Wall: 1, Floor: 2, Ceil: 3, Roof: 4, Stair: 5, Furn: 6, Trunk: 7, Rock: 8, Prop: 9, Cave: 10, Step: 11, Block: 12, Whole: 13,
+  Found: 0, Wall: 1, Floor: 2, Ceil: 3, Roof: 4, Stair: 5, Furn: 6, Trunk: 7, Rock: 8, Prop: 9, Cave: 10, Step: 11, Block: 12, Whole: 13, Glass: 14,
 } as const;
 
 export interface Solid {
@@ -20,6 +20,8 @@ export interface Solid {
   face?: number;
   /** Interior wall (no exterior face). */
   inner?: boolean;
+  /** Pieces of one wall panel round a window (they break together; the glass breaks on its own). */
+  group?: number;
   /** Vault door: solid until that vault is opened in this match. */
   vault?: number;
   /** Index in world.solids (set when the world is built); breakable pieces are tracked by it. */
@@ -34,6 +36,7 @@ export interface Solid {
 export const WALL_PANEL = 4;
 
 export function structureHp(o: Solid): number {
+  if (o.k === SK.Glass) return 1; // any hit smashes a window
   if (o.vault !== undefined || !o.b || o.b.shape !== 0) return 0;
   if (o.k === SK.Wall) return o.inner ? 150 : 225; // pickaxe: 2 swings for an inside wall, 3 for an outside panel
   if (o.k === SK.Furn) return 100;
@@ -140,6 +143,7 @@ export function genLayout(w: World, b: Box, out: Solid[]): Layout {
 
   // Outside walls come in panels about a storey high and ~4 m wide, so breaking one knocks a
   // hole in the side of a building instead of taking the whole side away.
+  const bigWin = type === 'hall', winW = bigWin ? 2.2 : Math.min(1.5, (b.kind === 'city' ? 2.6 : 3.1) * 0.5);
   const wall = (r: { x0: number; z0: number; x1: number; z1: number }, y0: number, yTop: number, face: number) => {
     const alongX = r.x1 - r.x0 >= r.z1 - r.z0;
     const len = alongX ? r.x1 - r.x0 : r.z1 - r.z0;
@@ -149,7 +153,21 @@ export function genLayout(w: World, b: Box, out: Solid[]): Layout {
       const a = alongX ? r.x0 : r.z0, d = len / n;
       const u0 = a + d * i, u1 = i === n - 1 ? (alongX ? r.x1 : r.z1) : a + d * (i + 1);
       const piece = alongX ? { x0: u0, x1: u1, z0: r.z0, z1: r.z1 } : { x0: r.x0, x1: r.x1, z0: u0, z1: u1 };
-      for (let k = 0; k + 1 < cuts.length; k++) add(piece, cuts[k], cuts[k + 1], SK.Wall, { face });
+      for (let k = 0; k + 1 < cuts.length; k++) {
+        const ya = cuts[k], yb = cuts[k + 1], sth = yb - ya, mid = (u0 + u1) / 2;
+        // about two panels in three have a window on each storey: a real hole with a glass pane in it
+        const wy0 = ya + (bigWin ? sth - 1.8 : 1.05), wy1 = ya + (bigWin ? sth - 0.6 : Math.min(sth - 0.5, 2.45));
+        const win = L.floors.some((f) => Math.abs(f - ya) < 0.01) && u1 - u0 >= winW + 0.9 && wy1 - wy0 >= 0.6
+          && hash2(Math.round(mid * 3), Math.round(ya * 10), b.style + 5) < 0.68;
+        if (!win) { add(piece, ya, yb, SK.Wall, { face }); continue; }
+        const group = ++groupSeq;
+        const span = (a0: number, a1: number) => (alongX ? { x0: a0, x1: a1, z0: r.z0, z1: r.z1 } : { x0: r.x0, x1: r.x1, z0: a0, z1: a1 });
+        add(piece, ya, wy0, SK.Wall, { face, group });                        // below the sill
+        add(piece, wy1, yb, SK.Wall, { face, group });                        // above the window
+        add(span(u0, mid - winW / 2), wy0, wy1, SK.Wall, { face, group });     // either side
+        add(span(mid + winW / 2, u1), wy0, wy1, SK.Wall, { face, group });
+        add(span(mid - winW / 2, mid + winW / 2), wy0, wy1, SK.Glass, { face, group });
+      }
     }
   };
   // a wall along the front (v = 0..T) or back (v = D-T..D) with an opening at the middle
@@ -331,3 +349,5 @@ export function boxSolid(x: number, z: number, hx: number, hz: number, y0: numbe
 }
 
 export function hashPick(i: number, j: number, seed: number) { return hash2(i, j, seed); }
+/** Window groups: a fresh number for each walled-in window (only unique within a world). */
+let groupSeq = 0;
