@@ -195,11 +195,11 @@ export function lobbyScreen(net: Net, you: UserView, onSignOut: () => void, onMa
   /** What's new on the island (bottom left of the play screen). */
   function newsCard() {
     const items: [string, string][] = [
-      ['▣', 'Supply drops: about eight a match. Follow the blue beam'],
-      ['⚡', 'New cars: hold Shift to boost; they kick up dust and lean in corners'],
-      ['❀', 'Softer grass, rounder trees, brighter colours'],
-      ['◉', 'Sound markers for footsteps, gunshots, chests and cars (Settings → Audio)'],
-      ['◎', 'New reticle for every weapon type; walls break a panel at a time'],
+      ['☺', 'New characters: taller, adult proportions and new outfits (coats, hoods, masks, bodysuits, a cape)'],
+      ['⌂', 'A fuller island: six new places, denser woods, no more empty fields between towns'],
+      ['❀', 'New regions: autumn wood, blossom forest, red-rock badlands, a second snowy peak, flower fields'],
+      ['▣', 'Supply drops: about eight a match. Follow the beam'],
+      ['⚡', 'Cars: hold Shift to boost'],
     ];
     return h('div.news-card', h('div.news-title', "WHAT'S NEW"), ...items.map(([i, t]) => h('div.news-row', h('span', i), h('small', t))));
   }

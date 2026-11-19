@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { waveTexture } from './noisetex';
 import { withTerrainDetail } from './surface';
 import {
-  BRIDGE_Y, ROOF_FLAT, ROOF_GABLE_X, SC_BUSH, SC_OAK, SC_PALM, SC_PINE, SC_ROCK, fbm, genScatter, hash2, lerp, roadEdgeDist, smooth, terrainAt,
+  BRIDGE_Y, ROOF_FLAT, ROOF_GABLE_X, SC_BUSH, SC_OAK, SC_PALM, SC_PINE, SC_ROCK, biomeAt, fbm, genScatter, hash2, lerp, roadEdgeDist, smooth, terrainAt,
   type Box, type HeightField, type Poi, type PoiKind, type World,
 } from '@dropzone/shared';
 import { softRamp } from '../lobby/toon';
@@ -32,7 +32,10 @@ const COL = {
   deep: C('#1d7fd0'), shallow: C('#d9c98f'), sand: C('#eedfaa'), grassA: C('#5cb646'), grassB: C('#3f9a3b'), grassC: C('#93c95a'), dry: C('#a9b25c'), lush: C('#2f8a3a'),
   high: C('#7fa456'), rock: C('#8f8779'), rockDark: C('#6f6a61'), snow: C('#f6faff'), dirt: C('#b89b68'),
   pave: C('#b8b3a6'), yard: C('#a69c8d'), field: C('#cfae5e'), fieldB: C('#9fbf4f'), quarry: C('#bca78a'), camp: C('#a98d5f'),
+  autumn: C('#c9973f'), autumnB: C('#b8742f'), redrock: C('#c46a3e'), redrockB: C('#a9502f'),
 };
+/** Petal Fields' flower stripes. */
+const FLOWER_ROWS = ['#d94f8a', '#f2c94c', '#8e6fe0', '#ef6a4a', '#f4f1ea'].map((c) => C(c));
 const POI_GROUND: Partial<Record<PoiKind, THREE.Color>> = {
   city: COL.pave, industrial: COL.yard, harbor: COL.pave, quarry: COL.quarry, camp: COL.camp, station: COL.rock, town: COL.pave,
 };
@@ -47,12 +50,22 @@ export function groundColor(w: World, x: number, z: number, h: number, slope: nu
   const n3 = fbm(x / 420 + 7.3, z / 420 - 2.1, w.seed + 83, 3);
   out.lerp(COL.dry, smooth(0.56, 0.74, n3) * 0.45).lerp(COL.lush, smooth(0.42, 0.26, n3) * 0.4);
   out.lerp(COL.high, smooth(40, 75, h));
+  // regions: golden-orange leaf litter in the autumn wood, deep lush green under the blossom trees,
+  // banded red rock in the badlands
+  const bio = biomeAt(x, z);
+  if (bio.autumn > 0) out.lerp(n > 0.5 ? COL.autumn : COL.autumnB, bio.autumn * 0.75);
+  if (bio.blossom > 0) out.lerp(COL.lush, bio.blossom * 0.5);
+  if (bio.badlands > 0) out.lerp(Math.floor(h / 4.5 + n * 0.8) % 2 ? COL.redrock : COL.redrockB, bio.badlands * 0.9);
   out.lerp(COL.sand, smooth(3.4, 2.3, h));
   for (const p of w.pois) {
     const d = Math.hypot(x - p.x, z - p.z);
     if (d > p.r * 1.1) continue;
     const k = smooth(p.r * 1.05, p.r * 0.8, d);
-    if (p.kind === 'farm') {
+    if (p.kind === 'farm' && biomeAt(x, z).flowers > 0.2) {
+      // Petal Fields: long stripes of flowers in five colours
+      const band = ((Math.floor((x * 0.8 + z * 0.6) / 8) % 5) + 5) % 5;
+      out.lerp(FLOWER_ROWS[band], k * 0.9);
+    } else if (p.kind === 'farm') {
       const rows = Math.floor((x + z * 0.35) / 7) % 2 === 0;
       out.lerp(rows ? COL.field : COL.fieldB, k * 0.85);
     } else if (p.kind === 'resort') out.lerp(COL.sand, k * 0.8);
@@ -334,16 +347,28 @@ function roundFoliage(g: THREE.BufferGeometry, centre: (y: number) => [number, n
 /** Near and far versions of each scatter type: [oak, pine, palm, rock, bush]. */
 function scatterGeometries() {
   const ico = (r: number, d = 0) => new THREE.IcosahedronGeometry(r, d);
-  // oak: a trunk and a soft, puffy crown of six round lobes, shaded as one mass (~500 triangles)
-  const oakCrown: [number, number, number, number, string][] = [
-    [0, 4.9, 0, 2.35, '#4fbf4a'], [1.45, 4.2, 0.5, 1.65, '#5ccf55'], [-1.35, 4.3, -0.6, 1.6, '#45ad46'],
-    [0.4, 4.1, -1.45, 1.5, '#52c24f'], [-0.5, 4.0, 1.35, 1.45, '#63d35c'], [0.3, 6.2, 0.2, 1.55, '#6fdc63'],
-  ];
-  const oak = faceVary(shadeByHeight(mergeColored([
-    { geo: new THREE.CylinderGeometry(0.3, 0.5, 3.6, 7, 1, true), color: '#7a4b2c', matrix: mat4(0, 1.8, 0) },
-    ...oakCrown.map(([x, y, z, r, c], i) => ({ geo: ico(r, 1), color: c, matrix: mat4(x, y, z, i * 0.7, i * 1.3, 0, 1, 0.86, 1) })),
-  ]), 2.8, 2.8, 7.4, 0.58, 1.2, new THREE.Color('#b6f07a')), 2.8, 0.03, 3);
-  roundFoliage(oak, () => [0, 4.4, 0], 0.88);
+  // oak: a trunk and a soft, puffy crown of six round lobes, shaded as one mass (~500 triangles).
+  // The autumn wood and the blossom forest use the same tree in their own colours.
+  const oakOf = (lobes: string[], top: string, trunk = '#7a4b2c') => {
+    const crown: [number, number, number, number][] = [[0, 4.9, 0, 2.35], [1.45, 4.2, 0.5, 1.65], [-1.35, 4.3, -0.6, 1.6], [0.4, 4.1, -1.45, 1.5], [-0.5, 4.0, 1.35, 1.45], [0.3, 6.2, 0.2, 1.55]];
+    const g = faceVary(shadeByHeight(mergeColored([
+      { geo: new THREE.CylinderGeometry(0.3, 0.5, 3.6, 7, 1, true), color: trunk, matrix: mat4(0, 1.8, 0) },
+      ...crown.map(([x, y, z, r], i) => ({ geo: ico(r, 1), color: lobes[i], matrix: mat4(x, y, z, i * 0.7, i * 1.3, 0, 1, 0.86, 1) })),
+    ]), 2.8, 2.8, 7.4, 0.58, 1.2, new THREE.Color(top)), 2.8, 0.03, 3);
+    roundFoliage(g, () => [0, 4.4, 0], 0.88);
+    return g;
+  };
+  const oakFarOf = (c: string) => {
+    const g = shadeByHeight(mergeColored([
+      { geo: new THREE.CylinderGeometry(0.3, 0.5, 3.6, 5, 1, true), color: '#74472a', matrix: mat4(0, 1.8, 0) },
+      { geo: ico(2.6), color: c, matrix: mat4(0, 4.8, 0, 0, 0, 0, 1.25, 0.95, 1.25) },
+    ]), 2.8, 2.8, 7.4, 0.6, 1.15);
+    roundFoliage(g, () => [0, 4.4, 0]);
+    return g;
+  };
+  const oak = oakOf(['#4fbf4a', '#5ccf55', '#45ad46', '#52c24f', '#63d35c', '#6fdc63'], '#b6f07a');
+  const autumn = oakOf(['#e8862e', '#f2a33a', '#d4592a', '#f0b23f', '#e3742c', '#f7c24a'], '#ffe08a', '#6e4428');
+  const blossom = oakOf(['#f39bd0', '#f7b6dc', '#c97be8', '#ee8cc6', '#d993ec', '#fbc6e6'], '#fff0fa', '#6a4a52');
   const oakFar = shadeByHeight(mergeColored([
     { geo: new THREE.CylinderGeometry(0.3, 0.5, 3.6, 5, 1, true), color: '#74472a', matrix: mat4(0, 1.8, 0) },
     { geo: ico(2.6), color: '#4cb04c', matrix: mat4(0, 4.8, 0, 0, 0, 0, 1.25, 0.95, 1.25) },
@@ -394,7 +419,7 @@ function scatterGeometries() {
     { geo: ico(0.6), color: '#66d15d', matrix: mat4(0.6, 0.45, 0.2, 1, 1, 0) },
   ]), -1, 0, 1.4, 0.62, 1.18);
   roundFoliage(bushFar, () => [0, 0.2, 0], 0.88);
-  return { near: [oak, pine, palm, rock, bush], far: [oakFar, pineFar, palm, rock, bushFar] };
+  return { near: [oak, pine, palm, rock, bush, autumn, blossom], far: [oakFar, pineFar, palm, rock, bushFar, oakFarOf('#e8862e'), oakFarOf('#f39bd0')] };
 }
 
 /**

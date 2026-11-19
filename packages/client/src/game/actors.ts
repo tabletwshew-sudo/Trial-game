@@ -43,18 +43,18 @@ export class Actors {
     // far-away figures: the same proportions as the full model in a few hundred triangles.
     // The jacket and the hat/hair are tinted per player so squads stay recognisable at range.
     const body = mergeColored([
-      { geo: new THREE.CapsuleGeometry(0.26, 0.36, 2, 8), color: '#ffffff', matrix: mat4(0, 1.32, 0, 0, 0, 0, 1.08, 1, 0.75) },
-      { geo: new THREE.CapsuleGeometry(0.09, 0.48, 2, 6), color: '#ffffff', matrix: mat4(-0.33, 1.25, 0, 0, 0, -0.12) },
-      { geo: new THREE.CapsuleGeometry(0.09, 0.48, 2, 6), color: '#ffffff', matrix: mat4(0.33, 1.25, 0, 0, 0, 0.12) },
+      { geo: new THREE.CapsuleGeometry(0.19, 0.3, 2, 8), color: '#ffffff', matrix: mat4(0, 1.33, 0, 0, 0, 0, 1.1, 1, 0.74) },
+      { geo: new THREE.CapsuleGeometry(0.06, 0.5, 2, 6), color: '#ffffff', matrix: mat4(-0.26, 1.22, 0, 0, 0, -0.1) },
+      { geo: new THREE.CapsuleGeometry(0.06, 0.5, 2, 6), color: '#ffffff', matrix: mat4(0.26, 1.22, 0, 0, 0, 0.1) },
     ]);
-    const hat = mergeColored([{ geo: new THREE.SphereGeometry(0.255, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2.1), color: '#ffffff', matrix: mat4(0, 1.88, -0.01, -0.35, 0, 0) }]);
+    const hat = mergeColored([{ geo: new THREE.SphereGeometry(0.15, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2.1), color: '#ffffff', matrix: mat4(0, 1.75, -0.01, -0.35, 0, 0) }]);
     const rest = mergeColored([
-      { geo: new THREE.SphereGeometry(0.23, 10, 8), color: '#e6b48a', matrix: mat4(0, 1.86, 0, 0, 0, 0, 0.96, 1.06, 0.98) },
-      { geo: new THREE.CapsuleGeometry(0.11, 0.62, 2, 6), color: '#2d3250', matrix: mat4(-0.12, 0.55, 0) },
-      { geo: new THREE.CapsuleGeometry(0.11, 0.62, 2, 6), color: '#2d3250', matrix: mat4(0.12, 0.55, 0) },
-      { geo: new THREE.BoxGeometry(0.2, 0.15, 0.3), color: '#3b2a20', matrix: mat4(-0.12, 0.07, 0.04) },
-      { geo: new THREE.BoxGeometry(0.2, 0.15, 0.3), color: '#3b2a20', matrix: mat4(0.12, 0.07, 0.04) },
-      { geo: new THREE.BoxGeometry(0.38, 0.42, 0.17), color: '#6b4f3a', matrix: mat4(0, 1.36, -0.27) },
+      { geo: new THREE.SphereGeometry(0.135, 10, 8), color: '#e6b48a', matrix: mat4(0, 1.72, 0, 0, 0, 0, 0.92, 1.1, 0.98) },
+      { geo: new THREE.CapsuleGeometry(0.075, 0.82, 2, 6), color: '#2d3250', matrix: mat4(-0.095, 0.53, 0) },
+      { geo: new THREE.CapsuleGeometry(0.075, 0.82, 2, 6), color: '#2d3250', matrix: mat4(0.095, 0.53, 0) },
+      { geo: new THREE.BoxGeometry(0.13, 0.12, 0.25), color: '#3b2a20', matrix: mat4(-0.095, 0.06, 0.035) },
+      { geo: new THREE.BoxGeometry(0.13, 0.12, 0.25), color: '#3b2a20', matrix: mat4(0.095, 0.06, 0.035) },
+      { geo: new THREE.BoxGeometry(0.29, 0.33, 0.13), color: '#6b4f3a', matrix: mat4(0, 1.33, -0.2) },
     ]);
     const glider = mergeColored([
       { geo: new THREE.ConeGeometry(2.9, 3.1, 3, 1).rotateX(Math.PI / 2).scale(1, 0.05, 1), color: '#ffffff', matrix: mat4(0, 3.2, 0.2) },

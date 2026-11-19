@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { fbm, hash2, layoutAt, poiAt, roadEdgeDist, surfaceAt, terrainAt, type World } from '@dropzone/shared';
+import { biomeAt, fbm, hash2, layoutAt, poiAt, roadEdgeDist, surfaceAt, terrainAt, type World } from '@dropzone/shared';
 import { groundColor } from './terrain';
 import { SUN_DIR } from './atmosphere';
 
@@ -103,6 +103,10 @@ function grassMaterial(radius: { value: number }, inner: { value: number }, key:
   return m;
 }
 
+/** Drift colours (yellow, pink, purple, white) and Petal Fields' stripes. */
+const DRIFT = ['#ffd84d', '#ff8fc8', '#a77bff', '#fff6e8'].map((c) => new THREE.Color(c));
+const ROWS = ['#e0559a', '#f6cf4f', '#9a78ec', '#f2724f', '#fbf7ef'].map((c) => new THREE.Color(c));
+
 /** Tufts for the grass ring around you, and a sparser far ring of bigger clumps beyond it. */
 const nearR = { value: 30 }, noInner = { value: 0 }, farR = { value: 60 };
 
@@ -126,10 +130,11 @@ export class Grass {
     this.far.frustumCulled = false; this.far.count = 0;
     // a little flower: a ring of petals round a yellow middle, on top of a stem-high clump
     const petals: THREE.BufferGeometry[] = [];
-    for (let k = 0; k < 5; k++) petals.push(new THREE.SphereGeometry(0.028, 5, 3).scale(1, 0.4, 1.6).translate(0, 0, 0.035).rotateY((k / 5) * Math.PI * 2));
+    for (let k = 0; k < 5; k++) petals.push(new THREE.SphereGeometry(0.036, 5, 3).scale(1, 0.4, 1.6).translate(0, 0, 0.045).rotateY((k / 5) * Math.PI * 2));
     const fGeo = mergeGeometries(petals).translate(0, 0.36, 0);
     const fMat = addWind(new THREE.MeshLambertMaterial({ color: '#ffffff' }), 0.16, 0);
-    this.flowers = new THREE.InstancedMesh(fGeo, fMat, Math.ceil(max / 8));
+    // wildflowers grow in drifts, so there can be a lot of them
+    this.flowers = new THREE.InstancedMesh(fGeo, fMat, Math.ceil(max / 2.5));
     this.flowers.frustumCulled = false; this.flowers.count = 0;
     this.radius = Math.sqrt(max * this.cell * this.cell / Math.PI) * 0.92;
     this.farRadius = Math.sqrt(this.radius * this.radius + this.farMax * this.farCell * this.farCell / Math.PI) * 0.95;
@@ -149,13 +154,15 @@ export class Grass {
     const poi = poiAt(w, x, z);
     if (poi && !poi.minor && (poi.kind === 'city' || poi.kind === 'industrial' || poi.kind === 'harbor' || poi.kind === 'quarry' || poi.kind === 'station')) return null;
     if (layoutAt(w, x, z) || surfaceAt(w, x, z, h + 0.3) > h + 0.05) return null;
+    const bio = biomeAt(x, z);
+    if (bio.badlands > 0.55 || (bio.badlands > 0.25 && hash2(i, j, 22) < bio.badlands * 1.6)) return null; // dry red rock: hardly any grass
     groundColor(w, x, z, h, slope / 4, col);
     const field = poi?.kind === 'farm' && !poi.minor;
     col.multiplyScalar(field ? 1.12 : 1.02);
     col.offsetHSL((hash2(i, j, 19) - 0.5) * 0.035, (hash2(i, j, 20) - 0.5) * 0.14, (hash2(i, j, 21) - 0.5) * 0.07);
     // knee-high in fields, a soft ankle-high carpet elsewhere (a little longer in lush patches)
     const k = (field ? 1.35 : 0.9) + hash2(i, j, 14) * 0.35 + patch * 0.45;
-    return { h, k, patch, field };
+    return { h, k, patch, field, bio };
   }
 
   update(cam: THREE.Vector3) {
@@ -177,10 +184,22 @@ export class Grass {
       this.mesh.setMatrixAt(n, m.compose(p.set(x, g.h - 0.02, z), q, s.set(g.k, g.k * (0.8 + hash2(i, j, 16) * 0.5), g.k)));
       this.mesh.setColorAt(n, col);
       n++;
-      if (!g.field && nf < this.flowers.instanceMatrix.count && hash2(i, j, 17) > 0.93 && g.patch > 0.5) {
-        this.flowers.setMatrixAt(nf, m.compose(p.set(x, g.h - 0.02, z), q, s.set(g.k * 0.8, g.k * 0.8, g.k * 0.8)));
-        this.flowers.setColorAt(nf, FL[Math.floor(hash2(i, j, 18) * 4)]);
-        nf++;
+      // wildflowers: drifts of one colour across the meadows (a few strays elsewhere), and Petal
+      // Fields' flowers in its stripes
+      if (nf < this.flowers.instanceMatrix.count) {
+        const drift = fbm(x / 28 + 3.7, z / 28 - 1.9, 61, 2);
+        const stripes = g.field && g.bio.flowers > 0.2;
+        const chance = stripes ? 0.75 : g.field ? 0 : drift > 0.57 ? 0.7 : g.patch > 0.5 ? 0.06 : 0.015;
+        if (hash2(i, j, 17) < chance) {
+          const fk = (stripes ? 1.05 : 1.0) + hash2(i, j, 23) * 0.4;
+          this.flowers.setMatrixAt(nf, m.compose(p.set(x + (hash2(i, j, 24) - 0.5) * 0.3, g.h - 0.02 + g.k * 0.08, z), q, s.set(fk, fk * (0.85 + g.k * 0.2), fk)));
+          let fc: THREE.Color;
+          if (stripes) fc = ROWS[((Math.floor((x * 0.8 + z * 0.6) / 8) % 5) + 5) % 5];
+          else if (drift > 0.57) { const hue = fbm(x / 90 - 5.1, z / 90 + 8.3, 62, 2); fc = hash2(i, j, 18) < 0.82 ? DRIFT[hue < 0.42 ? 0 : hue < 0.52 ? 1 : hue < 0.6 ? 2 : 3] : FL[Math.floor(hash2(i, j, 19) * 4)]; }
+          else fc = FL[Math.floor(hash2(i, j, 18) * 4)];
+          this.flowers.setColorAt(nf, fc);
+          nf++;
+        }
       }
     }
     // far ring: between the near ring and twice as far, bigger and sparser clumps

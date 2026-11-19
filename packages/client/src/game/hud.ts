@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { MAP, PM, SPAWN_ISLAND, busPos, type GamePhase, type RosterEntry, type RouteView, type StormState, type World } from '@dropzone/shared';
+import { MAP, PM, SC_AUTUMN, SC_BLOSSOM, SC_OAK, SC_PALM, SC_PINE, SPAWN_ISLAND, busPos, type GamePhase, type RosterEntry, type RouteView, type StormState, type World } from '@dropzone/shared';
 import { teamColors } from '../settings';
 import { SKINS } from '../lobby/character';
 import { fmtTime, h } from '../ui/dom';
@@ -33,6 +33,22 @@ export function paintMap(w: World, colors: Float32Array): HTMLCanvasElement {
   c.imageSmoothingQuality = 'high';
   c.drawImage(base, 0, 0, S, S);
   const px = (v: number) => ((v + HALF) / MAP.size) * S;
+  // the canopy: every tree as a small round crown (dark rim, lit top), in its own colour, so the
+  // woods read on the map the way they do on the ground
+  const CANOPY: [number, string, string][] = [[SC_OAK, '#2f7a34', '#5fb64e'], [SC_PINE, '#1d5530', '#3c8a4a'], [SC_AUTUMN, '#a8521f', '#f0a23c'], [SC_BLOSSOM, '#a8508f', '#f6a6d8'], [SC_PALM, '#2f7f3c', '#62b856']];
+  for (const [type, dark, lit] of CANOPY) {
+    const a = w.scatter[type];
+    if (!a) continue;
+    for (const [col, dx, k] of [[dark, 0, 1], [lit, -0.35, 0.62]] as const) {
+      c.fillStyle = col;
+      c.beginPath();
+      for (let i = 0; i < a.length; i += 6) {
+        const r = 2.4 * a[i + 3] * (S / MAP.size) * k, x = px(a[i]) + dx * r, z = px(a[i + 2]) + dx * r;
+        c.moveTo(x + r, z); c.arc(x, z, r, 0, Math.PI * 2);
+      }
+      c.fill();
+    }
+  }
   // roads
   c.lineCap = 'round'; c.lineJoin = 'round';
   for (const pass of [{ col: '#3b3d47', add: 2.2 * u }, { col: '#f1ead2', add: 0 }]) {

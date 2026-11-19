@@ -59,6 +59,13 @@ const POI_DEFS: Omit<Poi, 'id' | 'h'>[] = [
   { name: 'Quarry Nine', kind: 'quarry', x: -400, z: 690, r: 90 },
   { name: 'Harborlight', kind: 'harbor', x: 130, z: 850, r: 100 },
   { name: 'Sandbar Shacks', kind: 'town', x: 600, z: 610, r: 80 },
+  // filling the gaps: a place in each region
+  { name: 'Maple Hollow', kind: 'camp', x: 790, z: -160, r: 72 },
+  { name: 'Lookout Ridge', kind: 'camp', x: -30, z: -420, r: 66 },
+  { name: 'Petal Fields', kind: 'farm', x: 440, z: 330, r: 80 },
+  { name: 'Blossom Grove', kind: 'camp', x: -600, z: -340, r: 70 },
+  { name: 'Redrock Gulch', kind: 'quarry', x: -640, z: 470, r: 66 },
+  { name: 'Frostfall Lodge', kind: 'station', x: 360, z: 640, r: 40 },
 ];
 
 /** Road links between locations (by name), with optional waypoints. */
@@ -79,7 +86,32 @@ const ROAD_LINKS: [string, string, ...[number, number][]][] = [
   ['Arcade Avenue', 'Brickwell', [140, 10]],
   ['Northgate', 'Windmill Flats'],
   ['Windmill Flats', 'Summit Station', [360, -660], [470, -600]],
+  ['Lookout Ridge', 'Windmill Flats'],
+  ['Lookout Ridge', 'Stillwater Camp'],
+  ['Maple Hollow', 'Arcade Avenue'],
+  ['Maple Hollow', 'Rustworks'],
+  ['Petal Fields', 'Arcade Avenue'],
+  ['Petal Fields', 'Mosshollow'],
+  ['Blossom Grove', 'Pinewood Plaza'],
+  ['Blossom Grove', 'Coral Cove'],
+  ['Redrock Gulch', 'Cloverfield Farm'],
+  ['Redrock Gulch', 'Quarry Nine'],
+  ['Frostfall Lodge', 'Sandbar Shacks'],
 ];
+
+/**
+ * The island's regions, each fading out toward its edge (0..1): an autumn wood round the big
+ * mountain, a blossom forest round the lake, red-rock badlands in the south-west and the flower
+ * fields of Petal Fields. Shared, so trees and the ground agree everywhere.
+ */
+export interface Biome { autumn: number; blossom: number; badlands: number; flowers: number }
+const REGIONS = { autumn: { x: 700, z: -260, r: 340 }, blossom: { x: -560, z: -320, r: 300 }, badlands: { x: -660, z: 520, r: 260 }, flowers: { x: 440, z: 330, r: 135 } } as const;
+export function biomeAt(x: number, z: number): Biome {
+  const k = (c: { x: number; z: number; r: number }) => { const d = Math.hypot(x - c.x, z - c.z); return d >= c.r ? 0 : smooth(c.r, c.r * 0.6, d); };
+  return { autumn: k(REGIONS.autumn), blossom: k(REGIONS.blossom), badlands: k(REGIONS.badlands), flowers: k(REGIONS.flowers) };
+}
+/** A second, smaller lake in the autumn wood. */
+const AMBER_LAKE = { x: 600, z: -130, r: 52 };
 
 const RIVER: [number, number][] = [[300, -330], [170, -160], [70, 60], [-40, 300], [-140, 560], [-200, 800], [-230, 1080]];
 const LAKE = { x: -350, z: -250, r: 100 };
@@ -206,8 +238,19 @@ function rawHeight(x: number, z: number, seed: number, riverPts: Float32Array) {
   // western highlands and southern hills
   const dh = Math.hypot(x + 640, z + 420) / 260;
   if (dh < 1) land += (1 - dh * dh) ** 2 * 26;
-  const ds = Math.hypot(x - 340, z - 680) / 220;
-  if (ds < 1) land += (1 - ds * ds) ** 2 * 34;
+  // a second, snow-capped peak in the south-east (Frostfall Lodge sits up on it)
+  const ds = Math.hypot(x - 360, z - 650) / 250;
+  if (ds < 1) {
+    const ridge2 = 1 - Math.abs(2 * vnoise(x / 100, z / 100, seed + 15) - 1);
+    land += (1 - ds * ds) ** 2 * (112 + ridge2 * 18);
+  }
+  // red-rock badlands: flat-topped mesas with steep sides
+  const bd = Math.hypot(x - REGIONS.badlands.x, z - REGIONS.badlands.z);
+  if (bd < REGIONS.badlands.r) {
+    const b = smooth(REGIONS.badlands.r, REGIONS.badlands.r * 0.6, bd);
+    const m = fbm(x / 110 + 4.1, z / 110 - 2.7, seed + 21, 3);
+    land += smooth(0.49, 0.55, m) * 24 * b;
+  }
 
   let h = lerp(-9, land, mask);
 
@@ -217,6 +260,12 @@ function rawHeight(x: number, z: number, seed: number, riverPts: Float32Array) {
     const t = smooth(75, 14, dr);
     h = lerp(h, Math.min(h, 1.3 + (h - 1.3) * 0.12), t);
     h = lerp(h, Math.min(h, -2.6), smooth(13, 5, dr));
+  }
+  // the amber lake in the autumn wood
+  const da = Math.hypot(x - AMBER_LAKE.x, z - AMBER_LAKE.z) + (fbm(x / 40, z / 40, seed + 17, 2) - 0.5) * 30;
+  if (da < AMBER_LAKE.r + 45) {
+    h = lerp(h, Math.min(h, 2), smooth(AMBER_LAKE.r + 45, AMBER_LAKE.r + 4, da));
+    h = lerp(h, Math.min(h, -4), smooth(AMBER_LAKE.r, AMBER_LAKE.r - 25, da));
   }
   // lake
   const dl = Math.hypot(x - LAKE.x, z - LAKE.z) + (fbm(x / 60, z / 60, seed + 7, 2) - 0.5) * 50;
@@ -525,9 +574,12 @@ export function poiAt(w: World, x: number, z: number): Poi | null {
 
 // ------------------------------------------------------------------ scatter (trees, rocks, bushes)
 export const SC_OAK = 0, SC_PINE = 1, SC_PALM = 2, SC_ROCK = 3, SC_BUSH = 4;
+/** Oaks in the autumn wood and the blossom forest (same shape, their own colours). */
+export const SC_AUTUMN = 5, SC_BLOSSOM = 6;
+export const SC_TYPES = 7;
 /** Flat arrays of [x, y, z, scale, rotation01, tint01] per type. Visual only for now. */
 export function genScatter(w: World, excl: Exclusion[] = []): Float32Array[] {
-  const out: number[][] = [[], [], [], [], []];
+  const out: number[][] = Array.from({ length: SC_TYPES }, () => []);
   const exGrid = new Map<number, Exclusion[]>();
   for (const e of excl) for (let cz = Math.floor((e.z - e.r) / 32); cz <= Math.floor((e.z + e.r) / 32); cz++) for (let cx = Math.floor((e.x - e.r) / 32); cx <= Math.floor((e.x + e.r) / 32); cx++) {
     const k = gridKey(cx, cz); let l = exGrid.get(k); if (!l) exGrid.set(k, (l = [])); l.push(e);
@@ -557,12 +609,18 @@ export function genScatter(w: World, excl: Exclusion[] = []): Float32Array[] {
       return;
     }
     const forest = fbm(x / 170, z / 170, w.seed + 41, 3);
-    const density = poi ? 1 : 0.035 + smooth(0.5, 0.66, forest) * 0.6;
-    if (r1 < density) {
-      const piney = h > 38 || fbm(x / 260, z / 260, w.seed + 43, 2) + (z < -300 ? 0.12 : 0) > 0.62;
-      push(piney ? SC_PINE : SC_OAK, 0.8 + r2 * 0.7);
-    } else if (r1 < density + 0.05) push(SC_BUSH, 0.7 + r2 * 0.8);
-    else if (r1 > 0.985) push(SC_ROCK, 0.5 + r2 * 1.2);
+    const bio = biomeAt(x, z);
+    // denser woods everywhere (the gaps between places are forest now, not empty fields),
+    // lush in the blossom forest, sparse and rocky in the badlands
+    let density = poi ? 1 : 0.06 + smooth(0.44, 0.62, forest) * 0.68 + bio.blossom * 0.12 + bio.autumn * 0.08;
+    density *= 1 - bio.badlands * 0.85;
+    if (r1 < density && bio.badlands < 0.4) { // (no trees out in the badlands: scrub and boulders)
+      // (the autumn wood climbs the mountain's lower slopes; pines take over higher up)
+      const piney = h > 38 + bio.autumn * 42 + bio.blossom * 20 || fbm(x / 260, z / 260, w.seed + 43, 2) + (z < -300 ? 0.12 : 0) - bio.autumn * 0.3 > 0.62;
+      const oak = bio.blossom > 0.4 && r3 < bio.blossom ? SC_BLOSSOM : bio.autumn > 0.35 && r3 < bio.autumn * 1.1 ? SC_AUTUMN : SC_OAK;
+      push(piney && bio.blossom < 0.4 ? SC_PINE : oak, 0.8 + r2 * 0.7);
+    } else if (r1 < density + 0.05 + bio.badlands * 0.04) push(SC_BUSH, 0.7 + r2 * 0.8);
+    else if (r1 > 0.985 - bio.badlands * 0.06) push(SC_ROCK, 0.5 + r2 * (1.2 + bio.badlands * 1.5));
   };
   for (let j = 0; j < MAP.size / step; j++) for (let i = 0; i < MAP.size / step; i++) {
     const x = -half + (i + hash2(i, j, w.seed + 51)) * step, z = -half + (j + hash2(i, j, w.seed + 52)) * step;
@@ -590,6 +648,8 @@ function addScatterSolids(w: World) {
     }
   };
   trunk(sc[SC_OAK], (s) => 0.36 * s, (s) => 3.6 * s);
+  trunk(sc[SC_AUTUMN], (s) => 0.36 * s, (s) => 3.6 * s);
+  trunk(sc[SC_BLOSSOM], (s) => 0.36 * s, (s) => 3.6 * s);
   trunk(sc[SC_PINE], (s) => 0.3 * s, (s) => 3.4 * s);
   trunk(sc[SC_PALM], () => 0.24, (s) => 5.5 * s);
   const rocks = sc[SC_ROCK];

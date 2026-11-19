@@ -372,8 +372,10 @@ export function genProps(w: World, solids: Solid[]): { props: Prop[]; caves: Cav
 
   // ---------------------------------------------------------------- caves
   const caves: Cave[] = [];
-  const candidates: [number, number, number][] = [[-660, -380, 0.6], [360, 640, 2.2], [700, -300, 1.2], [-470, 560, 4.0]];
+  // hillsides to try, in order (a cave needs level ground at both entrances); up to four caves
+  const candidates: [number, number, number][] = [[-660, -380, 0.6], [700, -300, 1.2], [-470, 560, 4.0], [250, 560, 0.3], [-250, -600, 2.6], [-760, -560, 0.9]];
   for (const [cx, cz, ang] of candidates) {
+    if (caves.length >= 4) break;
     let best: Cave | null = null;
     for (let t = 0; t < 240 && !best; t++) {
       const x = cx + (hash2(t, 1, w.seed + 801) - 0.5) * 160, z = cz + (hash2(t, 2, w.seed + 801) - 0.5) * 160;
@@ -389,6 +391,9 @@ export function genProps(w: World, solids: Solid[]): { props: Prop[]; caves: Cav
       // a hillside: the sides should rise around the tunnel so it reads as a cave
       const sideHi = Math.max(...sides);
       if (lo < 4 || hi - lo > 3.5 || sideHi < hi + 1 || roadEdgeDist(w, x, z) < 25 || nearBuilding(x, z, 25) || w.pois.some((p) => Math.hypot(x - p.x, z - p.z) < p.r + 20)) continue;
+      // you can walk in and out of both ends: no mesa wall or bank just outside an entrance, and no
+      // drop too big for the steps that are built up into a mouth
+      if ([-1, 1].some((sg) => { const g = ground(x + dx * (len / 2 + 4) * sg, z + dz * (len / 2 + 4) * sg); return g > hi + 0.5 || g < hi - 3; })) continue;
       const floor = hi + 0.1, ceil = floor + 4.2;
       best = { x, z, dx, dz, len, width, floor, ceil, chest: { x: 0, y: 0, z: 0, face: 0 }, crystals: [] };
     }
