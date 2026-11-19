@@ -264,6 +264,7 @@ export class CombatHud {
         sl.tile.classList.toggle('sel', i === s.slot);
         sl.tile.classList.toggle('empty', !it.id);
         sl.tile.style.setProperty('--rc', it.id ? RARITY_COLOR[RARITIES[r]] : 'transparent');
+        sl.tile.dataset.r = it.id && weaponDef(it.id) ? RARITIES[r] : ''; // rarity name on weapons
         if (sl.id !== it.id) { sl.id = it.id; sl.name.textContent = it.id ? SHORT[it.id] : ''; sl.icon.innerHTML = itemIconSvg(it.id); }
         const w = weaponDef(it.id);
         sl.count.textContent = !it.id ? '' : w ? String(it.mag) : String(it.n);

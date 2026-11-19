@@ -625,3 +625,16 @@ kbd { font-family: var(--body); font-weight: 900; font-size: 11px; padding: 2px 
 .rd-chip { align-self: flex-start; margin-bottom: 4px; padding: 2px 9px; border-radius: 999px; font-weight: 900; font-size: 11px; letter-spacing: 1.2px; color: #062a3a; background: #7fd6ff; box-shadow: 0 1px 4px rgba(0,0,0,.35); }
 .rd-chip:empty { display: none; }
 .rd-chip.closed { background: rgba(255,255,255,.18); color: #e6e6ee; }
+
+/* ---- a chunkier, blockier HUD: square heavy slots filled with the rarity colour, slanted bars */
+.slot-tile { border-radius: 5px; border-width: 3px; border-color: rgba(255,255,255,.22);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--rc) 28%, #0e0d24) 0%, color-mix(in srgb, var(--rc) 78%, #0e0d24) 100%);
+  box-shadow: inset 0 -6px 0 var(--rc), 0 4px 0 rgba(0,0,0,.4); }
+.slot-tile.empty { background: rgba(14,13,36,.55); box-shadow: 0 4px 0 rgba(0,0,0,.3); }
+.slot-tile.sel { border-color: #fff; transform: translateY(-8px) scale(1.08); box-shadow: inset 0 -6px 0 var(--rc), 0 0 0 2px var(--rc), 0 10px 0 rgba(0,0,0,.3); }
+.slot-tile[data-r]:not([data-r=""])::after { content: attr(data-r); position: absolute; top: 3px; right: 5px; font-size: 8px; font-weight: 900;
+  letter-spacing: .8px; text-transform: uppercase; color: #fff; text-shadow: 0 1px 2px #000; }
+.slot-tile .s-name { font-weight: 900; letter-spacing: .5px; text-shadow: 0 1px 2px rgba(0,0,0,.8); }
+.vitals .bar { border-radius: 3px; transform: skewX(-10deg); box-shadow: 0 3px 0 rgba(0,0,0,.4); }
+.vitals .bar-fill { border-radius: 1px; }
+.rd-chip { border-radius: 3px; transform: skewX(-10deg); }
