@@ -503,9 +503,10 @@ function genHarbor(w: World, p: Poi, put: (t: string, x: number, z: number, rot:
     if (off > 0) extraChests.push({ x: cx + dx * (len / 2 - 2), y, z: cz + dz * (len / 2 - 2), face: 0 });
   }
   // a lighthouse on the coast a little way along
+  // (a little inland of the waterline: further in where the beach shelves gently)
   for (let d = 60; d < 280; d += 6) {
-    for (const side of [1, -1]) {
-      const x = shore.x + nx * d * side - dx * 4, z = shore.z + nz * d * side - dz * 4;
+    for (const side of [1, -1]) for (const back of [4, 8, 12, 18, 26]) {
+      const x = shore.x + nx * d * side - dx * back, z = shore.z + nz * d * side - dz * back;
       const g = terrainAt(w, x, z);
       if (g < 1.5 || g > 14 || roadEdgeDist(w, x, z) < 6) continue;
       put('lighthouse', x, z, 0, 1, { hx: 2.4, hz: 2.4, h: 22 });

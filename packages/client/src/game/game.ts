@@ -27,6 +27,7 @@ import { Life } from './life';
 import { audio } from '../audio';
 import { Soundscape } from './soundscape';
 import { SoundViz } from './soundviz';
+import { TouchControls, isTouchDevice } from './touch';
 import { buildIsland } from './terrain';
 import { pickQuality } from './quality';
 
@@ -165,12 +166,16 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
     for (const m of init.markers) setMarker(m.idx, m.x, m.z);
 
     const input = new Input(renderer.domElement);
+    // phones and tablets: on-screen controls (with a layout editor) instead of keyboard and mouse
+    const touch = isTouchDevice() ? new TouchControls(root, input) : null;
+    if (touch) { input.touch = true; input.lock(); }
     const hud = new Hud(world, island.mainColors, roster, selfIdx, {
       onLeave: () => leave(true, false),
       onSettings: () => openSettings(),
       onResume: () => { hud.setMenu(false); input.lock(); },
       onMarker: (x, z) => net.send(x === undefined ? { t: 'game_marker' } : { t: 'game_marker', x, z }),
       onCloseMap: () => toggleMap(false),
+      onTouchLayout: touch ? () => { hud.setMenu(false); touch.edit(); } : undefined,
     });
     const combat = new CombatHud(roster, selfIdx, {
       onLeave: (again) => leave(true, !!again),
@@ -336,6 +341,8 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
           break;
         }
         case 'redeployed':
+          // phones have no click-to-capture step: bring the touch controls straight back
+          if (e.i === selfIdx && touch && !input.locked && !hud.menuOpen && !hud.mapOpen && !inv.open && !shop.open && !settingsEl) input.lock();
           if (e.i === selfIdx) { combat.redeployed(); toast('Back in! Open your glider with Space and pick a spot', 'success'); audio.move('glider', null); }
           else if (team.includes(e.i)) toast(`${roster[e.i]?.name ?? 'A teammate'} is dropping back in`, 'info');
           break;
@@ -830,7 +837,7 @@ export function gameScreen(net: Net, _you: UserView, found: MatchFoundView, onEx
       dispose() {
         renderer.setAnimationLoop(null);
         removeEventListener('resize', resize); removeEventListener('beforeunload', leaveGuard); removeEventListener('keydown', invKeys, true);
-        input.dispose(); actors.dispose(); lootR.clear(); offSettings();
+        input.dispose(); touch?.dispose(); actors.dispose(); lootR.clear(); offSettings();
         scene.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh || (o as THREE.InstancedMesh).isInstancedMesh) m.geometry?.dispose(); });
         post.dispose(); renderer.dispose(); renderer.domElement.remove();
         audio.stopLoops(); audio.muffle(false); audio.setMusic(null); audio.onCue = null; sviz.clear();

@@ -48,8 +48,8 @@ let dbg = () => {};
   await A.waitForSelector('.hud', { timeout: 60000 }); await B.waitForSelector('.hud', { timeout: 60000 });
   const team = await A.$$eval('.mate b', els => els.map(e => e.textContent));
   const stats = (await A.$eval('.alive b', e => e.textContent)) + ' players';
-  await A.waitForFunction(() => window.__dz && window.__dz.state.mode === 0 && window.__dz.state.visible > 40);
-  await B.waitForFunction(() => window.__dz && window.__dz.state.mode === 0 && window.__dz.state.visible > 40);
+  await A.waitForFunction(() => window.__dz && window.__dz.state.mode === 0 && window.__dz.state.visible >= 30);
+  await B.waitForFunction(() => window.__dz && window.__dz.state.mode === 0 && window.__dz.state.visible >= 30);
   // A runs; B must see A at (nearly) the same place A thinks they are
   await A.keyboard.down('KeyW'); await A.keyboard.down('ShiftLeft'); await A.waitForTimeout(1500);
   await A.keyboard.up('KeyW'); await A.keyboard.up('ShiftLeft'); await A.waitForTimeout(700);

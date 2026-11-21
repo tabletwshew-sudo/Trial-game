@@ -26,6 +26,9 @@ export class Input {
   /** Current zoom factor (FOV ratio) so aiming with a scope isn't twitchy. */
   zoom = 1;
   locked = false;
+  /** Touch mode (phones/tablets): no pointer lock; on-screen controls add their bits here. */
+  touch = false;
+  touchBits = 0;
   /** 1..5 when a slot key was pressed this frame, 6 for the pickaxe (consumed by the game). */
   pendingSlot = 0;
   /** Accumulated wheel notches (+1 = next slot). */
@@ -37,7 +40,7 @@ export class Input {
 
   /** Bits the game should act on: sprint-by-default and toggle-aim applied. */
   get keys() {
-    let k = this.held | this.tapped;
+    let k = this.held | this.tapped | (this.touch && this.locked ? this.touchBits : 0);
     if (settings.autoSprint) k ^= K.SPRINT;
     if (this.scopedHeld ? settings.toggleScope || settings.toggleAds : settings.toggleAds) k = (k & ~K.ADS) | (this.adsLatched ? K.ADS : 0);
     return k;
@@ -125,12 +128,25 @@ export class Input {
     return 0;
   }
 
+  /** Look round by a finger drag (pixels), with the same sensitivity settings as the mouse. */
+  touchLook(dx: number, dy: number) {
+    if (!this.locked) return;
+    const mul = this.zoom < 0.4 ? settings.scopeMul : this.zoom < 0.95 ? settings.adsMul : 1;
+    const sens = this.sensitivity * 2.2 * settings.touchLook * settings.sensitivity * this.zoom * mul;
+    this.yaw -= dx * sens;
+    this.pitch = Math.max(-1.5, Math.min(1.5, this.pitch - dy * sens * (settings.invertY ? -1 : 1)));
+  }
+
   lock() {
+    if (this.touch) { this.locked = true; this.onLockChange?.(true); return; }
     try {
       const p = this.el.requestPointerLock() as unknown as Promise<void> | undefined;
       p?.catch?.(() => {});
     } catch { /* browser refused (e.g. too soon after Esc) - the player can click again */ }
   }
-  unlock() { if (document.pointerLockElement) document.exitPointerLock(); }
+  unlock() {
+    if (this.touch) { this.locked = false; this.touchBits = 0; this.onLockChange?.(false); return; }
+    if (document.pointerLockElement) document.exitPointerLock();
+  }
   dispose() { this.off.forEach((f) => f()); this.unlock(); }
 }

@@ -194,13 +194,23 @@ describe('raycasts', () => {
 describe('cars', () => {
   const road = w.roads.find((r) => !r.street)!;
   it('accelerates along a road, steers, and brakes', () => {
-    // start somewhere along the road with no buildings in the way (places grow and move as the map changes)
-    const clearAt = (k: number) => !w.boxes.some((b) => Math.hypot((b.x0 + b.x1) / 2 - road.pts[k], (b.z0 + b.z1) / 2 - road.pts[k + 1]) < 30)
-      && [0, 4, 8, 12].every((o) => k + o + 1 < road.pts.length && terrainAt(w, road.pts[k + o], road.pts[k + o + 1]) > 3);
-    let k = 40;
-    while (k + 14 < road.pts.length && !clearAt(k)) k += 2;
+    // start somewhere along the road where the 90 m straight ahead (the car doesn't steer at first)
+    // is dry land with nothing solid in the way (places grow and move as the map changes)
+    const heading = (k: number) => Math.atan2(-(road.pts[k + 2] - road.pts[k]), -(road.pts[k + 3] - road.pts[k + 1]));
+    const clearAt = (k: number) => {
+      const h = heading(k), fx = -Math.sin(h), fz = -Math.cos(h);
+      for (let d = 0; d <= 90; d += 2) {
+        const x = road.pts[k] + fx * d, z = road.pts[k + 1] + fz * d, g = terrainAt(w, x, z);
+        if (g < 3) return false;
+        if (w.solids.some((s) => x > s.x0 - 3 && x < s.x1 + 3 && z > s.z0 - 3 && z < s.z1 + 3 && s.y1 > g + 0.3 && s.y0 < g + 2.5)) return false;
+      }
+      return true;
+    };
+    let k = 0;
+    while (k + 4 < road.pts.length && !clearAt(k)) k += 2;
+    expect(k + 4).toBeLessThan(road.pts.length);
     // facing along the road
-    const vh = Math.atan2(-(road.pts[k + 2] - road.pts[k]), -(road.pts[k + 3] - road.pts[k + 1]));
+    const vh = heading(k);
     const c = { x: road.pts[k], y: 0, z: road.pts[k + 1], vy: 0, vh, vs: 0, grounded: true };
     c.y = surfaceAt(w, c.x, c.z, 100);
     for (let i = 0; i < SIM_HZ * 3; i++) stepCar(c, 1, 0, false, w, 1 / SIM_HZ);

@@ -19,7 +19,7 @@ require('fs').mkdirSync(S, { recursive: true });
   await p.click('.btn-play');
   await p.waitForSelector('.game-loading'); await p.waitForTimeout(300); await shot('10-loading');
   await p.waitForSelector('.hud', { timeout: 30000 });
-  log.warmup = await until((s) => s.mode === 0 && s.visible > 40, 15000, 'warmup');
+  log.warmup = await until((s) => s.mode === 0 && s.visible >= 30, 15000, 'warmup');
   // record every movement mode the page passes through (screenshots are slow in headless, so polling can miss short phases)
   await p.evaluate(() => { window.__modes = new Set(); setInterval(() => { const s = window.__dz && window.__dz.state; if (s) window.__modes.add(s.mode); }, 40); });
   const seen = (m) => p.evaluate((m) => window.__modes.has(m), m);

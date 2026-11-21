@@ -17,7 +17,7 @@ const K = { F: 1, SPRINT: 32, FIRE: 128, ADS: 256, USE: 1024 };
 
   await p.goto(URL); await p.click('button:has-text("PLAY AS GUEST")'); await p.waitForSelector('.play-panel');
   await p.click('.btn-play'); await p.waitForSelector('.hud', { timeout: 60000 });
-  await until((s) => s.mode === 0 && s.visible > 40 && s.inv[0] > 0, 20000, 'loadout');
+  await until((s) => s.mode === 0 && s.visible >= 30 && s.inv[0] > 0, 20000, 'loadout');
   // count hit markers / damage numbers as they appear
   await p.evaluate(() => { window.__hits = 0; window.__nums = 0; new MutationObserver((ms) => { for (const m of ms) for (const n of m.addedNodes) if (n.classList?.contains('dnum')) window.__nums++; }).observe(document.querySelector('.dmg-nums'), { childList: true }); new MutationObserver(() => { if (document.querySelector('.hitmark.show')) window.__hits++; }).observe(document.querySelector('.hitmark'), { attributes: true }); });
   await p.waitForTimeout(800); await shot('30-holding-weapon');

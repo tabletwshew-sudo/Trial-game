@@ -38,12 +38,16 @@ export interface Settings {
   visualSound: boolean;
   master: number; effects: number; music: number; // 0..1
   hudScale: number;      // 0.6 .. 1.2: size of the in-game HUD
+  /** On-screen touch controls: auto = phones and tablets only. */
+  touchControls: 'auto' | 'on' | 'off';
+  /** Look speed for finger drags (multiplies the sensitivity). */
+  touchLook: number;
   keys: Record<Action, string>;
 }
 
 const DEFAULTS: Settings = {
   sensitivity: 1, adsMul: 0.7, scopeMul: 0.55, invertY: false, fov: 75, graphics: 'auto', graphicsV: 2, showFps: false,
-  autoSprint: false, toggleAds: false, toggleScope: false, colorMode: 'normal', reticleColor: '#ffffff', visualSound: true, master: 0.8, effects: 0.9, music: 0.6, hudScale: 0.8, keys: { ...DEFAULT_KEYS },
+  autoSprint: false, toggleAds: false, toggleScope: false, colorMode: 'normal', reticleColor: '#ffffff', visualSound: true, master: 0.8, effects: 0.9, music: 0.6, hudScale: 0.8, touchControls: 'auto', touchLook: 1, keys: { ...DEFAULT_KEYS },
 };
 
 const KEY = 'dz.settings';
@@ -80,7 +84,12 @@ export const rarityColor = (r: number) => PALETTES[settings.colorMode][Math.max(
 export const teamColors = () => (settings.colorMode === 'normal' ? ['#ffd23f', '#3ee6ff', '#ff5fa2', '#4ade80'] : ['#ffd23f', '#3ee6ff', '#ffffff', '#ff9f1c']);
 function applyColorMode() {
   RARITIES.forEach((r, i) => document.documentElement.style.setProperty(`--rarity-${i}`, rarityColor(i)));
-  document.documentElement.style.setProperty('--hud', String(Math.max(0.6, Math.min(1.2, settings.hudScale || 0.8))));
+  applyHudScale();
+}
+/** The HUD size, shrunk a little more on phone screens with touch controls so it stays clear of the thumbs. */
+export function applyHudScale() {
+  const phone = document.body?.classList.contains('touch') && Math.min(innerWidth, innerHeight) < 560;
+  document.documentElement.style.setProperty('--hud', String(Math.max(0.6, Math.min(1.2, settings.hudScale || 0.8)) * (phone ? 0.72 : 1)));
 }
 applyColorMode();
 
@@ -121,6 +130,8 @@ export function settingsPanel(onClose: () => void): HTMLElement {
       toggle('Sprint by default', 'autoSprint', 'Hold Sprint to walk instead'),
       toggle('Toggle aim', 'toggleAds', 'Press aim once to aim, again to stop (all weapons)'),
       toggle('Toggle scope', 'toggleScope', 'Same, but only for scoped weapons (DMR, sniper)'),
+      choice('Touch controls', 'touchControls', [['auto', 'AUTO'], ['on', 'ON'], ['off', 'OFF']], 'Auto turns them on for phones and tablets; applies next match. Move buttons with ✎ in game'),
+      slider('Touch look speed', 'touchLook', 0.3, 3, 0.05, (v) => v.toFixed(2)),
     );
     if (tab === 'video') body.replaceChildren(
       slider('Field of view', 'fov', 60, 100, 1, (v) => `${v}°`),

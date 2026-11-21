@@ -175,7 +175,7 @@ export class Hud {
   private bmWhere!: HTMLElement; private bmStorm!: HTMLElement; private bmAlive!: HTMLElement;
 
   constructor(private w: World, colors: Float32Array, private roster: RosterEntry[], private selfIdx: number,
-    private cb: { onLeave: () => void; onResume: () => void; onSettings: () => void; onMarker: (x?: number, z?: number) => void; onCloseMap: () => void }) {
+    private cb: { onLeave: () => void; onResume: () => void; onSettings: () => void; onMarker: (x?: number, z?: number) => void; onCloseMap: () => void; onTouchLayout?: () => void }) {
     this.mapTex = paintMap(w, colors);
     const myTeam = roster[selfIdx].team;
     this.teamIdx = roster.filter((r) => r.team === myTeam).map((r) => r.idx);
@@ -255,6 +255,7 @@ export class Hud {
           ...[['W A S D', 'Move'], ['Mouse', 'Look / fire / aim'], ['Shift', 'Sprint'], ['Space', 'Jump / drop / glider'], ['E', 'Interact'], ['R', 'Reload'], ['B', 'Emote'], ['M', 'Map'], ['Middle click', 'Ping'], ['Esc', 'Menu']]
             .map(([k, v]) => h('div', h('kbd', k), h('span', v)))),
         h('button.btn.btn-ghost.wide', { onclick: () => this.cb.onSettings() }, 'SETTINGS'),
+        cb.onTouchLayout ? h('button.btn.btn-ghost.wide', { onclick: () => this.cb.onTouchLayout?.() }, 'EDIT TOUCH LAYOUT') : null,
         h('button.btn.btn-ghost.wide', { onclick: () => this.cb.onLeave() }, 'LEAVE MATCH')));
 
     this.el = h('div.hud',

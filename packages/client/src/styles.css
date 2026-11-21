@@ -638,3 +638,73 @@ kbd { font-family: var(--body); font-weight: 900; font-size: 11px; padding: 2px 
 .vitals .bar { border-radius: 3px; transform: skewX(-10deg); box-shadow: 0 3px 0 rgba(0,0,0,.4); }
 .vitals .bar-fill { border-radius: 1px; }
 .rd-chip { border-radius: 3px; transform: skewX(-10deg); }
+
+/* ---- touch controls (phones and tablets): joystick, buttons and the layout editor */
+.touch-ui { position: absolute; inset: 0; z-index: 14; display: none; pointer-events: auto; touch-action: none;
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; --touch-op: .85; }
+.touch-ui.on { display: block; }
+.touch-btn { position: absolute; transform: translate(-50%, -50%); border-radius: 50%; display: grid; place-items: center; line-height: 1;
+  color: #fff; font-weight: 900; background: rgba(16, 15, 44, .42); border: 3px solid rgba(255,255,255,.78);
+  box-shadow: 0 4px 0 rgba(0,0,0,.35), inset 0 -4px 0 rgba(0,0,0,.18); opacity: var(--touch-op); text-shadow: 0 2px 0 rgba(0,0,0,.45); }
+.touch-btn span { pointer-events: none; }
+.touch-btn.down { background: rgba(255,210,63,.6); border-color: #ffd23f; transform: translate(-50%, -50%) scale(.92); }
+.tb-fire, .tb-fire2 { background: rgba(255,77,109,.5); border-color: #ffd0da; }
+.tb-aim { background: rgba(62,230,255,.3); }
+.tb-jump { background: rgba(255,255,255,.22); }
+.touch-btn.hid { display: none; }
+.touch-stick { position: absolute; left: 19%; top: 58%; width: 128px; height: 128px; margin: -64px 0 0 -64px; border-radius: 50%; pointer-events: none;
+  border: 3px solid rgba(255,255,255,.5); background: radial-gradient(circle, rgba(16,15,44,.15), rgba(16,15,44,.42)); opacity: calc(var(--touch-op) * .55); }
+.touch-stick.on { opacity: var(--touch-op); }
+.touch-knob { position: absolute; left: 50%; top: 50%; width: 58px; height: 58px; margin: -29px 0 0 -29px; border-radius: 50%;
+  background: rgba(255,255,255,.88); box-shadow: 0 3px 0 rgba(0,0,0,.35); }
+.touch-stick.sprint { border-color: #ffd23f; }
+.touch-stick.sprint .touch-knob { background: #ffd23f; }
+.touch-edit { position: absolute; left: calc(18% + 30px); top: 8%; transform: translateY(-50%); width: 34px; height: 34px; border-radius: 8px;
+  display: grid; place-items: center; font-size: 17px; color: #fff; background: rgba(16,15,44,.55); border: 2px solid rgba(255,255,255,.5); opacity: var(--touch-op); }
+.touch-editbar { position: absolute; left: 50%; top: 8px; transform: translateX(-50%); display: none; flex-wrap: wrap; justify-content: center; align-items: center;
+  gap: 6px; max-width: calc(100% - 24px); padding: 8px 10px; border-radius: 10px; background: rgba(14,12,40,.92); border: 2px solid rgba(255,255,255,.25); z-index: 2; }
+.touch-editbar .teb-hint { flex-basis: 100%; text-align: center; font-size: 11px; font-weight: 800; color: #cfd6ff; }
+.touch-editbar b { min-width: 92px; text-align: center; font-size: 12px; letter-spacing: 1px; color: #ffd23f; }
+.touch-editbar button { padding: 6px 10px; min-width: 38px; border-radius: 6px; border: 0; font: inherit; font-weight: 900; font-size: 13px; color: #fff;
+  background: rgba(255,255,255,.14); box-shadow: 0 3px 0 rgba(0,0,0,.35); }
+.touch-editbar button:disabled { opacity: .35; }
+.touch-editbar button.go { background: #3fbf5f; }
+.touch-ui.editing { background: rgba(10,8,30,.5); z-index: 25; }
+.touch-ui.editing .touch-editbar { display: flex; }
+.touch-ui.editing .touch-edit { display: none; }
+.touch-ui.editing .touch-stick { opacity: .35; }
+.touch-ui.editing .touch-btn { opacity: 1; border-style: dashed; }
+.touch-ui.editing .touch-btn.hid { display: grid; opacity: .3; }
+.touch-ui.editing .touch-btn.sel { border-style: solid; border-color: #ffd23f; box-shadow: 0 0 0 5px rgba(255,210,63,.35); }
+.touch-ui.editing .touch-btn::after { content: attr(data-name); position: absolute; top: 100%; margin-top: 3px; font-size: 9px; letter-spacing: .8px; white-space: nowrap; color: #fff; }
+.touch-rotate { display: none; }
+@media (orientation: portrait) {
+  .touch-ui.on .touch-rotate { display: grid; position: absolute; inset: 0; z-index: 5; place-items: center; align-content: center; gap: 10px;
+    background: rgba(10,8,30,.94); font-weight: 900; font-size: 18px; text-align: center; padding: 24px; }
+  .touch-rotate b { font-size: 56px; color: #ffd23f; }
+}
+.slot-tile.tapped { filter: brightness(1.5); }
+/* phones: the HUD is drawn for a mouse and a big screen; keep it clear of the thumbs */
+body.touch .hint-keys { display: none; }
+/* the hotbar goes bottom-centre, between the thumbs, where it's easy to tap */
+body.touch .bottom-right { right: auto; left: 50%; transform: translateX(-50%) scale(var(--hud, .8)); transform-origin: bottom center; align-items: center; }
+/* no keyboard on a phone: skip the key list so the pause menu fits the screen */
+body.touch .pause .controls { display: none; }
+.pause-card { max-height: calc(100% - 16px); overflow-y: auto; }
+body.touch .click-hint { display: none !important; }
+/* short landscape screens (phones on their side): a smaller lobby, without the news card */
+@media (max-height: 500px) {
+  .lobby { --ui: .62; }
+  .news-card { display: none; }
+  .topbar { padding: 6px 10px; gap: 6px; }
+  .logo { font-size: 20px; }
+  .tabs { margin-left: 4px; }
+  .tabs button { font-size: 13px; padding: 5px 8px; }
+  .chip { padding: 5px 9px; font-size: 12px; }
+  .chip.me { display: none; }
+  .party-panel { top: 50px; }
+  .login-card { padding: 16px 22px 14px; gap: 8px; }
+  .login-card .logo.big { font-size: 40px; }
+  .login-card input { padding: 10px 14px; }
+  .tagline { margin: -2px 0 4px; }
+}

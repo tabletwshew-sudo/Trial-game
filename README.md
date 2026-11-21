@@ -45,6 +45,20 @@ Dev mode with hot reload: `npm run dev` (client on :5173, server on :8080).
 
 Every key can be changed in Settings → Controls; fire, aim and ping can go on any mouse button too.
 
+### Phones and tablets
+Touch controls switch on by themselves on phones and tablets (Settings → Controls → Touch controls: Auto / On / Off). Play with the phone on its side.
+
+| Touch | Action |
+|---|---|
+| Left thumb | A joystick appears where you put it. Push it all the way forward to sprint |
+| Drag on the right | Look (also while holding fire or aim, to track a target) |
+| ✦ (two of them, left and right) | Fire / swing |
+| ◎ ⤒ ⤓ ↻ E | Aim, jump, crouch, reload, interact |
+| ⛏ / tap a hotbar slot | Pickaxe / switch to that slot |
+| ▤ ⌖ ⚑ ≡ | Inventory, map, mark a spot, menu |
+
+**Change the layout:** tap ✎ (top left) or **Menu → Edit touch layout**. Drag any button to move it. Tap one, then use − / + to resize it or HIDE to remove it (the emote button starts hidden). OPACITY fades every button. SAVE keeps the layout on this device; RESET goes back to the default. Touch look speed is in Settings → Controls.
+
 ## Settings worth knowing
 - **Video:**
   - Graphics Low / Medium / High: Low suits older school laptops, and the game also lowers its own resolution when the frame rate dips
@@ -70,4 +84,5 @@ npm run e2e:combat
 npm run e2e:movement
 npm run e2e:audio
 npm run e2e:reconnect
+npm run e2e:touch       # an emulated phone: joystick, look, fire, hotbar taps, layout editor
 ```
